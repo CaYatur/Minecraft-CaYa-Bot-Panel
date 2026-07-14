@@ -17,6 +17,7 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^9.1.0",
+    "flying-squid": "^1.12.0"
   }
 }

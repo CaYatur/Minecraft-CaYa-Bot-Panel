@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AddBotModal } from "../components/AddBotModal";
+import { AllChatPanel } from "../components/AllChatPanel";
 import { BotCard } from "../components/BotCard";
 import { LogPanel } from "../components/LogPanel";
 import { api } from "../lib/api";
@@ -10,6 +11,7 @@ export function Dashboard() {
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
   const [showAdd, setShowAdd] = useState(false);
+  const [bottomTab, setBottomTab] = useState<"logs" | "chat">("logs");
 
   const list = Object.values(bots);
   const onlineCount = list.filter((b) => b.status === "online").length;
@@ -66,10 +68,22 @@ export function Dashboard() {
       )}
 
       <div className="h-64 shrink-0 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-        <div className="mb-1 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Sistem Logları (İ1 — oyun sohbetine asla yazılmaz)</div>
-        <div className="h-[calc(100%-1.5rem)]">
-          <LogPanel />
+        <div className="mb-1 flex items-center gap-3">
+          <button
+            onClick={() => setBottomTab("logs")}
+            className={`text-xs font-semibold tracking-wide uppercase ${bottomTab === "logs" ? "text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}
+          >
+            Sistem Logları
+          </button>
+          <button
+            onClick={() => setBottomTab("chat")}
+            className={`text-xs font-semibold tracking-wide uppercase ${bottomTab === "chat" ? "text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}
+          >
+            Birleşik Sohbet
+          </button>
+          <span className="ml-auto text-[10px] text-zinc-600">İ1 — sistem mesajları asla oyun sohbetine yazılmaz</span>
         </div>
+        <div className="h-[calc(100%-1.5rem)]">{bottomTab === "logs" ? <LogPanel /> : <AllChatPanel />}</div>
       </div>
 
       {showAdd && <AddBotModal onClose={() => setShowAdd(false)} />}

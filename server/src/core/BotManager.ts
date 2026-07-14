@@ -52,6 +52,7 @@ export class BotManager extends EventEmitter {
     this.servers.push(profile);
     void saveJson(SERVERS_FILE, this.servers);
     this.log.success(`Sunucu profili eklendi: ${profile.name} (${profile.host}:${profile.port})`);
+    this.emit("changed");
     return profile;
   }
 
@@ -64,6 +65,7 @@ export class BotManager extends EventEmitter {
     if (patch.name !== undefined) profile.name = String(patch.name).trim() || profile.name;
     if (patch.note !== undefined) profile.note = patch.note;
     void saveJson(SERVERS_FILE, this.servers);
+    this.emit("changed");
     return profile;
   }
 
@@ -76,6 +78,7 @@ export class BotManager extends EventEmitter {
     this.servers = this.servers.filter((s) => s.id !== id);
     if (this.servers.length === before) throw new PanelError("Sunucu profili bulunamadı.", 404);
     void saveJson(SERVERS_FILE, this.servers);
+    this.emit("changed");
   }
 
   getServer(id: string): ServerProfile | undefined {
@@ -144,6 +147,7 @@ export class BotManager extends EventEmitter {
     }
     inst.config = mergeConfig(inst.config, rest as Partial<BotConfig>);
     this.persistBots();
+    this.emit("changed");
     return inst;
   }
 

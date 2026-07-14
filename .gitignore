@@ -10,8 +10,10 @@ server/dist/
 data/
 
 # local minecraft test server world files
-test-server/world/
+test-server/world*/
 test-server/*.jar
+test-server/eula.txt
+test-server/logs/
 
 # misc
 *.log

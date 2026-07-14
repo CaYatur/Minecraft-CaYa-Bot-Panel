@@ -28,6 +28,15 @@ function readSupportedVersions(): string[] {
 }
 
 function main() {
+  // İ4 güvenlik ağı: tek bir botun beklenmedik hatası tüm paneli düşürmemeli.
+  // Hata yutulmaz — panel loguna ERROR olarak düşer.
+  process.on("uncaughtException", (err) => {
+    log.error("Yakalanmamış istisna (proses ayakta tutuldu)", String(err?.stack ?? err));
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error("Yakalanmamış promise reddi (proses ayakta tutuldu)", String(reason));
+  });
+
   const supportedVersions = readSupportedVersions();
 
   const manager = new BotManager();

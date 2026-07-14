@@ -262,6 +262,16 @@ export class BotInstance extends EventEmitter {
       } catch {
         /* noop */
       }
+      // KRİTİK: quit sonrası socket'ten geç gelen 'error' olayları dinleyicisiz
+      // kalırsa Node tüm prosesi düşürür (unhandled 'error'). No-op yakalayıcı şart.
+      bot.on("error", () => {});
+      try {
+        const client = (bot as unknown as { _client?: NodeJS.EventEmitter })._client;
+        client?.removeAllListeners?.("error");
+        client?.on?.("error", () => {});
+      } catch {
+        /* noop */
+      }
     }
   }
 

@@ -23,6 +23,8 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     broadcastSnapshot();
   });
   manager.on("botRemoved", () => broadcastSnapshot());
+  // sunucu profili CRUD + config değişimleri de tüm panellere anında yansır
+  manager.on("changed", () => broadcastSnapshot());
 
   // İ1: tüm loglar canlı olarak panele akar
   logHub.addSink((entry) => io.emit(EV.BOT_LOG, entry));

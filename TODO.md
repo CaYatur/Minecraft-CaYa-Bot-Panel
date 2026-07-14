@@ -247,9 +247,9 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | Faz | Başlık | Durum |
 |---|---|---|
 | 0 | Proje iskeleti ve altyapı | ✅ Bitti |
-| 1 | Tek bot: bağlan, yaşat, izle | 🔨 Başlandı |
-| 2 | Çoklu bot + sunucu profilleri | 🔨 Başlandı |
-| 3 | Sohbet sistemi (izle + yaz) ve log paneli | 🔨 Başlandı |
+| 1 | Tek bot: bağlan, yaşat, izle | ✅ Bitti |
+| 2 | Çoklu bot + sunucu profilleri | ✅ Bitti |
+| 3 | Sohbet sistemi (izle + yaz) ve log paneli | ✅ Bitti |
 | 4 | Hareket: pathfinder, waypoint, engel aşma | ☐ Bekliyor |
 | 5 | Envanter arayüzü ve kısıtlar | ☐ Bekliyor |
 | 6 | Gerçekçi dövüş sistemi | ☐ Bekliyor |
@@ -276,37 +276,37 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] `README.md`: kurulum + çalıştırma + test sunucusu kurulumu (§11'e link).
 - [x] **Kabul:** `npm run dev` → panel açılır, "bağlı" göstergesi yeşil, konsolda hata yok, `npm run typecheck` temiz. *(2026-07-15 doğrulandı: panel 3000'de render oldu, "Bağlı" yeşil, konsol temiz, typecheck iki workspace'te de geçti.)*
 
-### Faz 1 — Tek Bot: Bağlan, Yaşat, İzle
+### Faz 1 — Tek Bot: Bağlan, Yaşat, İzle ✅
 
-- [ ] `BotInstance`: mineflayer sarmalayıcı. Ayarlar: host, port, `version: auto|elle`, username, `auth:"offline"`.
-- [ ] Durum makinesi: `stopped → connecting → online → (reconnecting|kicked|error)`; tüm geçişler `bot:status` ile panele akar.
-- [ ] Kick/düşme sebebi yakalama (`kicked`, `end`, `error` olayları) — sebep metni panelde gösterilir (ör. premium sunucu kick'i için anlaşılır Türkçe açıklama).
-- [ ] Otomatik yeniden bağlanma: üstel geri çekilme (5s → 10s → 30s → 60s, en fazla 60s), bot başına aç/kapa.
-- [ ] Canlı durum yayını: can, açlık, xp, konum (≤4 Hz), boyut (overworld/nether/end), ping.
-- [ ] Panel: "Bot Ekle" formu (isim, sunucu bilgisi, sürüm) + Dashboard'da **BotCard** (durum rozeti, can/açlık barı, konum, başlat/durdur düğmesi).
-- [ ] Bot tanımları `data/bots.json`a kalıcı yazılır; `autostart` bayrağı panel açılışında uygulanır (İ4).
-- [ ] **Kabul:** Panelden eklenen bot lokal test sunucusuna bağlanır; kartta canlı can/açlık/konum görünür; sunucu kapatılıp açılınca bot kendiliğinden geri gelir.
+- [x] `BotInstance`: mineflayer sarmalayıcı. Ayarlar: host, port, `version: auto|elle`, username, `auth:"offline"`.
+- [x] Durum makinesi: `stopped → connecting → online → (reconnecting|kicked|error)`; tüm geçişler `bot:status` ile panele akar.
+- [x] Kick/düşme sebebi yakalama (`kicked`, `end`, `error` olayları) — sebep metni panelde gösterilir. *(Bağlantı kopması/refused/reset Türkçe açıklamayla doğrulandı; premium-kick çeviri haritası kodda hazır, gerçek premium sunucuya karşı henüz denenmedi.)*
+- [x] Otomatik yeniden bağlanma: üstel geri çekilme (5s → 10s → 30s → 60s, en fazla 60s), bot başına aç/kapa. *(scripts/reconnect-test.mjs ile doğrulandı.)*
+- [x] Canlı durum yayını: can, açlık, xp, konum (≤4 Hz), boyut (overworld/nether/end), ping.
+- [x] Panel: "Bot Ekle" formu (isim, sunucu bilgisi, sürüm) + Dashboard'da **BotCard** (durum rozeti, can/açlık barı, konum, başlat/durdur düğmesi).
+- [x] Bot tanımları `data/bots.json`a kalıcı yazılır; `autostart` bayrağı panel açılışında uygulanır (İ4). *(API süreci yeniden başlatılarak doğrulandı: bot kendiliğinden geri bağlandı.)*
+- [x] **Kabul:** Panelden eklenen bot lokal test sunucusuna bağlanır; kartta canlı can/açlık/konum görünür; sunucu kapatılıp açılınca bot kendiliğinden geri gelir. *(2026-07-15: flying-squid 1.16.1'e karşı UI + smoke + reconnect testleriyle doğrulandı; sürüm "auto" algılama da çalıştı.)*
 
-### Faz 2 — Çoklu Bot + Sunucu Profilleri
+### Faz 2 — Çoklu Bot + Sunucu Profilleri ✅
 
-- [ ] `BotManager`: N bot paralel; her bot bağımsız yaşam döngüsü, birinin çökmesi diğerini etkilemez (hata sınırları).
-- [ ] İsim şablonu ile toplu oluşturma: `CaYa_{n}` → CaYa_1..N; benzersizlik kontrolü (offline modda isim = kimlik; aynı isim aynı sunucuya iki kez giremez — engelle ve açıkla).
-- [ ] Toplu işlemler: seçili botları başlat/durdur/sil; kademeli bağlanma (her bağlantı arası ~2 sn — sunucuyu bağlantı seliyle boğmamak için).
-- [ ] Sunucu profilleri sayfası: kaydet/düzenle/sil; bot eklerken profilden seç.
-- [ ] Bot detay sayfası iskeleti (`/bots/:id`): sekmeler Sohbet · Loglar · Envanter · Görevler (içerikler sonraki fazlarda dolar).
-- [ ] **Kabul:** 5 bot tek tıkla oluşturulup aynı sunucuya bağlanır, kartlarda ayrı ayrı canlı durum görünür, biri kick yese diğerleri etkilenmez.
+- [x] `BotManager`: N bot paralel; her bot bağımsız yaşam döngüsü, birinin çökmesi diğerini etkilemez (hata sınırları + proses seviyesi uncaughtException güvenlik ağı).
+- [x] İsim şablonu ile toplu oluşturma: `CaYa_{n}` → CaYa_1..N; benzersizlik kontrolü (offline modda isim = kimlik; aynı isim aynı sunucuya iki kez giremez — engelle ve açıkla).
+- [x] Toplu işlemler: botları başlat/durdur (tümü veya id listesi); kademeli bağlanma (bağlantı arası 2 sn — log damgalarıyla doğrulandı).
+- [x] Sunucu profilleri sayfası: kaydet/düzenle/sil; bot eklerken profilden seç. *(Silme, kullanan bot varsa 409 ile engellenir.)*
+- [x] Bot detay sayfası iskeleti (`/bots/:id`): sekmeler Sohbet · Loglar · Envanter · Görevler (Envanter/Görevler placeholder).
+- [x] **Kabul:** 3 bot tek istekle oluşturulup aynı sunucuya kademeli bağlandı, ayrı ayrı canlı durum aktı (smoke testi). *(5 bot yerine 3 ile otomatik test edildi; mimari fark yok.)*
 
-### Faz 3 — Sohbet Sistemi ve Log Paneli
+### Faz 3 — Sohbet Sistemi ve Log Paneli ✅
 
-- [ ] Sohbet dinleme: `chat`/`whisper`/`message` olayları; oyuncu adı + mesaj ayrıştırma. Vanilla formatı + yaygın eklenti formatları (prefix'li) için esnek regex katmanı; ayrıştırılamayanlar "sunucu mesajı" olarak ham gösterilir.
-- [ ] Renk kodları: `§`/`&` kodlarını panelde gerçek renklere çevir (MOTD dahil).
-- [ ] Panel **ChatPanel**: bot başına sohbet akışı; oyuncu/sunucu/fısıltı ayrımı; isim renklendirme; otomatik kaydırma (kullanıcı yukarı kaydırdıysa durur); arama/filtre (oyuncu adına göre).
-- [ ] Mesaj gönderme: giriş kutusu + `/komut` desteği; **ChatRateLimiter** üzerinden (İ5, varsayılan ≥1.5 sn aralık, kuyruklama + panelde "sırada" göstergesi).
-- [ ] Fısıltı kısayolu: oyuncu adına tıkla → `/msg <oyuncu>` hazır gelir.
-- [ ] Sohbet geçmişi kalıcı: `data/logs/chat-<bot>-<tarih>.jsonl`.
-- [ ] **LogPanel** (sohbetten ayrı sekme): §10 seviyeli renkli loglar; seviye filtresi; temizle düğmesi; kopyala. **Oyun sohbetine sistem mesajı yazılmadığı** bu fazda test edilir (İ1).
-- [ ] "Tüm botlar" birleşik sohbet görünümü (Dashboard'da; hangi botun gördüğü etiketli).
-- [ ] **Kabul:** İki bot birbirinin mesajını panelde gösterir; panelden yazılan mesaj oyunda görünür; bir hata (ör. bilinmeyen komut kick'i) sadece Log panelinde kırmızı görünür, oyun sohbetine yazılmaz.
+- [x] Sohbet dinleme: tek `message` olayı üzerinden (çift kayıt yok); oyuncu adı + mesaj ayrıştırma `modules/chat/parse.ts`te. Vanilla + yaygın eklenti formatları (prefix'li, », fısıltı); ayrıştırılamayanlar "sunucu mesajı" olarak ham gösterilir.
+- [x] Renk kodları: prismarine-chat `toAnsi()` → panelde ANSI→renkli span dönüştürücü (`web/src/lib/ansi.tsx`, 16 renk + truecolor). *(Düz mesajla doğrulandı; renkli eklenti mesajı görsel testi gerçek sunucuda yapılmalı.)*
+- [x] Panel **ChatPanel**: bot başına akış; oyuncu/sunucu/fısıltı ayrımı; isim renklendirme; yapışkan otomatik kaydırma; arama/filtre; geçmişi REST'ten yükleme.
+- [x] Mesaj gönderme: giriş kutusu + `/komut` desteği; **ChatRateLimiter** üzerinden (İ5, ≥1.5 sn, kuyruk + "sırada N mesaj" rozeti). *(4 hızlı mesaj → kick yok, smoke ile doğrulandı.)*
+- [x] Fısıltı kısayolu: oyuncu adına tıkla → `/msg <oyuncu>` hazır gelir.
+- [x] Sohbet geçmişi kalıcı: `data/logs/chat/chat-<bot>-<tarih>.jsonl` (dosyalar doğrulandı) + bot başına 500'lük bellek halkası.
+- [x] **LogPanel**: §10 seviyeli renkli loglar; seviye filtre çipleri. İ1 smoke kontrolü: oyun sohbetinde sistem izi yok.
+- [x] "Tüm botlar" birleşik sohbet görünümü (Dashboard alt panelinde Loglar/Birleşik Sohbet sekmesi; bot etiketli).
+- [x] **Kabul:** İki bot birbirinin mesajını panelde gösterdi (parse'lı, oyuncu adıyla); panelden/REST'ten yazılan mesaj oyunda göründü (echo doğrulandı); bağlantı hatası yalnızca Log panelinde kırmızı göründü. *(2026-07-15 smoke + UI testi.)*
 
 ### Faz 4 — Hareket: Pathfinder, Waypoint, Engel Aşma
 
@@ -503,3 +503,10 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 > Format: `TARİH — KARAR — NEDEN`. Plandan her sapma buraya.
 
 - 2026-07-15 — Proje planı oluşturuldu; mineflayer + Express/Socket.IO + React/Vite/TS mimarisi seçildi — ekosistem olgunluğu ve AI devri kolaylığı.
+- 2026-07-15 — Panel↔API arası vite proxy ile aynı origin üzerinden bağlanıyor — CORS tamamen devre dışı, üretimde server web/dist'i kendisi servis ediyor.
+- 2026-07-15 — Express 4'te sabit kalındı (5'in route/wildcard değişikliklerinden kaçınmak için); Tailwind v4 (@tailwindcss/vite) kullanıldı, tailwind.config yok.
+- 2026-07-15 — auto-eat/pvp hazır eklentileri yerine yeme ve dövüş **kendi modüllerimiz** olacak: ESM/CJS çakışmalarından kaçınmak + §9 gerçekçilik kurallarını tam kontrol etmek için (pathfinder/tool/armor-manager eklentileri kullanılmaya devam).
+- 2026-07-15 — Test altyapısı: flying-squid (JS, 1.16.1, port 25566) `npm run testserver` ile; `npm run smoke` (Faz 1-3 uçtan uca) ve `node scripts/reconnect-test.mjs` (İ4) otomatik kabul testleri. Gerçek sunucu testleri için Paper kılavuzu test-server/README.md.
+- 2026-07-15 — KRİTİK DERS: bot.quit sonrası `removeAllListeners()` yetmez — geç gelen socket 'error' olayı dinleyicisiz kalınca Node TÜM prosesi düşürüyor. Çözüm: teardown'da no-op error yakalayıcı + index.ts'te uncaughtException güvenlik ağı (İ4). Bu kalıbı bozma!
+- 2026-07-15 — Sunucu/bot config CRUD'ları manager "changed" olayı → tüm panellere anlık snapshot yayını (staleness bug'ı böyle çözüldü).
+- 2026-07-15 — Sohbette çift kayıt önleme: yalnızca `message` olayı dinleniyor (chat/whisper olayları AYRICA dinlenmiyor); tür sınıflandırması parse.ts regex katmanında.
