@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+web/dist/
+server/dist/
+
+# runtime data (kalıcı veriler repoya girmez)
+data/
+
+# local minecraft test server world files
+test-server/world/
+test-server/*.jar
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
