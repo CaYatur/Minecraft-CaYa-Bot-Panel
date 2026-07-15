@@ -1014,3 +1014,18 @@ TÜM fazların incelemesi bitince smoke testleri sırayla koş (kullanıcının 
   ☐ Faz 12-16 (build/litematic, MLG, katalog, UI) → ☐ typecheck + `scripts/` testleri sırayla
   (smoke → movement → inventory → combat → full-suite → grok-smoke-all) flying-squid sınırları
   (§12) gözetilerek → ☐ Paper saha listesi güncelle.
+
+**Ek düzeltme — kullanıcı saha geri bildirimi (merdiven parkuru takibi):**
+1. Takipte blok yerleştirme TAMAMEN kapatıldı — Movements yapıcısı scafoldingBlocks’u
+   kendiliğinden doldurur (dirt/cobble); kapatmak için listeyi BOŞALTMAK şart, atlamak yetmez
+   (§12 altın kurala eklendi). Merdiven dibine konan blok botu sıkıştırıyordu.
+2. Takibe TAKILMA BEKÇİSİ eklendi (5 sn yer değiştirme yoksa): rota oyuncunun GÜNCEL konumuna
+   sıfırdan kurulur — "yön değiştirdim, eski yere gitmeye çalışıyor" hatasının çözümü.
+3. MERDİVEN ATLAYIŞ ASİSTİ: pathfinder’ın hamle setinde merdivenden-merdivene sıçrama yok.
+   Üst üste 2. takılmada bot merdivendeyse: goal durdurulur → hedefe en yakın komşu merdiven
+   kolonuna (≤3.2 blok) dönülür → ileri+zıpla (~1.5 sn sınırlı) → tutununca dümen pathfinder’a
+   geri verilir. Altın kurala uygun: dümen ya pathfinder’da ya asistte, asla ikisinde.
+4. Report throttle açığı kapatıldı: mesafe etiketi her tik değiştiği için 400ms mutlak alt
+   sınır eklendi + etiket tam metreye yuvarlandı.
+   ⚠ Saha doğrulaması (Paper, zigzag merdiven kulesi): kullanıcı senaryosu — 3. merdivende
+   karşı yöndeki merdivene geçiş + takip sırasında yön değişimi.
