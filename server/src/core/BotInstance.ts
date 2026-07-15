@@ -20,7 +20,7 @@ import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
 import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
-import { runFollow, runGoto, runGotoPlayer, stopMovement } from "../modules/movement";
+import { runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
 import { SurvivalService } from "../modules/survival";
 import type {
   BotConfig,
@@ -251,6 +251,21 @@ export class BotInstance extends EventEmitter {
         return this.tasks.enqueue(
           { type, label, priority: PRIORITY.USER, params: { x, y, z, range } },
           () => (token, report) => runGoto(this, x, y, z, range, token, report)
+        );
+      }
+      case "parkour-goto": {
+        const x = num(action.x, "x");
+        const y = num(action.y, "y");
+        const z = num(action.z, "z");
+        const range = clampRange(action.range ?? 1);
+        return this.tasks.enqueue(
+          {
+            type,
+            label: `parkur: ${Math.round(x)} ${Math.round(y)} ${Math.round(z)}`,
+            priority: PRIORITY.USER,
+            params: { x, y, z, range }
+          },
+          () => (token, report) => runParkourGoto(this, x, y, z, range, token, report)
         );
       }
       case "goto-player": {

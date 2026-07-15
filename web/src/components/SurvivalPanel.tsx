@@ -75,6 +75,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
   const wg = { ...defaultWg, ...(s.waterGuard ?? {}) };
   const hg = { ...defaultHg, ...(s.hazardGuard ?? {}) };
   const scoop = { ...defaultScoop, ...(s.bucketScoop ?? {}) };
+  const mov = bot.config.movement;
   const online = bot.status === "online";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
@@ -83,6 +84,15 @@ export function SurvivalPanel({ botId }: { botId: string }) {
       await api.patch(`/api/bots/${botId}`, { survival });
       await refresh();
       toast("success", "Hayatta kalma ayarı kaydedildi");
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+  const patchMove = async (movement: Record<string, unknown>) => {
+    try {
+      await api.patch(`/api/bots/${botId}`, { movement });
+      await refresh();
+      toast("success", "Hareket / parkur ayarı kaydedildi");
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -505,6 +515,56 @@ export function SurvivalPanel({ botId }: { botId: string }) {
         <p className="text-[11px] leading-relaxed text-zinc-500">
           <b className="font-medium text-zinc-400">MLG su geri alma bundan ayrıdır</b> — bu kapalı olsa bile düşüşte
           dökülen MLG suyu (Yaşam → MLG malzeme geri al) alınır. Bu seçenek sadece boş gezerken kaynak doldurmak içindir.
+        </p>
+      </div>
+
+      {/* Parkur */}
+      <div className="rounded-lg border border-indigo-900/40 bg-indigo-950/15 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">Gelişmiş parkur</div>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={mov.allowParkour !== false}
+            onChange={(e) => void patchMove({ allowParkour: e.target.checked })}
+          />
+          Pathfinder parkour (2 blok boşluk + sprint)
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={mov.ladderParkour !== false}
+            onChange={(e) => void patchMove({ ladderParkour: e.target.checked })}
+          />
+          Merdiven / vine parkuru
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={mov.parkourSprint !== false}
+            onChange={(e) => void patchMove({ parkourSprint: e.target.checked })}
+          />
+          Sprint jump (3–4 blok)
+        </label>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-zinc-500 uppercase">Max gap</span>
+          {([2, 3, 4] as const).map((g) => (
+            <button
+              key={g}
+              type="button"
+              onClick={() => void patchMove({ parkourMaxGap: g })}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium ${
+                (mov.parkourMaxGap ?? 3) === g
+                  ? "bg-indigo-600 text-white"
+                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+              }`}
+            >
+              {g} blok
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Goto yolu bulamazsa otomatik 2–4 blok gap jump dener. Görev: <span className="mono text-zinc-400">parkour-goto</span>{" "}
+          (x,y,z). 4 blok zor ve sunucuya göre kaçabilir.
         </p>
       </div>
     </div>

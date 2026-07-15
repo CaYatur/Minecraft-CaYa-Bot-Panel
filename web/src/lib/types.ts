@@ -77,6 +77,9 @@ export interface BotConfig {
     lookTurnDegPerTick?: number;
     maxDrop?: number;
     allowTower?: boolean;
+    parkourMaxGap?: 2 | 3 | 4;
+    ladderParkour?: boolean;
+    parkourSprint?: boolean;
   };
 }
 

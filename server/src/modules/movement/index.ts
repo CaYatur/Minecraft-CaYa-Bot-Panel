@@ -25,30 +25,53 @@ function turnSpeed(instance: BotInstance): number {
 
 /**
  * pathfinder Movements:
- * - sprint: config.allowSprint (varsayılan açık, takipte de sürekli koşar)
- * - humanize: bakış + maxDrop/kule; sprint’i kısıtlamaz
+ * - sprint: config.allowSprint
+ * - parkour: 2+ blok boşluk (allowParkour); opts.parkour → gelişmiş (maxDrop↑, sprint)
+ * - humanize: bakış + kule kısıtı
  */
-export function ensureMovement(instance: BotInstance, opts?: { allowSprintNow?: boolean }): Bot {
+export function ensureMovement(
+  instance: BotInstance,
+  opts?: { allowSprintNow?: boolean; parkour?: boolean }
+): Bot {
   const bot = requireBot(instance);
   const anyBot = bot as unknown as { pathfinder?: { setMovements(m: unknown): void } };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
 
   const cfg = moveCfg(instance);
-  const human = cfg.humanize !== false;
+  const human = cfg.humanize !== false && !opts?.parkour;
+  const parkourOn = opts?.parkour === true || cfg.allowParkour !== false;
   const movements = new Movements(bot);
 
   movements.canDig = Boolean(cfg.canDig);
-  // allowSprintNow belirtilmezse config; takip/goto her zaman koşabilsin
-  const sprintAllowed = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
+  const sprintAllowed =
+    opts?.allowSprintNow !== undefined
+      ? opts.allowSprintNow
+      : opts?.parkour
+        ? true
+        : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
-  // parkour açık kalabilir ama kule + yüksek drop kapatılır (AC)
-  movements.allowParkour = Boolean(cfg.allowParkour);
-  movements.allow1by1towers = human ? Boolean(cfg.allowTower) : true;
+  movements.allowParkour = parkourOn;
+  movements.allow1by1towers = opts?.parkour ? Boolean(cfg.allowTower) : human ? Boolean(cfg.allowTower) : true;
 
   try {
-    (movements as { maxDrop?: number }).maxDrop = human ? Math.min(4, cfg.maxDrop ?? 3) : 256;
+    // parkour: 3–4 blok düşüş/atlama için maxDrop daha yüksek
+    const baseDrop = cfg.maxDrop ?? 3;
+    (movements as { maxDrop?: number }).maxDrop = opts?.parkour
+      ? Math.max(baseDrop, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2))
+      : human
+        ? Math.min(4, baseDrop)
+        : 256;
   } catch {
     /* eski pathfinder */
+  }
+
+  // merdiven / sıvı — parkour modunda daha serbest
+  try {
+    if (opts?.parkour || cfg.ladderParkour !== false) {
+      (movements as { liquidCost?: number }).liquidCost = 2;
+    }
+  } catch {
+    /* */
   }
 
   const registry = (bot as unknown as { registry: { itemsByName: Record<string, { id: number } | undefined> } }).registry;
@@ -159,15 +182,30 @@ export async function runGoto(
   const bot = requireBot(instance);
   const dist = Math.round(bot.entity.position.distanceTo({ x, y, z } as never));
   report({ done: 0, total: dist, label: `hedefe gidiliyor (${dist} blok)` });
-  ensureMovement(instance, { allowSprintNow: moveCfg(instance).allowSprint !== false });
-  await pathfinderGoal(
-    instance,
-    new goals.GoalNear(x, y, z, Math.max(1, range)),
-    token,
-    GOTO_TIMEOUT_MS,
-    { x, y, z }
-  );
-  // varınca hedefe doğru bak
+  const parkour = moveCfg(instance).allowParkour !== false;
+  ensureMovement(instance, {
+    allowSprintNow: moveCfg(instance).allowSprint !== false,
+    parkour
+  });
+  try {
+    await pathfinderGoal(
+      instance,
+      new goals.GoalNear(x, y, z, Math.max(1, range)),
+      token,
+      GOTO_TIMEOUT_MS,
+      { x, y, z }
+    );
+  } catch (e) {
+    // noPath → gelişmiş parkur dene (2–4 gap + merdiven)
+    const msg = e instanceof Error ? e.message : String(e);
+    if (parkour && (msg.includes("noPath") || msg.includes("yol") || msg.includes("zaman"))) {
+      const { runParkourGoto } = await import("./parkour.js");
+      report({ done: 0, total: dist, label: `parkur deneniyor…` });
+      await runParkourGoto(instance, x, y, z, range, token, report);
+    } else {
+      throw e;
+    }
+  }
   try {
     await easeLookAt(bot, { x, y: y + 1.2, z }, turnSpeed(instance), 8);
   } catch {
@@ -175,6 +213,8 @@ export async function runGoto(
   }
   report({ done: dist, total: dist, label: "hedefe ulaşıldı" });
 }
+
+export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour.js";
 
 export async function runGotoPlayer(
   instance: BotInstance,

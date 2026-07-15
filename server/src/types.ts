@@ -105,6 +105,12 @@ export interface MovementConfig {
   maxDrop?: number;
   /** 1x1 kule (scaffold) — AC riski, varsayılan humanize ile kapalı */
   allowTower?: boolean;
+  /** özel gap jump üst sınırı: 2 | 3 | 4 (varsayılan 3) */
+  parkourMaxGap?: 2 | 3 | 4;
+  /** merdiven/vine parkuru */
+  ladderParkour?: boolean;
+  /** 3–4 blokta sprint jump */
+  parkourSprint?: boolean;
 }
 
 export interface BotConfig {
@@ -393,7 +399,10 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       humanize: true,
       lookTurnDegPerTick: 16,
       maxDrop: 3,
-      allowTower: false
+      allowTower: false,
+      parkourMaxGap: 3,
+      ladderParkour: true,
+      parkourSprint: true
     }
   };
 }
