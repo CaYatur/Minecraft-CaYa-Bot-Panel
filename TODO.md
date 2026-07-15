@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 14 ✅* Yapı/şema (API+UI; Paper saha)**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 15 ✅* Düşüş kurtarma / MLG**
 
 ---
 
@@ -261,6 +261,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
 | 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
 | 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (inşaat fiziği Paper) |
+| 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
 
 ---
 
@@ -471,6 +472,18 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Typecheck server+web temiz; örnek şema + REST list; UI rotaları.
 - [ ] Paper: küçük yapı + scaffold cleanup saha (flying-squid yetersiz).
 
+### Faz 15 — Düşüş Kurtarma / MLG ✅*
+
+> Yüksekten düşerken hasar/ölüm engelleme: su kovası MLG, tekne, saman, slime, cobweb,
+> merdiven/scaffolding/powder snow. Hasar tahmini + Feather Falling; ölümcülse en iyi yöntem.
+
+- [x] `modules/survival/fallGuard.ts` — 50ms tick, yer raycast, predictedDamage, yöntem skorlama.
+- [x] Config `survival.fallGuard` (enabled, minDamageHp, lethalHealthMargin, mlgTriggerBlocks).
+- [x] Survival attach/detach; `bot:fallGuard` canlı durum.
+- [x] Panel Yaşam sekmesi: aç/kapa + eşikler + yöntem listesi + canlı rozet.
+- [x] Typecheck temiz.
+- [ ] Paper saha: su MLG + saman iniş + malzeme yok uyarısı.
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -587,6 +600,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Faz 13 açıldı: yakın oyuncu UI + otomasyon formu + katalog; çekirdek RuleEngine/katalog dosyaları WIP (`[~]`).
 - 2026-07-15 — Paper sohbet isimleri: 1.19+ `playerChat` gönderici UUID + `chat`/`whisper` olayları + JSON/clickEvent + öğrenilmiş prefix; sadece `message.toString()` yetmez (isim ayrı alanda).
 - 2026-07-15 — Faz 14 yapı: kendi `BuildService` (mineflayer-builder değil); şema global kütüphane `data/schematics`; scaffold defteri + cleanup zorunlu; progress `bot:build`.
+- 2026-07-15 — Faz 15 düşüş: FallGuard tick-bazlı (TaskQueue değil) — MLG milisaniye ister; SURVIVAL öncelikli pathfinder kesme.
 
 ---
 
@@ -763,3 +777,15 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 5. TODO §7/§8/§14/§15 güncellendi; typecheck temiz.
 
 **Sınır:** Place/dig fiziği Paper saha; flying-squid pencere/tıklama zayıf. Büyük şemalarda yavaş (sıralı yerleştirme v1).
+
+### 2026-07-15 — Grok 4.5 — Faz 15 Düşüş kurtarma (MLG)
+
+**İstek:** Yüksekten düşerken su/saman/merdiven/MLG; ölümcülse tüm olasılıkları hesaplayıp kurtar.
+
+**Yapılanlar:**
+1. `FallGuardService` — hasar tahmini, yöntem skorlama, yere yaklaşınca execute.
+2. water / boat / hay / slime / cobweb / ladder / scaffolding / powder_snow.
+3. Config + SurvivalPanel UI + `bot:fallGuard`.
+4. TODO + typecheck.
+
+**Sınır:** Timing Paper’da ayarlanmalı; lag’li sunucuda MLG kaçabilir.

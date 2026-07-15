@@ -29,7 +29,18 @@ export interface BotConfig {
     fleeAtHealth: number;
     chaseDistance: number;
   };
-  survival: { autoEat: boolean; eatAtFood: number; foodBlacklist: string[] };
+  survival: {
+    autoEat: boolean;
+    eatAtFood: number;
+    foodBlacklist: string[];
+    fallGuard?: {
+      enabled: boolean;
+      minDamageHp: number;
+      lethalHealthMargin: number;
+      mlgTriggerBlocks: number;
+      onlyWhenDangerous: boolean;
+    };
+  };
   chat: { minMessageIntervalMs: number };
   movement: { canDig: boolean; allowSprint: boolean; allowParkour: boolean; scaffoldBlocks: string[] };
 }

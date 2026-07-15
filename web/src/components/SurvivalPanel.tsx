@@ -1,17 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { EV } from "../lib/events";
+import { socket } from "../lib/socket";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-/** Faz 7 — Hayatta kalma. Tasarım dili: InventoryPanel / TasksPanel (zinc kart + indigo birincil). */
+interface FallGuardLive {
+  active: boolean;
+  falling: boolean;
+  method: string | null;
+  fallDistance: number;
+  remainingBlocks: number;
+  predictedDamage: number;
+  lethal: boolean;
+  lastAction: string;
+  inventoryOptions: string[];
+}
+
+const defaultFg = {
+  enabled: true,
+  minDamageHp: 4,
+  lethalHealthMargin: 2,
+  mlgTriggerBlocks: 3.2,
+  onlyWhenDangerous: true
+};
+
+/** Faz 7 — Hayatta kalma + düşüş kurtarma (MLG). */
 export function SurvivalPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const [radius, setRadius] = useState("32");
+  const [fgLive, setFgLive] = useState<FallGuardLive | null>(null);
+
+  useEffect(() => {
+    const onFg = (p: { botId: string; fallGuard: FallGuardLive }) => {
+      if (p.botId === botId) setFgLive(p.fallGuard);
+    };
+    socket.on(EV.BOT_FALL_GUARD, onFg);
+    return () => {
+      socket.off(EV.BOT_FALL_GUARD, onFg);
+    };
+  }, [botId]);
 
   if (!bot) return null;
   const s = bot.config.survival;
+  const fg = { ...defaultFg, ...(s.fallGuard ?? {}) };
   const online = bot.status === "online";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
@@ -157,6 +191,120 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
             Dövüşte yalnızca can kritikse yer. Av RealismLayer ile (Faz 6). Sistem mesajları sohbete yazılmaz (İ1).
           </p>
+        </div>
+      </div>
+
+      {/* Düşüş kurtarma / MLG */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Düşüş kurtarma (MLG)</span>
+          {fgLive?.falling && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                fgLive.lethal ? "bg-red-950/70 text-red-300" : "bg-amber-950/60 text-amber-300"
+              }`}
+            >
+              {fgLive.lethal ? "ÖLÜMCÜL DÜŞÜŞ" : "düşüyor"} · ≈{fgLive.predictedDamage} HP · {fgLive.remainingBlocks}m
+            </span>
+          )}
+          {fgLive?.active && (
+            <span className="rounded-full bg-indigo-950/60 px-2 py-0.5 text-[10px] text-indigo-300">
+              {fgLive.method ?? "MLG"}…
+            </span>
+          )}
+        </div>
+
+        <label className="mb-3 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={fg.enabled}
+            onChange={(e) => void patch({ fallGuard: { ...fg, enabled: e.target.checked } })}
+          />
+          Otomatik düşüş kurtarma
+        </label>
+
+        <div className="mb-3 grid gap-2 sm:grid-cols-3">
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
+            Min. hasar (HP)
+            <input
+              type="number"
+              min={1}
+              max={20}
+              defaultValue={fg.minDamageHp}
+              onBlur={(e) =>
+                void patch({ fallGuard: { ...fg, minDamageHp: Math.max(1, Number(e.target.value) || 4) } })
+              }
+              className="mono w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
+            Ölümcül marj (can)
+            <input
+              type="number"
+              min={0}
+              max={10}
+              defaultValue={fg.lethalHealthMargin}
+              onBlur={(e) =>
+                void patch({
+                  fallGuard: { ...fg, lethalHealthMargin: Math.max(0, Number(e.target.value) || 2) }
+                })
+              }
+              className="mono w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
+            MLG mesafe (blok)
+            <input
+              type="number"
+              min={1}
+              max={8}
+              step={0.1}
+              defaultValue={fg.mlgTriggerBlocks}
+              onBlur={(e) =>
+                void patch({
+                  fallGuard: { ...fg, mlgTriggerBlocks: Math.max(1, Number(e.target.value) || 3.2) }
+                })
+              }
+              className="mono w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            />
+          </label>
+        </div>
+
+        <label className="mb-3 flex items-center gap-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={fg.onlyWhenDangerous}
+            onChange={(e) => void patch({ fallGuard: { ...fg, onlyWhenDangerous: e.target.checked } })}
+          />
+          Sadece tehlikeli/ölümcül düşüşte müdahale et
+        </label>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2 py-2 text-[11px] leading-relaxed text-zinc-500">
+          <p className="mb-1 text-zinc-400">Envanterde varsa sırayla değerlendirilir:</p>
+          <ul className="list-inside list-disc space-y-0.5">
+            <li>
+              <b className="text-zinc-300">Su kovası</b> — klasik MLG (iniş sonrası geri alınmaya çalışılır)
+            </li>
+            <li>
+              <b className="text-zinc-300">Tekne</b> — tekne MLG
+            </li>
+            <li>
+              <b className="text-zinc-300">Saman</b> — yumuşak iniş (%80 hasar azaltma)
+            </li>
+            <li>
+              <b className="text-zinc-300">Slime / cobweb / merdiven / scaffolding / powder snow</b>
+            </li>
+          </ul>
+          <p className="mt-2">
+            Feather Falling botları hesaplanır. Pathfinder düşüş anında kesilir. Malzeme yoksa log&apos;a uyarı
+            yazılır (sohbete değil, İ1).
+          </p>
+          {fgLive?.inventoryOptions?.length ? (
+            <p className="mono mt-2 text-emerald-500/80">Hazır: {fgLive.inventoryOptions.join(", ")}</p>
+          ) : online ? (
+            <p className="mt-2 text-zinc-600 italic">Şu an envanterde kurtarma malzemesi görünmüyor.</p>
+          ) : null}
+          {fgLive?.lastAction ? <p className="mono mt-1 text-zinc-600">son: {fgLive.lastAction}</p> : null}
         </div>
       </div>
     </div>

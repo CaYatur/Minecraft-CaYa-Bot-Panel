@@ -20,6 +20,7 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     inst.on("combat", (p) => io.emit(EV.BOT_COMBAT, p));
     inst.on("nearby", (p) => io.emit(EV.BOT_NEARBY, p));
     inst.on("build", (p) => io.emit(EV.BOT_BUILD, p));
+    inst.on("fallGuard", (p) => io.emit(EV.BOT_FALL_GUARD, p));
   };
 
   for (const inst of manager.bots.values()) wireInstance(inst);

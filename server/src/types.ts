@@ -101,6 +101,14 @@ export interface BotConfig {
     autoEat: boolean;
     eatAtFood: number;
     foodBlacklist: string[];
+    /** yüksekten düşüş MLG / yumuşak iniş (Faz 15) */
+    fallGuard?: {
+      enabled: boolean;
+      minDamageHp: number;
+      lethalHealthMargin: number;
+      mlgTriggerBlocks: number;
+      onlyWhenDangerous: boolean;
+    };
   };
   chat: {
     minMessageIntervalMs: number;
@@ -260,7 +268,14 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     survival: {
       autoEat: true,
       eatAtFood: 14,
-      foodBlacklist: ["rotten_flesh", "spider_eye", "poisonous_potato", "pufferfish", "suspicious_stew"]
+      foodBlacklist: ["rotten_flesh", "spider_eye", "poisonous_potato", "pufferfish", "suspicious_stew"],
+      fallGuard: {
+        enabled: true,
+        minDamageHp: 4,
+        lethalHealthMargin: 2,
+        mlgTriggerBlocks: 3.2,
+        onlyWhenDangerous: true
+      }
     },
     chat: { minMessageIntervalMs: 1500 },
     movement: {
