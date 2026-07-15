@@ -3,8 +3,7 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
-import { safeMaxDropForPath } from "./edgeSafety";
-import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
+import { easeLookAt, entityLookPoint, stepLookAlongMotion, stepLookAtEntity } from "./look";
 
 const GOTO_TIMEOUT_MS = 180_000;
 
@@ -25,11 +24,11 @@ function turnSpeed(instance: BotInstance): number {
 }
 
 /**
- * pathfinder Movements:
- * - sprint: config.allowSprint
- * - parkour: 2+ blok boşluk (allowParkour)
- * - ÖNEMLİ: pathfinder her fizik tick'inde bot.look(yaw) yapar.
- *   Üzerine bakış/lookAt basmak 1-up zıplamayı bozar → geri çekilip tekrar dener.
+ * Pathfinder Movements — takip/goto kararlı, parkur izole.
+ *
+ * ÖNEMLİ:
+ * - follow/goto: allowParkour KAPALI (düz yol + 1-up). Parkur bloklara sıkıştırıyordu.
+ * - parkour mode: allowParkour açık (sadece parkour-goto / noPath yedek).
  */
 export function ensureMovement(
   instance: BotInstance,
@@ -41,43 +40,28 @@ export function ensureMovement(
 
   const cfg = moveCfg(instance);
   const mode = opts?.mode ?? (opts?.parkour ? "parkour" : "goto");
-  // goto/follow: parkour sadece config açıksa (2 blok gap). 1-up jump parkour'suz çalışır.
-  // parkour mode: her zaman parkour açık.
-  const parkourOn =
-    mode === "parkour"
-      ? true
-      : opts?.parkour === true
-        ? true
-        : cfg.allowParkour !== false;
-  const movements = new Movements(bot);
+  // Takip/goto: parkur KAPALI — stabil yürüyüş. Parkur sadece explicit parkour mode.
+  const parkourOn = mode === "parkour" || opts?.parkour === true;
 
+  const movements = new Movements(bot);
   movements.canDig = Boolean(cfg.canDig);
   const sprintAllowed =
-    opts?.allowSprintNow !== undefined
-      ? opts.allowSprintNow
-      : mode === "parkour"
-        ? true
-        : cfg.allowSprint !== false;
+    opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
   movements.allowParkour = parkourOn;
-  // 1x1 kule: config; jump-up (1 basamak) pathfinder getMoveJumpUp ile her zaman var
   movements.allow1by1towers = Boolean(cfg.allowTower);
 
   try {
-    (movements as { maxDrop?: number }).maxDrop = safeMaxDropForPath(cfg, mode);
-  } catch {
-    /* eski pathfinder */
-  }
-
-  try {
-    if (mode === "parkour") {
-      (movements as { liquidCost?: number }).liquidCost = 1;
-    }
+    const baseDrop = Math.max(1, Math.min(6, cfg.maxDrop ?? 3));
+    (movements as { maxDrop?: number }).maxDrop = parkourOn
+      ? Math.max(baseDrop, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2))
+      : Math.min(4, baseDrop);
   } catch {
     /* */
   }
 
-  const registry = (bot as unknown as { registry: { itemsByName: Record<string, { id: number } | undefined> } }).registry;
+  const registry = (bot as unknown as { registry: { itemsByName: Record<string, { id: number } | undefined> } })
+    .registry;
   const ids = (cfg.scaffoldBlocks ?? [])
     .map((name) => registry?.itemsByName?.[name]?.id)
     .filter((id): id is number => typeof id === "number");
@@ -85,34 +69,6 @@ export function ensureMovement(
 
   bot.pathfinder.setMovements(movements);
   return bot;
-}
-
-/**
- * Pathfinder aktifken bakışa karışma.
- * isMoving false olsa bile goal set ise (yeniden path hesap) bakış bozar.
- */
-function isPathfinderBusy(bot: Bot): boolean {
-  try {
-    const pf = bot.pathfinder as {
-      isMoving?: () => boolean;
-      isMining?: () => boolean;
-      isBuilding?: () => boolean;
-      goal?: unknown;
-    };
-    if (pf.goal != null) return true;
-    if (pf.isMoving?.()) return true;
-    if (pf.isMining?.()) return true;
-    if (pf.isBuilding?.()) return true;
-  } catch {
-    /* */
-  }
-  try {
-    if (bot.entity && !bot.entity.onGround) return true;
-    if ((bot.entity?.velocity?.y ?? 0) > 0.05) return true;
-  } catch {
-    /* */
-  }
-  return false;
 }
 
 function pathfinderGoal(
@@ -125,19 +81,18 @@ function pathfinderGoal(
 ): Promise<void> {
   const bot = ensureMovement(instance, {
     allowSprintNow: moveCfg(instance).allowSprint !== false,
-    // parkour flag sadece parkour-goto / explicit; normal goto eski hareket
     parkour: moveMode === "parkour",
     mode: moveMode
   });
-  // kısa insanî gecikme — anında yola çıkma flag’i azaltır
   const reaction = moveCfg(instance).humanize === false || moveMode === "parkour" ? 0 : 40 + Math.floor(Math.random() * 90);
 
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
     const stopGoal = () => {
       try {
         bot.pathfinder.setGoal(null);
       } catch {
-        /* bot düşmüş olabilir */
+        /* */
       }
     };
     const cleanup = () => {
@@ -146,26 +101,31 @@ function pathfinderGoal(
       bot.removeListener("goal_reached", onReached);
       bot.removeListener("path_update", onPath);
     };
-    const onReached = () => {
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      resolve();
+      fn();
     };
+    const onReached = () => finish(() => resolve());
     const onPath = (result: { status: string }) => {
       if (result.status === "noPath") {
-        cleanup();
-        stopGoal();
-        reject(new Error("Hedefe ulaşan güvenli yol bulunamadı (noPath)."));
+        finish(() => {
+          stopGoal();
+          reject(new Error("Hedefe ulaşan güvenli yol bulunamadı (noPath)."));
+        });
       } else if (result.status === "timeout") {
-        cleanup();
-        stopGoal();
-        reject(new Error("Yol hesaplama zaman aşımına uğradı — hedef çok uzak veya kapalı olabilir."));
+        finish(() => {
+          stopGoal();
+          reject(new Error("Yol hesaplama zaman aşımına uğradı — hedef çok uzak veya kapalı olabilir."));
+        });
       }
     };
 
     const start = async () => {
       if (reaction > 0) await sleep(reaction);
       if (token.cancelled) {
-        reject(new Error(token.reason ?? "Görev iptal edildi."));
+        finish(() => reject(new Error(token.reason ?? "Görev iptal edildi.")));
         return;
       }
       bot.pathfinder.setGoal(goal);
@@ -173,25 +133,36 @@ function pathfinderGoal(
     void start();
 
     const watch = setInterval(() => {
+      if (settled) return;
       if (token.cancelled) {
-        cleanup();
-        stopGoal();
-        reject(new Error(token.reason ?? "Görev iptal edildi."));
+        finish(() => {
+          stopGoal();
+          reject(new Error(token.reason ?? "Görev iptal edildi."));
+        });
         return;
       }
       if (instance.status !== "online") {
-        cleanup();
-        reject(new Error("Bağlantı koptu — hareket görevi sonlandı."));
+        finish(() => reject(new Error("Bağlantı koptu — hareket görevi sonlandı.")));
         return;
       }
-      // Path sırasında bakış yok — pathfinder her tick look(yaw) yapar.
-      // lookTarget varış sonrası easeLookAt ile (runGoto / runGotoPlayer).
+      // Goto: hafif bakış (pathfinder look ile yarışmasın diye yavaş + sadece yerde)
+      if (moveMode === "parkour") return;
+      if (!bot.entity?.onGround) return;
+      void (async () => {
+        try {
+          const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
+          if (lt) await stepLookAlongMotion(bot, lt, Math.min(12, turnSpeed(instance)));
+        } catch {
+          /* */
+        }
+      })();
     }, 200);
 
     const deadline = setTimeout(() => {
-      cleanup();
-      stopGoal();
-      reject(new Error("Hedefe zamanında ulaşılamadı (görev zaman aşımı)."));
+      finish(() => {
+        stopGoal();
+        reject(new Error("Hedefe zamanında ulaşılamadı (görev zaman aşımı)."));
+      });
     }, timeoutMs);
 
     bot.on("goal_reached", onReached);
@@ -211,10 +182,8 @@ export async function runGoto(
   const bot = requireBot(instance);
   const dist = Math.round(bot.entity.position.distanceTo({ x, y, z } as never));
   report({ done: 0, total: dist, label: `hedefe gidiliyor (${dist} blok)` });
-  const parkour = moveCfg(instance).allowParkour !== false;
   ensureMovement(instance, {
     allowSprintNow: moveCfg(instance).allowSprint !== false,
-    parkour,
     mode: "goto"
   });
   try {
@@ -227,8 +196,9 @@ export async function runGoto(
       "goto"
     );
   } catch (e) {
-    // noPath → gelişmiş parkur dene (2–4 gap + merdiven)
+    // noPath → gelişmiş parkur (izole; normal takibi bozmaz)
     const msg = e instanceof Error ? e.message : String(e);
+    const parkour = moveCfg(instance).allowParkour !== false;
     if (parkour && (msg.includes("noPath") || msg.includes("yol") || msg.includes("zaman"))) {
       const { runParkourGoto } = await import("./parkour.js");
       report({ done: 0, total: dist, label: `parkur deneniyor…` });
@@ -265,20 +235,22 @@ export async function runGotoPlayer(
     );
   }
   report({ done: 0, total: 1, label: `${playerName} oyuncusuna gidiliyor` });
+  const p = entity.position;
   ensureMovement(instance, {
     allowSprintNow: moveCfg(instance).allowSprint !== false,
     mode: "goto"
   });
 
-  // Canlı takip: GoalFollow — oyuncu hareket ederse path yenilenir (eski sabit GoalNear kilitleniyordu)
-  const hold = Math.max(1, range);
   try {
     await pathfinderGoal(
       instance,
-      new goals.GoalFollow(entity, hold),
+      new goals.GoalNear(p.x, p.y, p.z, Math.max(1, range)),
       token,
       GOTO_TIMEOUT_MS,
-      undefined,
+      () => {
+        const e = bot.players[playerName]?.entity;
+        return e ? entityLookPoint(e) : { x: p.x, y: p.y + 1.5, z: p.z };
+      },
       "goto"
     );
   } catch (e) {
@@ -287,23 +259,13 @@ export async function runGotoPlayer(
     if (parkour && (msg.includes("noPath") || msg.includes("yol") || msg.includes("zaman"))) {
       const { runParkourGoto } = await import("./parkour.js");
       report({ done: 0, total: 1, label: `parkur → ${playerName}` });
-      const live = bot.players[playerName]?.entity?.position;
-      await runParkourGoto(
-        instance,
-        live?.x ?? entity.position.x,
-        live?.y ?? entity.position.y,
-        live?.z ?? entity.position.z,
-        range,
-        token,
-        report,
-        {
-          liveTarget: () => {
-            const e = bot.players[playerName]?.entity;
-            if (!e) return null;
-            return { x: e.position.x, y: e.position.y, z: e.position.z };
-          }
+      await runParkourGoto(instance, p.x, p.y, p.z, range, token, report, {
+        liveTarget: () => {
+          const e = bot.players[playerName]?.entity;
+          if (!e) return null;
+          return { x: e.position.x, y: e.position.y, z: e.position.z };
         }
-      );
+      });
     } else {
       throw e;
     }
@@ -320,8 +282,8 @@ export async function runGotoPlayer(
 }
 
 /**
- * Sürekli takip: pathfinder GoalFollow + her tick hedefe yumuşak bakış.
- * Sprint config.allowSprint ile sürekli açık (yetişmek için).
+ * Sürekli takip — parkur öncesi stabil davranış.
+ * GoalFollow + sprint + hedefe bakış. Parkur/merdiven müdahalesi YOK.
  */
 export async function runFollow(
   instance: BotInstance,
@@ -331,7 +293,6 @@ export async function runFollow(
   report: ProgressFn
 ): Promise<void> {
   const holdDist = Math.max(1, Math.min(16, distance));
-  // hafif jitter — robotik sabit mesafe flag’i azaltır
   const distJitter = () => holdDist + (Math.random() * 0.35 - 0.1);
   const canSprint = () => moveCfg(instance).allowSprint !== false;
 
@@ -356,74 +317,9 @@ export async function runFollow(
     }
   };
 
-  /** Bot merdiven/vine/scaffolding üzerinde mi */
-  const onClimbable = (bot: Bot): boolean => {
-    if (!bot.entity) return false;
-    try {
-      const p = bot.entity.position;
-      for (const dy of [0, 1, -1]) {
-        const b = bot.blockAt(p.offset(0, dy, 0) as never);
-        const n = b?.name?.replace(/^minecraft:/, "") ?? "";
-        if (n === "ladder" || n.includes("vine") || n === "scaffolding") return true;
-      }
-    } catch {
-      /* */
-    }
-    return false;
-  };
-
-  /** Merdivende takılınca bırak + oyuncu indiyse in */
-  const abandonClimbIfStuck = async (
-    bot: Bot,
-    ent: { position: { x: number; y: number; z: number } },
-    lastClimbY: { y: number; at: number }
-  ): Promise<{ y: number; at: number; abandoned: boolean }> => {
-    if (!bot.entity || !onClimbable(bot)) {
-      return { y: bot.entity?.position.y ?? lastClimbY.y, at: Date.now(), abandoned: false };
-    }
-    const by = bot.entity.position.y;
-    const ey = ent.position.y;
-    const now = Date.now();
-    const progressed = by > lastClimbY.y + 0.15;
-    const next = progressed ? { y: by, at: now } : lastClimbY;
-
-    // oyuncu artık yukarıda değil — merdiven gereksiz
-    const playerBelowOrLevel = ey <= by + 1.2;
-    // merdivende ilerleme yok
-    const stuck = !progressed && now - lastClimbY.at > 2200;
-
-    if (playerBelowOrLevel || stuck) {
-      instance.getLogger().info(
-        "Takip merdiven bırak",
-        playerBelowOrLevel ? "hedef aşağı/aynı seviye" : "stuck — path yenile"
-      );
-      clearGoal(bot);
-      // merdivenden in (sneak) veya bırak
-      try {
-        bot.setControlState("jump", false);
-        bot.setControlState("forward", false);
-        bot.setControlState("sneak", true);
-        await sleep(350);
-        bot.setControlState("sneak", false);
-      } catch {
-        /* */
-      }
-      clearGoal(bot);
-      await sleep(120);
-      try {
-        bot.pathfinder.setGoal(new goals.GoalFollow(ent as never, distJitter()), true);
-      } catch {
-        /* */
-      }
-      return { y: bot.entity?.position.y ?? by, at: Date.now(), abandoned: true };
-    }
-    return { ...next, abandoned: false };
-  };
-
   try {
     while (!token.cancelled) {
       const bot = requireBot(instance);
-      // ölüm / entity yok: pathfinder kilitlenmesin
       if ((bot.health ?? 0) <= 0 || !bot.entity) {
         clearGoal(bot);
         throw new Error("Bot öldü — takip durdu");
@@ -431,11 +327,13 @@ export async function runFollow(
 
       const entity = bot.players[playerName]?.entity;
       if (entity) {
-        report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış · sprint` });
+        report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m)` });
 
+        // Takip: parkour KAPALI (düz yol + 1-up)
         ensureMovement(instance, {
           allowSprintNow: canSprint(),
-          mode: "follow"
+          mode: "follow",
+          parkour: false
         });
         const followBot = bot;
         try {
@@ -443,8 +341,6 @@ export async function runFollow(
         } catch {
           /* */
         }
-
-        let climbTrack = { y: bot.entity.position.y, at: Date.now() };
 
         while (!token.cancelled && instance.status === "online") {
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
@@ -456,17 +352,15 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(ent.position);
 
-          // merdiven parkuru takılı / hedef indiyse bırak
-          climbTrack = await abandonClimbIfStuck(bot, ent, climbTrack);
-
           if (Math.random() < 0.05) {
             ensureMovement(instance, {
               allowSprintNow: canSprint(),
-              mode: "follow"
+              mode: "follow",
+              parkour: false
             });
           }
 
-          if (Math.random() < 0.1) {
+          if (Math.random() < 0.08) {
             try {
               followBot.pathfinder.setGoal(new goals.GoalFollow(ent, distJitter()), true);
             } catch {
@@ -474,31 +368,20 @@ export async function runFollow(
             }
           }
 
-          const moving = (() => {
-            try {
-              return Boolean((bot.pathfinder as { isMoving?: () => boolean }).isMoving?.());
-            } catch {
-              return isPathfinderBusy(bot);
-            }
-          })();
-          const close = d <= holdDist + 1.8;
-          if (close && bot.entity.onGround && !moving && (bot.entity.velocity?.y ?? 0) <= 0.05) {
-            try {
-              await stepLookAtEntity(bot, ent, Math.min(12, turnSpeed(instance)));
-            } catch {
-              /* */
-            }
+          // Takip edilen kişiye bak (eski stabil davranış)
+          try {
+            await stepLookAtEntity(bot, ent, turnSpeed(instance));
+          } catch {
+            /* */
           }
 
           report({
             done: 0,
             total: 0,
-            label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}${
-              onClimbable(bot) ? " · merdiven" : ""
-            }`
+            label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}`
           });
 
-          await sleep(100 + Math.floor(Math.random() * 40));
+          await sleep(90 + Math.floor(Math.random() * 50));
         }
 
         clearGoal(followBot);
@@ -520,14 +403,16 @@ export async function runFollow(
 
 export function stopMovement(instance: BotInstance) {
   instance.tasks.cancelAll("kullanıcı durdurdu");
-  const bot = instance.bot as unknown as { pathfinder?: { setGoal(g: null): void }; clearControlStates?: () => void } | null;
+  const bot = instance.bot as unknown as {
+    pathfinder?: { setGoal(g: null): void };
+    clearControlStates?: () => void;
+  } | null;
   try {
     bot?.pathfinder?.setGoal(null);
   } catch {
-    /* noop */
+    /* */
   }
   try {
-    // takılı sprint/jump bırakma
     const b = instance.bot;
     if (b) {
       b.setControlState("forward", false);
@@ -536,6 +421,7 @@ export function stopMovement(instance: BotInstance) {
       b.setControlState("right", false);
       b.setControlState("jump", false);
       b.setControlState("sprint", false);
+      b.setControlState("sneak", false);
     }
   } catch {
     /* */

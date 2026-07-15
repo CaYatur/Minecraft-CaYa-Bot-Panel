@@ -86,10 +86,12 @@ export class SurvivalService {
     const threshold = this.cfg().eatAtFood ?? 14;
     const combatBusy = this.instance.combat.getRuntime().fighting;
 
-    // dövüşte: sadece can kritikse ye
+    // tok — yeme dene (spam "Food is full" engeli)
+    if (food >= 20) return false;
+    // dövüşte: sadece can kritikse ye (silahı kaptırmasın)
     if (combatBusy && health > 8) return false;
     if (food > threshold && !(combatBusy && health <= 8)) return false;
-    if (Date.now() - this.lastEatAt < 1500) return false;
+    if (Date.now() - this.lastEatAt < 2500) return false;
 
     return this.eatBest();
   }
@@ -97,6 +99,14 @@ export class SurvivalService {
   async eatBest(): Promise<boolean> {
     const bot = this.bot ?? this.instance.bot;
     if (!bot || this.instance.status !== "online") return false;
+
+    // Minecraft food 20 = tok; consume "Food is full" atar
+    const foodLevel = bot.food ?? 20;
+    if (foodLevel >= 20) {
+      this.lastEatAt = Date.now();
+      return false;
+    }
+
     const blacklist = this.cfg().foodBlacklist ?? [];
     const banned = this.banned();
 
@@ -119,7 +129,14 @@ export class SurvivalService {
       this.log().success(`Yendi: ${item.displayName ?? item.name}`);
       return true;
     } catch (e) {
-      this.log().warn("Yeme başarısız", e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      this.lastEatAt = Date.now();
+      // tok spam'i log boğmasın
+      if (/food is full|not hungry|cannot eat/i.test(msg)) {
+        this.log().debug("Yeme atlandı", msg);
+      } else {
+        this.log().warn("Yeme başarısız", msg);
+      }
       return false;
     } finally {
       this.eating = false;
