@@ -1,5 +1,6 @@
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
+import { shouldSkipBlock } from "./blocks";
 import { loadParsedSchematic, materialCounts } from "./library";
 import { placeBlockAt } from "./place";
 import { ScaffoldTracker } from "./scaffold";
@@ -231,7 +232,10 @@ export class BuildService {
       this.setPhase("preparing", "şema yükleniyor…");
       const parsed = await loadParsedSchematic(opts.schematicId, version, transform);
       this.runtime.schematicName = parsed.meta.name;
-      const blocks = this.sortBlocks(parsed.blocks);
+      // üst yarı / portal vb. atla
+      const blocks = this.sortBlocks(
+        parsed.blocks.filter((b) => !shouldSkipBlock(b.name, b.properties))
+      );
       this.runtime.total = blocks.length;
       this.runtime.materials = this.materialsFor(blocks);
       this.emit();
@@ -279,7 +283,16 @@ export class BuildService {
         this.runtime.materials = this.materialsFor(blocks.slice(i));
         this.emit();
 
-        const res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds);
+        const skipReason = shouldSkipBlock(b.name, b.properties);
+        let res: "placed" | "skipped" | "failed";
+        if (skipReason) {
+          res = "skipped";
+        } else {
+          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 2 });
+        }
+        if (res === "placed") {
+          this.scaffolds.protectStructure(wx, wy, wz);
+        }
         const ev: BuildPlacedBlock = {
           name: b.name,
           x: wx,

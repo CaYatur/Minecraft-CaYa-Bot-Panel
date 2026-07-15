@@ -223,7 +223,15 @@ export class FallGuardService {
     const bestFall = Math.max(metaFall > 0.5 ? metaFall + Math.max(0, remaining - 0.5) : 0, fromPeak);
 
     const { feather, protection } = armorFallEnchants(bot);
-    const predictedDamage = fallDamageHp(bestFall, feather, protection);
+    const resistance = resistanceAmplifier(bot);
+    // hay/slime üzerine iniyorsa hasar formülünde azalt (wiki: hay %80)
+    let landingMul = 1;
+    if (groundInfo?.soft) {
+      if (groundInfo.name === "hay_block") landingMul = 0.2;
+      else if (groundInfo.name === "slime_block" || groundInfo.name === "honey_block") landingMul = 0; // bounce / absorb
+      else if (groundInfo.name === "cobweb" || groundInfo.name.includes("water")) landingMul = 0;
+    }
+    const predictedDamage = fallDamageHp(bestFall, feather, protection, resistance, landingMul);
     const health = bot.health ?? 20;
     const lethal = predictedDamage >= health - cfg.lethalHealthMargin;
     const dangerous = predictedDamage >= cfg.minDamageHp || lethal;
@@ -258,7 +266,11 @@ export class FallGuardService {
 
     const method = pickBestMethod(options, remaining, lethal, predictedDamage);
     if (method === "none") {
-      this.state.lastAction = lethal ? "kurtarma yok — ölümcül düşüş!" : "kurtarma malzemesi yok";
+      // son çare: totem offhand
+      if (lethal) {
+        void this.tryEquipTotem(bot);
+      }
+      this.state.lastAction = lethal ? "kurtarma yok — totem/ölümcül!" : "kurtarma malzemesi yok";
       this.emit();
       if (lethal && Date.now() - this.lastWarnAt > 3000) {
         this.lastWarnAt = Date.now();
@@ -267,10 +279,14 @@ export class FallGuardService {
       return;
     }
 
+    // yüksek hızda daha erken tetikle (lag / hızlı düşüş)
+    const speed = Math.abs(vy);
+    const early = speed > 0.9 ? 1.2 : speed > 0.6 ? 0.6 : 0;
+    const triggerDist = cfg.mlgTriggerBlocks + early;
     const trigger =
       method === "water" || method === "boat" || method === "powder_snow"
-        ? remaining <= cfg.mlgTriggerBlocks && remaining > 0.15
-        : remaining <= Math.max(cfg.mlgTriggerBlocks + 2, 6) && remaining > 0.15;
+        ? remaining <= triggerDist && remaining > 0.15
+        : remaining <= Math.max(triggerDist + 2, 6) && remaining > 0.15;
 
     if (!trigger && remaining > cfg.mlgTriggerBlocks + 4) {
       if (!this.busy) void this.preEquip(bot, method);
@@ -321,6 +337,27 @@ export class FallGuardService {
       if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
     } catch {
       /* */
+    }
+  }
+
+  /** Ölümcül + MLG yok → totemi sol ele al (hayatta kalma) */
+  private async tryEquipTotem(bot: Bot) {
+    const banned = this.instance.config.inventory.bannedItems;
+    if (banned.includes("totem_of_undying")) return;
+    const totem = bot.inventory.items().find((i) => i.name === "totem_of_undying");
+    if (!totem) return;
+    try {
+      await bot.equip(totem, "off-hand");
+      this.state.lastAction = "totem sol el";
+      this.log().info("Totem of Undying sol ele alındı (ölümcül düşüş)");
+      this.emit(true);
+    } catch {
+      try {
+        await bot.equip(totem, "hand");
+        this.state.lastAction = "totem ana el";
+      } catch {
+        /* */
+      }
     }
   }
 
@@ -474,22 +511,63 @@ function idleState(): FallGuardState {
 }
 
 /**
- * Fall damage = max(0, fallDistance − 3) HP (half-hearts).
- * Feather Falling: wiki (12 × level)% azaltma, max %48 (FF IV).
- * Protection: kabaca %4 × seviye (tüm parçalar toplanır), FF ile birlikte cap %80.
+ * Fall damage = max(0, floor(fallDistance) − 3) HP (half-hearts).
+ * Feather Falling: (12 × level)% max 48%.
+ * Protection: ~4% × total levels; FF+Prot together cap 80%.
+ * Resistance: 20% × (amplifier+1), cap 100% (wiki status effect).
+ * landingMul: hay=0.2, water/slime soft=0, normal=1.
  * @see https://minecraft.wiki/w/Damage#Fall_damage
  * @see https://minecraft.wiki/w/Feather_Falling
+ * @see https://minecraft.wiki/w/Hay_Bale
  */
-export function fallDamageHp(fallDistance: number, featherFallingLevel = 0, protectionLevel = 0): number {
-  if (fallDistance <= 3) return 0;
-  let dmg = Math.max(0, fallDistance - 3);
-  // wiki genelde tam blok sayımı; kesirli mesafede floor benzeri
-  dmg = Math.max(0, Math.floor(fallDistance) - 3);
+export function fallDamageHp(
+  fallDistance: number,
+  featherFallingLevel = 0,
+  protectionLevel = 0,
+  resistanceAmplifier = -1,
+  landingMul = 1
+): number {
+  if (fallDistance <= 3 || landingMul <= 0) return 0;
+  let dmg = Math.max(0, Math.floor(fallDistance) - 3);
+  dmg = dmg * Math.min(1, Math.max(0, landingMul));
   const ffReduce = Math.min(0.48, Math.max(0, featherFallingLevel) * 0.12);
   const protReduce = Math.min(0.8, Math.max(0, protectionLevel) * 0.04);
-  const totalReduce = Math.min(0.8, ffReduce + protReduce);
-  dmg = Math.floor(dmg * (1 - totalReduce));
-  return Math.max(0, dmg);
+  const armorReduce = Math.min(0.8, ffReduce + protReduce);
+  dmg = dmg * (1 - armorReduce);
+  if (resistanceAmplifier >= 0) {
+    const resReduce = Math.min(1, (resistanceAmplifier + 1) * 0.2);
+    dmg = dmg * (1 - resReduce);
+  }
+  return Math.max(0, Math.floor(dmg));
+}
+
+/** Resistance effect amplifier (0 = Resistance I), yoksa -1 */
+function resistanceAmplifier(bot: Bot): number {
+  try {
+    const effects = bot.entity.effects as unknown;
+    const check = (name: string, amp?: number) => {
+      if (/resistance/i.test(name) && !/fire.?resistance/i.test(name)) return amp ?? 0;
+      return null;
+    };
+    if (Array.isArray(effects)) {
+      for (const e of effects) {
+        const name = String((e as { name?: string })?.name ?? "");
+        const amp = Number((e as { amplifier?: number })?.amplifier ?? 0);
+        const r = check(name, amp);
+        if (r != null) return r;
+      }
+    } else if (effects && typeof effects === "object") {
+      for (const [k, v] of Object.entries(effects as Record<string, unknown>)) {
+        const name = String((v as { name?: string })?.name ?? k);
+        const amp = Number((v as { amplifier?: number })?.amplifier ?? 0);
+        const r = check(name, amp);
+        if (r != null) return r;
+      }
+    }
+  } catch {
+    /* */
+  }
+  return -1;
 }
 
 function shouldIgnoreFall(bot: Bot): boolean {
@@ -622,6 +700,7 @@ function availableMethods(bot: Bot, banned: string[]): FallMethod[] {
   if (names.has("cobweb")) out.push("cobweb");
   if (names.has("ladder") || names.has("vine")) out.push("ladder");
   if (names.has("scaffolding")) out.push("scaffolding");
+  // totem MLG listesinde değil — ayrı tryEquipTotem
   return out;
 }
 

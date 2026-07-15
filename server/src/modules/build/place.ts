@@ -75,6 +75,27 @@ export async function placeBlockAt(
   z: number,
   blockName: string,
   token: TaskToken,
+  scaffolds: ScaffoldTracker,
+  opts?: { retries?: number }
+): Promise<"placed" | "skipped" | "failed"> {
+  const retries = Math.max(1, opts?.retries ?? 2);
+  let last: "placed" | "skipped" | "failed" = "failed";
+  for (let attempt = 0; attempt < retries; attempt++) {
+    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    last = await placeBlockAtOnce(instance, x, y, z, blockName, token, scaffolds);
+    if (last === "placed" || last === "skipped") return last;
+    await sleep(150 + attempt * 100);
+  }
+  return last;
+}
+
+async function placeBlockAtOnce(
+  instance: BotInstance,
+  x: number,
+  y: number,
+  z: number,
+  blockName: string,
+  token: TaskToken,
   scaffolds: ScaffoldTracker
 ): Promise<"placed" | "skipped" | "failed"> {
   const bot = instance.bot;
@@ -115,6 +136,7 @@ export async function placeBlockAt(
       }
       const after = bot.blockAt(target);
       if (after && (after.name.includes(name.split("_")[0]!) || after.name === name || after.name.includes("water") || after.name.includes("lava"))) {
+        scaffolds.protectStructure(target.x, target.y, target.z);
         return "placed";
       }
       return "failed";
@@ -151,13 +173,26 @@ export async function placeBlockAt(
     await bot.placeBlock(ref.block, ref.face);
     await sleep(120);
     const after = bot.blockAt(target);
-    if (after && (after.name === name || after.name === item.name)) return "placed";
+    if (after && (after.name === name || after.name === item.name || namesMatch(after.name, name))) {
+      scaffolds.protectStructure(target.x, target.y, target.z);
+      return "placed";
+    }
     await sleep(200);
     const after2 = bot.blockAt(target);
-    return after2 && (after2.name === name || after2.name === item.name) ? "placed" : "failed";
+    if (after2 && (after2.name === name || after2.name === item.name || namesMatch(after2.name, name))) {
+      scaffolds.protectStructure(target.x, target.y, target.z);
+      return "placed";
+    }
+    return "failed";
   } catch {
     return "failed";
   }
+}
+
+function namesMatch(a: string, b: string): boolean {
+  const x = a.replace(/^minecraft:/, "");
+  const y = b.replace(/^minecraft:/, "");
+  return x === y || x.replace(/_block$/, "") === y.replace(/_block$/, "");
 }
 
 function findReference(bot: Bot, target: Vec3): { block: Block; face: Vec3 } | null {

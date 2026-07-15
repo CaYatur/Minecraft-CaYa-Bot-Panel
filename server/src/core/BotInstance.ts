@@ -372,6 +372,13 @@ export class BotInstance extends EventEmitter {
       case "yapı":
       case "build": {
         const originMode = String(action.originMode ?? action.mode ?? "here") as "here" | "coords" | "player";
+        const server = this.getServer(this.config.serverId);
+        const versionHint =
+          action.version != null
+            ? String(action.version)
+            : server?.version && server.version !== "auto"
+              ? server.version
+              : "1.20.4";
         return this.build.enqueueBuild({
           schematicId: String(action.schematicId ?? action.id ?? ""),
           origin: {
@@ -382,7 +389,7 @@ export class BotInstance extends EventEmitter {
             player: action.player ? String(action.player) : undefined
           },
           allowPartial: action.allowPartial === true || action.allowPartial === "true",
-          versionHint: action.version ? String(action.version) : undefined,
+          versionHint,
           rotateY: action.rotateY != null ? Number(action.rotateY) : 0,
           mirrorX: action.mirrorX === true || action.mirrorX === "true",
           mirrorZ: action.mirrorZ === true || action.mirrorZ === "true"

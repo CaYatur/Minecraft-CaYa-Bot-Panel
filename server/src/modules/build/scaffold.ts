@@ -10,10 +10,12 @@ export interface ScaffoldRecord {
 
 /**
  * Scaffold defteri: inşaat sırasında koyulan geçici bloklar.
- * İş bitince (veya iptalde) ters sırada kırılır.
+ * Yapı bloğu konan hücreler korunur — yanlışlıkla yapı dirt'i kırılmaz.
  */
 export class ScaffoldTracker {
   private stack: ScaffoldRecord[] = [];
+  /** yapı başarıyla kondu → bu hücreler asla kazılmaz */
+  private protected = new Set<string>();
 
   get count(): number {
     return this.stack.length;
@@ -23,12 +25,26 @@ export class ScaffoldTracker {
     return this.stack;
   }
 
+  private key(x: number, y: number, z: number) {
+    return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
+  }
+
   record(x: number, y: number, z: number, name: string) {
+    const k = this.key(x, y, z);
+    if (this.protected.has(k)) return; // yapı hücresi scaffold sayılmaz
     this.stack.push({ x: Math.floor(x), y: Math.floor(y), z: Math.floor(z), name });
+  }
+
+  /** Kalıcı yapı bloğu kondu — scaffold kaydını düşür ve koru */
+  protectStructure(x: number, y: number, z: number) {
+    const k = this.key(x, y, z);
+    this.protected.add(k);
+    this.stack = this.stack.filter((r) => this.key(r.x, r.y, r.z) !== k);
   }
 
   clear() {
     this.stack = [];
+    this.protected.clear();
   }
 
   async cleanup(
@@ -42,6 +58,12 @@ export class ScaffoldTracker {
 
     for (const rec of ordered) {
       if (token.cancelled) break;
+      const k = this.key(rec.x, rec.y, rec.z);
+      if (this.protected.has(k)) {
+        cleared++;
+        onProgress?.(cleared, total);
+        continue;
+      }
       const pos = v3(rec.x, rec.y, rec.z);
       const b = bot.blockAt(pos);
       if (!b || b.name === "air" || b.name === "cave_air") {
@@ -49,6 +71,7 @@ export class ScaffoldTracker {
         onProgress?.(cleared, total);
         continue;
       }
+      // sadece scaffold tipi ve hâlâ aynı aile — yapı bloğu değil
       const ok = b.name === rec.name || isScaffoldFamily(b.name);
       if (!ok) {
         cleared++;
@@ -56,6 +79,13 @@ export class ScaffoldTracker {
         continue;
       }
       try {
+        // bot ayak altındaysa biraz kay
+        const feet = bot.entity.position;
+        if (Math.floor(feet.x) === rec.x && Math.floor(feet.y) === rec.y && Math.floor(feet.z) === rec.z) {
+          cleared++;
+          onProgress?.(cleared, total);
+          continue;
+        }
         if (bot.canDigBlock(b)) {
           await bot.dig(b, true);
         }

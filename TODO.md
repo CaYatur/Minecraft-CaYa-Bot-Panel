@@ -842,4 +842,10 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Blok→item alias: water/lava/powder_snow kovası, redstone_wire→redstone.
 - Malzeme sayımında kova alias.
 
-**Bilinçli kalan sınırlar:** block state (merdiven yönü) rotate’da yok; litematic packed long saha; hay %80 sadece yerleştirme ile (hasar formülünde değil); totem/ender pearl yok.
+**Bilinçli kalan sınırlar (sonra kapatıldı → aşağıdaki not):** litematic packed long hâlâ saha; ender pearl yok.
+
+### 2026-07-15 — Grok 4.5 — Eksiklerin kapatılması (MLG+Yapı v2)
+
+**MLG:** Resistance efekti; hay/slime/su landingMul; ölümcülde totem offhand; hız bazlı erken MLG tetik.
+**Yapı:** facing/axis/hinge transform; kapı üstü/portal skip; place retry×2; scaffold protectStructure; sunucu versionHint; path noPath.
+**Test:** fallDamageHp + stairs north→90° east; typecheck temiz.
