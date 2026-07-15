@@ -318,6 +318,29 @@ export class BotInstance extends EventEmitter {
         });
         return null;
       }
+      case "protect-settings": {
+        // dövüş paneli — koruma listesini bozmadan ayar
+        const wl = Array.isArray(action.whitelist)
+          ? (action.whitelist as unknown[]).map(String)
+          : typeof action.whitelist === "string"
+            ? String(action.whitelist)
+                .split(/[,;\s]+/)
+                .filter(Boolean)
+            : undefined;
+        const aggroRaw = action.protectAggro != null ? String(action.protectAggro) : "";
+        this.combat.updateProtectSettings({
+          followDistance: action.followDistance != null ? Number(action.followDistance) : undefined,
+          range: action.range != null ? Number(action.range) : undefined,
+          protectAggro:
+            aggroRaw === "non_whitelist" || aggroRaw === "threats"
+              ? (aggroRaw as "threats" | "non_whitelist")
+              : undefined,
+          retaliateMobs: action.retaliateMobs != null ? Boolean(action.retaliateMobs) : undefined,
+          retaliatePlayers: action.retaliatePlayers != null ? Boolean(action.retaliatePlayers) : undefined,
+          whitelist: wl
+        });
+        return null;
+      }
       case "chat": {
         const text = str(action.text, "text");
         this.sendChat(text);
@@ -579,6 +602,9 @@ export class BotInstance extends EventEmitter {
         this.survival.attach(bot);
         if (this.foodWatchTimer) clearInterval(this.foodWatchTimer);
         this.foodWatchTimer = setInterval(() => this.survival.tickFoodWatch(), 15_000);
+      } else {
+        // ölüm sonrası yeniden doğuş — combat attach tekrarlanmaz; koruma/takip resume
+        this.combat.onRespawnOrSpawn();
       }
       this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
       this.emit("spawned", { botId: this.config.id });
@@ -589,6 +615,8 @@ export class BotInstance extends EventEmitter {
     bot.on("respawn", () => {
       this.updateDimension();
       this.log.info("Yeniden doğuldu / boyut değişti");
+      // bazı sunucularda spawn'dan önce respawn gelir
+      this.combat.onRespawnOrSpawn();
     });
 
     bot.on("health", () => {

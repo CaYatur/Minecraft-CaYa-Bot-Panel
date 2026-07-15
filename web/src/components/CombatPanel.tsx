@@ -22,6 +22,7 @@ const MODE_TR: Record<CombatRuntime["mode"], string> = {
 /**
  * Faz 6 — Dövüş. Tasarım: InventoryPanel / TasksPanel
  * (zinc-800 kart, indigo birincil, red-900/60 durdur).
+ * Eşlik koruması ayarları burada; oyuncu ekle/çıkar Yakındaki oyuncular panelinde.
  */
 export function CombatPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
@@ -31,18 +32,47 @@ export function CombatPanel({ botId }: { botId: string }) {
   const [target, setTarget] = useState("");
   const [radius, setRadius] = useState("16");
   const [now, setNow] = useState(Date.now());
+  const [protectRange, setProtectRange] = useState(10);
+  const [protectAggro, setProtectAggro] = useState<"threats" | "non_whitelist">("threats");
+  const [retaliateMobs, setRetaliateMobs] = useState(true);
+  const [retaliatePlayers, setRetaliatePlayers] = useState(true);
+  const [whitelistText, setWhitelistText] = useState("");
+  const [followDist, setFollowDist] = useState(3);
+
+  const combat = bot?.combat;
+  const ps = combat?.companion?.protectSettings;
+  const companion = combat?.companion;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
+  // hooks early-return'den ÖNCE (React rules)
+  useEffect(() => {
+    if (!ps) return;
+    setProtectRange(ps.range ?? 10);
+    setProtectAggro(ps.protectAggro === "non_whitelist" ? "non_whitelist" : "threats");
+    setRetaliateMobs(ps.retaliateMobs ?? true);
+    setRetaliatePlayers(ps.retaliatePlayers ?? true);
+    setWhitelistText((ps.whitelist ?? []).join(", "));
+    setFollowDist(companion?.followDistance ?? 3);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    ps?.range,
+    ps?.protectAggro,
+    ps?.retaliateMobs,
+    ps?.retaliatePlayers,
+    (ps?.whitelist ?? []).join(","),
+    companion?.followDistance
+  ]);
+
   if (!bot) return null;
 
-  const combat = bot.combat ?? {
+  const c: CombatRuntime = combat ?? {
     defendMode: bot.config.combat.defendMode,
     fighting: false,
-    mode: "idle" as const,
+    mode: "idle",
     activeTarget: null,
     lastDeath: null,
     companion: {
@@ -62,6 +92,11 @@ export function CombatPanel({ botId }: { botId: string }) {
   };
   const cfg = bot.config.combat;
   const online = bot.status === "online";
+  const wards = c.companion?.protectPlayers?.length
+    ? c.companion.protectPlayers
+    : c.companion?.protectPlayer
+      ? [c.companion.protectPlayer]
+      : [];
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
 
@@ -84,7 +119,26 @@ export function CombatPanel({ botId }: { botId: string }) {
     }
   };
 
-  const lootLeft = combat.lastDeath ? Math.max(0, combat.lastDeath.lootUntil - now) : 0;
+  const saveProtectSettings = () => {
+    const wl = whitelistText
+      .split(/[,;\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    void act(
+      {
+        type: "protect-settings",
+        range: protectRange,
+        protectAggro,
+        retaliateMobs,
+        retaliatePlayers,
+        whitelist: wl,
+        followDistance: followDist
+      },
+      "Eşlik koruma ayarları kaydedildi"
+    );
+  };
+
+  const lootLeft = c.lastDeath ? Math.max(0, c.lastDeath.lootUntil - now) : 0;
   const lootSec = Math.ceil(lootLeft / 1000);
 
   const inputCls =
@@ -104,14 +158,14 @@ export function CombatPanel({ botId }: { botId: string }) {
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span
               className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-                combat.fighting ? "bg-red-950/60 text-red-300" : "bg-zinc-800 text-zinc-400"
+                c.fighting ? "bg-red-950/60 text-red-300" : "bg-zinc-800 text-zinc-400"
               }`}
             >
-              {MODE_TR[combat.mode]}
+              {MODE_TR[c.mode]}
             </span>
-            {combat.activeTarget ? (
+            {c.activeTarget ? (
               <span className="text-zinc-300">
-                Hedef: <b className="text-zinc-100">{combat.activeTarget}</b>
+                Hedef: <b className="text-zinc-100">{c.activeTarget}</b>
               </span>
             ) : (
               <span className="text-xs text-zinc-600 italic">Aktif hedef yok</span>
@@ -158,6 +212,128 @@ export function CombatPanel({ botId }: { botId: string }) {
           <p className="mt-2 text-[11px] text-zinc-500">
             Can ≤ {cfg.fleeAtHealth} olunca dövüş bırakılır (İ6). Kovalama: {cfg.chaseDistance} blok.
           </p>
+        </div>
+      </div>
+
+      {/* Eşlik koruması — yakındaki oyuncular panelinden kişi eklenir; detay ayar burada */}
+      <div className="rounded-lg border border-indigo-900/40 bg-indigo-950/15 p-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">Eşlik koruması</div>
+          {wards.length > 0 ? (
+            <span className="rounded-full bg-indigo-950/60 px-2 py-0.5 text-[10px] text-indigo-200">
+              aktif: {wards.join(", ")}
+              {c.companion?.followPlayer ? ` · ana: ${c.companion.followPlayer}` : ""}
+            </span>
+          ) : (
+            <span className="text-[10px] text-zinc-600 italic">kimse korunmuyor — Yakındaki oyuncular → Koru</span>
+          )}
+        </div>
+
+        <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
+          Korunan kişilerin yanındaki tehditlere müdahale. Kişi ekle/çıkar:{" "}
+          <span className="text-zinc-400">Yakındaki oyuncular</span> paneli.{" "}
+          <b className="font-medium text-zinc-400">Sadece tehdit</b> = hostile mob + botu vuran oyuncular;{" "}
+          <b className="font-medium text-zinc-400">Beyaz liste dışı</b> = listede olmayan her oyuncu. Ölünce takip/koruma
+          pathfinder dondurulur; respawn sonrası yeniden başlar.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            <span>Koruma menzili (blok)</span>
+            <input
+              type="number"
+              min={4}
+              max={32}
+              value={protectRange}
+              onChange={(e) => setProtectRange(Math.max(4, Math.min(32, Number(e.target.value) || 10)))}
+              className={`mono ${inputCls}`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            <span>Ana takip mesafesi</span>
+            <input
+              type="number"
+              min={1}
+              max={16}
+              value={followDist}
+              onChange={(e) => setFollowDist(Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
+              className={`mono ${inputCls}`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-zinc-400 sm:col-span-2 lg:col-span-1">
+            <span>Saldırı modu</span>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setProtectAggro("threats")}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+                  protectAggro === "threats"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                }`}
+              >
+                Sadece tehdit
+              </button>
+              <button
+                type="button"
+                onClick={() => setProtectAggro("non_whitelist")}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+                  protectAggro === "non_whitelist"
+                    ? "bg-amber-700 text-white"
+                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                }`}
+              >
+                Beyaz liste dışı
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <input type="checkbox" checked={retaliateMobs} onChange={(e) => setRetaliateMobs(e.target.checked)} />
+            Mob&apos;lara müdahale
+          </label>
+          <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={retaliatePlayers}
+              onChange={(e) => setRetaliatePlayers(e.target.checked)}
+            />
+            Oyunculara müdahale
+          </label>
+        </div>
+
+        <label className="mt-3 flex flex-col gap-1 text-xs text-zinc-400">
+          <span>
+            Beyaz liste{" "}
+            <span className="font-normal text-zinc-600">(virgülle — saldırılmaz; korunanlar otomatik eklenir)</span>
+          </span>
+          <input
+            value={whitelistText}
+            onChange={(e) => setWhitelistText(e.target.value)}
+            placeholder="oyuncu1, oyuncu2"
+            className={inputCls}
+          />
+        </label>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={saveProtectSettings}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500"
+          >
+            Koruma ayarlarını kaydet
+          </button>
+          {wards.length > 0 && (
+            <button
+              type="button"
+              onClick={() => act({ type: "stop-combat" }, "Dövüş/koruma bırakıldı — listeyi Yakındaki oyuncular’dan kapat")}
+              className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+            >
+              Dövüşü bırak
+            </button>
+          )}
         </div>
       </div>
 
@@ -214,10 +390,10 @@ export function CombatPanel({ botId }: { botId: string }) {
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Ölüm &amp; loot</div>
-        {combat.lastDeath ? (
+        {c.lastDeath ? (
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="mono text-zinc-300">
-              📍 {fmtPos(combat.lastDeath)} <span className="text-zinc-600">({combat.lastDeath.dimension})</span>
+              📍 {fmtPos(c.lastDeath)} <span className="text-zinc-600">({c.lastDeath.dimension})</span>
             </span>
             <span className={`text-xs ${lootLeft > 0 ? "text-amber-300" : "text-zinc-600"}`}>
               {lootLeft > 0

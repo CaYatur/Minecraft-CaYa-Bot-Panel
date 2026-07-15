@@ -53,8 +53,34 @@ export class CombatService {
   private protectTimer: NodeJS.Timeout | null = null;
   private followTaskId: string | null = null;
   private attackTaskId: string | null = null;
+  /** ölüm → respawn arası hareket/koruma dondur (pathfinder kilitlenmesi) */
+  private deadPaused = false;
+  /** threats modu: yakın zamanda botu vuran oyuncular (label → expireMs) */
+  private recentThreats = new Map<string, number>();
 
   constructor(private readonly instance: BotInstance) {}
+
+  private markThreat(label: string, ttlMs = 20_000) {
+    if (!label) return;
+    this.recentThreats.set(label, Date.now() + ttlMs);
+  }
+
+  private isRecentThreat(label: string): boolean {
+    const exp = this.recentThreats.get(label);
+    if (!exp) return false;
+    if (Date.now() > exp) {
+      this.recentThreats.delete(label);
+      return false;
+    }
+    return true;
+  }
+
+  private pruneThreats() {
+    const now = Date.now();
+    for (const [k, exp] of this.recentThreats) {
+      if (now > exp) this.recentThreats.delete(k);
+    }
+  }
 
   getRuntime(): CombatRuntime {
     const protectPlayers = [...this.companion.protectPlayers];
@@ -132,12 +158,50 @@ export class CombatService {
     };
     bot.on("entityGone", this.entityGoneHook);
 
-    // reconnect sonrası companion görevlerini yeniden başlat
-    if (this.hasProtect()) this.startProtectLoop();
-    else if (this.companion.followPlayer) this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance);
-    if (this.companion.attackPlayer) this.ensureAttackTask(this.companion.attackPlayer);
+    this.deadPaused = false;
+    // reconnect / ilk spawn: companion görevlerini yeniden başlat
+    this.resumeCompanionAfterAlive("attach");
 
     this.emitCombat();
+  }
+
+  /**
+   * Ölüm sonrası respawn/spawn: pathfinder kilitlenmesin diye görevler ölümde durur;
+   * buradan koruma/takip yeniden kurulur.
+   */
+  onRespawnOrSpawn() {
+    if (!this.bot) {
+      this.bot = this.instance.bot;
+    }
+    this.deadPaused = false;
+    this.lastHealth = this.bot?.health ?? 20;
+    this.resumeCompanionAfterAlive("respawn");
+    this.emitCombat();
+  }
+
+  private resumeCompanionAfterAlive(reason: string) {
+    if (this.deadPaused) return;
+    if (this.instance.status !== "online") return;
+    // kısa gecikme: entity/pathfinder hazır olsun
+    setTimeout(() => {
+      if (this.deadPaused || this.instance.status !== "online") return;
+      try {
+        if (this.hasProtect()) {
+          this.startProtectLoop();
+          const main = this.companion.followPlayer ?? this.companion.protectPlayers[0];
+          if (main) this.ensureFollowTask(main, this.companion.followDistance, true);
+          this.setMode("protecting", this.primaryProtectLabel());
+          this.log().info("Koruma/takip yeniden başlatıldı", reason);
+        } else if (this.companion.followPlayer) {
+          this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance, true);
+          this.log().info("Takip yeniden başlatıldı", reason);
+        }
+        if (this.companion.attackPlayer) this.ensureAttackTask(this.companion.attackPlayer);
+      } catch (e) {
+        this.log().debug("Companion resume", e instanceof Error ? e.message : String(e));
+      }
+      this.emitCombat();
+    }, 600);
   }
 
   /** detach bot listeners but keep companion settings for reconnect */
@@ -188,12 +252,69 @@ export class CombatService {
     this.companion = defaultCompanion();
     this.followTaskId = null;
     this.attackTaskId = null;
+    this.deadPaused = false;
     this.cancelTasksOfType("follow");
     this.cancelTasksOfType("attack");
     this.cancelTasksOfType("defend");
+    this.clearPathfinder();
     this.setMode("idle", null);
     this.log().info("Takip/saldırı/koruma kapatıldı", reason);
     this.emitCombat();
+  }
+
+  /** Sadece koruma ayarları (dövüş paneli) — listeyi bozmadan */
+  updateProtectSettings(opts: Partial<CompanionState["protectSettings"]> & { followDistance?: number }) {
+    if (opts.followDistance != null) {
+      this.companion.followDistance = Math.max(1, Math.min(16, Math.floor(opts.followDistance)));
+    }
+    if (opts.range != null) this.companion.protectSettings.range = Math.max(4, Math.min(32, Math.floor(opts.range)));
+    if (opts.protectAggro === "threats" || opts.protectAggro === "non_whitelist") {
+      this.companion.protectSettings.protectAggro = opts.protectAggro;
+    }
+    if (opts.retaliateMobs != null) this.companion.protectSettings.retaliateMobs = Boolean(opts.retaliateMobs);
+    if (opts.retaliatePlayers != null) this.companion.protectSettings.retaliatePlayers = Boolean(opts.retaliatePlayers);
+    if (opts.whitelist) {
+      this.companion.protectSettings.whitelist = opts.whitelist.map((w) => w.trim()).filter(Boolean);
+    }
+    // aktif takip mesafesini yenile
+    if (this.companion.followPlayer && !this.deadPaused) {
+      this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance, true);
+    }
+    this.log().info(
+      "Koruma ayarları güncellendi",
+      `mod=${this.companion.protectSettings.protectAggro} r=${this.companion.protectSettings.range} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers}`
+    );
+    this.emitCombat();
+    return this.getRuntime();
+  }
+
+  private clearPathfinder() {
+    try {
+      const bot = this.bot ?? this.instance.bot;
+      if (!bot) return;
+      const pf = bot.pathfinder as
+        | { setGoal?(g: null): void; stop?(): void; isMoving?(): boolean }
+        | undefined;
+      try {
+        pf?.stop?.();
+      } catch {
+        /* eski pathfinder */
+      }
+      try {
+        pf?.setGoal?.(null);
+      } catch {
+        /* */
+      }
+      for (const k of ["forward", "back", "left", "right", "jump", "sprint"] as const) {
+        try {
+          bot.setControlState(k, false);
+        } catch {
+          /* */
+        }
+      }
+    } catch {
+      /* */
+    }
   }
 
   // ---- companion toggles (yakındaki oyuncular) --------------------------------
@@ -365,6 +486,7 @@ export class CombatService {
   }
 
   private ensureFollowTask(player: string, distance: number, force = false) {
+    if (this.deadPaused) return;
     const wantLabel = `takip: ${player} (≤${distance})`;
     const cur = this.instance.tasks.currentSummary;
     const q = this.instance.tasks.queueSummaries;
@@ -452,9 +574,14 @@ export class CombatService {
    *  - non_whitelist: beyaz listede olmayan her oyuncu (+ mob opsiyonel)
    */
   private protectTick() {
+    if (this.deadPaused) return;
     if (!this.hasProtect() || this.instance.status !== "online") return;
     const bot = this.bot ?? this.instance.bot;
     if (!bot?.entity) return;
+    // ölüm animasyonu / can 0
+    if ((bot.health ?? 0) <= 0) return;
+
+    this.pruneThreats();
 
     // ana takip: followPlayer veya ilk korunan
     const main = this.companion.followPlayer ?? this.companion.protectPlayers[0]!;
@@ -490,15 +617,16 @@ export class CombatService {
         const player = isPlayerEntity(e);
         const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
         const uname = (e.username ?? "").toLowerCase();
+        const elabel = labelEntity(e);
 
         if (player) {
           if (uname && wl.has(uname)) continue;
+          if (!settings.retaliatePlayers) continue;
           if (aggro === "non_whitelist") {
-            // beyaz liste dışı her oyuncu (insan) hedef
-            // retaliatePlayers false olsa bile bu modda oyunculara saldır
+            // beyaz liste dışı her oyuncu
           } else {
-            // threats: sadece oyuncu misillemesi açıksa ve "yakın tehdit" (menzil içi)
-            if (!settings.retaliatePlayers) continue;
+            // threats: yalnızca botu vurmuş / kayıtlı saldırgan oyuncu
+            if (!this.isRecentThreat(elabel) && !(uname && this.isRecentThreat(uname))) continue;
           }
         } else if (hostile) {
           if (!settings.retaliateMobs) continue;
@@ -779,17 +907,31 @@ export class CombatService {
     const bot = this.bot;
     if (!bot || this.instance.status !== "online") return;
     const hp = bot.health ?? 20;
+
+    // death event gecikebilir — can 0'da hemen pathfinder/koruma dondur
+    if (hp <= 0) {
+      this.lastHealth = 0;
+      if (!this.deadPaused) this.onDeath();
+      else this.clearPathfinder();
+      return;
+    }
+
+    if (this.deadPaused) return;
     const dropped = hp < this.lastHealth - 0.05;
     this.lastHealth = hp;
 
     if (!dropped) return;
 
+    this.pruneThreats();
     const mode = this.cfg().defendMode;
     // otomasyon her zaman (savunma kapalı olsa da) saldırgan adayını dener
     const attackerForRules = this.pickDefenseTarget(mode === "off" ? "all" : mode);
     if (attackerForRules) {
       const label0 = labelEntity(attackerForRules);
       const isPlayer = Boolean(attackerForRules.username) || attackerForRules.type === "player";
+      // koruma "threats" modu için saldırganı kaydet
+      this.markThreat(label0);
+      if (attackerForRules.username) this.markThreat(attackerForRules.username);
       this.instance.emit("attacked", {
         botId: this.instance.config.id,
         attacker: label0,
@@ -881,6 +1023,12 @@ export class CombatService {
   }
 
   private onDeath() {
+    // çift tetik (health=0 + death event) güvenli
+    if (this.deadPaused && this.lastDeath && Date.now() - this.lastDeath.ts < 2000) {
+      this.clearPathfinder();
+      return;
+    }
+
     const pos = this.instance.runtime.position;
     const dimension = this.instance.runtime.dimension;
     const ts = Date.now();
@@ -892,10 +1040,30 @@ export class CombatService {
       ts,
       lootUntil: ts + DEATH_LOOT_MS
     };
+
+    // koruma/takip pathfinder'ı öldükten sonra kilitliyor — dondur, ayarları sakla
+    this.deadPaused = true;
+    this.stopProtectLoop();
+    for (const t of ["follow", "attack", "defend", "clear-mobs", "flee"] as const) {
+      this.cancelTasksOfType(t);
+    }
+    // aktif hareket görevi de (goto / goto-player vb.) pathfinder tutmasın
+    const cur = this.instance.tasks.currentSummary;
+    if (
+      cur &&
+      ["follow", "attack", "defend", "clear-mobs", "flee", "goto", "goto-player", "move"].includes(cur.type)
+    ) {
+      this.instance.tasks.cancel(cur.id, "ölüm — hareket durdu");
+    }
+    this.clearPathfinder();
+    // pathfinder async bırakmasın diye bir kez daha
+    setTimeout(() => this.clearPathfinder(), 50);
+    setTimeout(() => this.clearPathfinder(), 250);
     this.setMode("idle", null);
+
     this.log().warn(
       "Bot öldü — ölüm konumu kaydedildi",
-      `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)} (${dimension}) · loot ~5 dk`
+      `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)} (${dimension}) · loot ~5 dk · koruma/takip respawn'a kadar durdu`
     );
     this.instance.emit("deathAt", {
       botId: this.instance.config.id,
@@ -982,12 +1150,15 @@ export class CombatService {
   }
 
   private async approachEntity(entity: Entity, range: number, token: TaskToken) {
+    if (this.deadPaused) return;
     const bot = this.requireBot();
+    if ((bot.health ?? 0) <= 0 || !bot.entity) return;
     try {
       ensureMovement(this.instance);
       bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
       const t0 = Date.now();
-      while (!token.cancelled && Date.now() - t0 < 15_000) {
+      while (!token.cancelled && !this.deadPaused && Date.now() - t0 < 15_000) {
+        if ((bot.health ?? 0) <= 0 || !bot.entity) break;
         if (inMeleeRange(bot, entity, this.cfg().reach) && distanceEyeToEntity(bot, entity) <= range + 0.5) break;
         if (!entity.isValid) break;
         try {
@@ -1004,6 +1175,7 @@ export class CombatService {
       }
     } catch (e) {
       this.log().debug("Yaklaşma başarısız", e instanceof Error ? e.message : String(e));
+      this.clearPathfinder();
     }
   }
 

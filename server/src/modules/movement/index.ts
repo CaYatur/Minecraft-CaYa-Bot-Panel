@@ -235,69 +235,106 @@ export async function runFollow(
   const distJitter = () => holdDist + (Math.random() * 0.35 - 0.1);
   const canSprint = () => moveCfg(instance).allowSprint !== false;
 
-  while (!token.cancelled) {
-    const bot = requireBot(instance);
-    const entity = bot.players[playerName]?.entity;
-    if (entity) {
-      report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış · sprint` });
-
-      ensureMovement(instance, { allowSprintNow: canSprint() });
-      const followBot = bot;
+  const clearGoal = (bot: Bot) => {
+    try {
+      const pf = bot.pathfinder as { setGoal?(g: null): void; stop?(): void };
       try {
-        followBot.pathfinder.setGoal(new goals.GoalFollow(entity, distJitter()), true);
+        pf?.stop?.();
       } catch {
         /* */
       }
+      pf?.setGoal?.(null);
+    } catch {
+      /* */
+    }
+    for (const k of ["forward", "back", "left", "right", "jump", "sprint"] as const) {
+      try {
+        bot.setControlState(k, false);
+      } catch {
+        /* */
+      }
+    }
+  };
 
-      // bakış + hedef yenileme döngüsü
-      while (!token.cancelled && instance.status === "online") {
-        const ent = bot.players[playerName]?.entity;
-        if (!ent) break;
+  try {
+    while (!token.cancelled) {
+      const bot = requireBot(instance);
+      // ölüm / entity yok: pathfinder kilitlenmesin
+      if ((bot.health ?? 0) <= 0 || !bot.entity) {
+        clearGoal(bot);
+        throw new Error("Bot öldü — takip durdu");
+      }
 
-        const d = bot.entity.position.distanceTo(ent.position);
+      const entity = bot.players[playerName]?.entity;
+      if (entity) {
+        report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış · sprint` });
 
-        // sprint açık kalsın (pathfinder movements ara sıra yenile)
-        if (Math.random() < 0.05) {
-          ensureMovement(instance, { allowSprintNow: canSprint() });
-        }
-
-        // GoalFollow entity referansı — ara sıra yenile (jitter mesafe)
-        if (Math.random() < 0.08) {
-          try {
-            followBot.pathfinder.setGoal(new goals.GoalFollow(ent, distJitter()), true);
-          } catch {
-            /* */
-          }
-        }
-
-        // HER zaman takip edilen kişiye bak (kullanıcı isteği)
+        ensureMovement(instance, { allowSprintNow: canSprint() });
+        const followBot = bot;
         try {
-          await stepLookAtEntity(bot, ent, turnSpeed(instance));
+          followBot.pathfinder.setGoal(new goals.GoalFollow(entity, distJitter()), true);
         } catch {
           /* */
         }
 
-        report({
-          done: 0,
-          total: 0,
-          label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}`
-        });
+        // bakış + hedef yenileme döngüsü
+        while (!token.cancelled && instance.status === "online") {
+          if ((bot.health ?? 0) <= 0 || !bot.entity) {
+            clearGoal(followBot);
+            throw new Error("Bot öldü — takip durdu");
+          }
+          const ent = bot.players[playerName]?.entity;
+          if (!ent) break;
 
-        // 90–140ms — 50ms altı paket spam / AC
-        await sleep(90 + Math.floor(Math.random() * 50));
-      }
+          const d = bot.entity.position.distanceTo(ent.position);
 
-      try {
-        followBot.pathfinder.setGoal(null);
-      } catch {
-        /* noop */
+          // sprint açık kalsın (pathfinder movements ara sıra yenile)
+          if (Math.random() < 0.05) {
+            ensureMovement(instance, { allowSprintNow: canSprint() });
+          }
+
+          // GoalFollow entity referansı — ara sıra yenile (jitter mesafe)
+          if (Math.random() < 0.08) {
+            try {
+              followBot.pathfinder.setGoal(new goals.GoalFollow(ent, distJitter()), true);
+            } catch {
+              /* */
+            }
+          }
+
+          // HER zaman takip edilen kişiye bak (kullanıcı isteği)
+          try {
+            await stepLookAtEntity(bot, ent, turnSpeed(instance));
+          } catch {
+            /* */
+          }
+
+          report({
+            done: 0,
+            total: 0,
+            label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}`
+          });
+
+          // 90–140ms — 50ms altı paket spam / AC
+          await sleep(90 + Math.floor(Math.random() * 50));
+        }
+
+        clearGoal(followBot);
+      } else {
+        report({ done: 0, total: 0, label: `${playerName} görünmüyor — bekleniyor` });
+        // beklerken de son bilinen yöne bakma yok; idle
+        await sleep(1200 + Math.floor(Math.random() * 400));
       }
-    } else {
-      report({ done: 0, total: 0, label: `${playerName} görünmüyor — bekleniyor` });
-      // beklerken de son bilinen yöne bakma yok; idle
-      await sleep(1200 + Math.floor(Math.random() * 400));
+      if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
     }
-    if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
+  } finally {
+    // iptal / ölüm / hata — pathfinder her durumda serbest
+    try {
+      const b = instance.bot;
+      if (b) clearGoal(b);
+    } catch {
+      /* */
+    }
   }
 }
 

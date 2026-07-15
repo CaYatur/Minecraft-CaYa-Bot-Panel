@@ -425,8 +425,13 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] **Koruma modu:** açılınca otomatik takip; korunan etrafında mob/oyuncu tarama;
   beyaz liste (saldırılmaz), retaliateMobs / retaliatePlayers / koruma yarıçapı.
 - [x] Companion state: `CombatRuntime.companion` + `bot:combat` socket; actions
-  `social-follow` / `social-attack` / `social-protect`.
+  `social-follow` / `social-attack` / `social-protect` / `protect-settings`.
 - [x] Socket `bot:nearby` (~1 Hz) + REST `GET /bots/:id/nearby`; `NearbyPlayers.tsx`.
+- [x] **UI ayrımı:** Yakındaki oyuncular = sadece kişi toggle; **Dövüş → Eşlik koruması** =
+  menzil / aggro / WL / mob-oyuncu / takip mesafesi (çift ayar paneli yok).
+- [x] **protectAggro:** `threats` (hostile + botu vuran oyuncular ~20s) | `non_whitelist` (liste dışı herkes).
+- [x] **Ölüm kilidi fix:** ölümde `deadPaused` + pathfinder/stop/kontrol temizliği; can=0 erken tetik;
+  `runFollow` finally clear; respawn/spawn → companion resume (~600ms).
 - [x] **Kabul:** basılı stil + mesafe + koruma/WL UI+server typecheck; entity Paper.
 
 #### 13.B — Sürüme göre eşya/maden kataloğu
@@ -628,6 +633,9 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Faz 14 yapı: kendi `BuildService` (mineflayer-builder değil); şema global kütüphane `data/schematics`; scaffold defteri + cleanup zorunlu; progress `bot:build`.
 - 2026-07-15 — Faz 15 düşüş: FallGuard tick-bazlı (TaskQueue değil) — MLG milisaniye ister; SURVIVAL öncelikli pathfinder kesme.
 - 2026-07-15 — Faz 16: litematic kendi NBT parser; express JSON 32mb (şema base64); path basename-only; block cap DoS.
+- 2026-07-15 — Eşlik koruma ayarları yalnız **Dövüş paneli**nde; NearbyPlayers sadece toggle — çift UI/kafa karışıklığı önlendi.
+- 2026-07-15 — Koruma açıkken ölüm → pathfinder kilitlenmesi: `deadPaused` + task cancel + `pathfinder.stop`/setGoal null + control clear; respawn’da resume (liste silinmez).
+- 2026-07-15 — protectAggro `threats`: oyuncuya sadece recentThreat (bot hasar + pickDefenseTarget); mob’lar retaliateMobs ile. `non_whitelist` = PvP eşlik.
 
 ---
 
@@ -860,3 +868,19 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 3. goto/goto-player hareket yönü + hedef bakış; reaksiyon gecikmesi; maxDrop/kule kısıtı.
 4. `movement.humanize` varsayılan true; stopMovement control state temizler.
 5. Combat yaklaşma da hedefe bakıyor.
+
+### 2026-07-15 — Grok 4.5 — Ölüm+koruma pathfinder kilidi + UI birleştirme
+
+**İstek:** Koruma açıkken öldükten sonra hareket edemiyor; koruma ayarları Nearby’de zaten Dövüş’te varmış → Nearby’den kaldır; dövüş korumasını kontrol et.
+
+**Yapılanlar:**
+1. `CombatService.onDeath`: deadPaused, follow/attack/defend/clear-mobs/flee + aktif goto iptal, pathfinder stop/setGoal null, control clear (+50/250ms tekrar).
+2. Can ≤ 0 → death event beklemeden aynı dondurma; çift tetik koruması.
+3. `onRespawnOrSpawn` + attach: deadPaused=false, 600ms sonra protect loop + follow resume.
+4. `runFollow`: health/entity yoksa clear + throw; try/finally pathfinder temizliği.
+5. `approachEntity`: deadPaused/health guard.
+6. protectAggro threats: `recentThreats` map (bot vurulunca markThreat ~20s); non_whitelist aynı.
+7. UI: NearbyPlayers sade toggle; CombatPanel **Eşlik koruması** kartı (range/aggro/WL/mob/oyuncu/mesafe); hooks sırası düzeltildi; `protect-settings` action.
+8. TODO §13.A / §14 / §15; typecheck server+web temiz.
+
+**Saha:** Paper’da öl→respawn→takip/koruma; pathfinder kilitli kalmamalı.

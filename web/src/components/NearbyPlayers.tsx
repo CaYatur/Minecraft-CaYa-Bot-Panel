@@ -42,40 +42,20 @@ function protectList(c: CompanionState): string[] {
   return [];
 }
 
-/** Bot detay — yakındaki oyuncular + takip/saldırı/çoklu koruma (basılı stil). */
+/** Yakındaki oyuncular — takip/saldırı/koru toggle. Koruma detay ayarları Dövüş panelinde. */
 export function NearbyPlayers({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const [players, setPlayers] = useState<NearbyPlayer[]>([]);
   const [radius, setRadius] = useState(48);
   const [followDist, setFollowDist] = useState(3);
-  const [protectRange, setProtectRange] = useState(10);
-  const [retaliateMobs, setRetaliateMobs] = useState(true);
-  const [retaliatePlayers, setRetaliatePlayers] = useState(true);
-  const [protectAggro, setProtectAggro] = useState<"threats" | "non_whitelist">("threats");
-  const [whitelistText, setWhitelistText] = useState("");
-  const [settingsFor, setSettingsFor] = useState<string | null>(null);
 
   const companion = bot?.combat?.companion ?? defaultCompanion();
   const wards = protectList(companion);
 
   useEffect(() => {
     setFollowDist(companion.followDistance || 3);
-    setProtectRange(companion.protectSettings?.range ?? 10);
-    setRetaliateMobs(companion.protectSettings?.retaliateMobs ?? true);
-    setRetaliatePlayers(companion.protectSettings?.retaliatePlayers ?? true);
-    setProtectAggro(companion.protectSettings?.protectAggro === "non_whitelist" ? "non_whitelist" : "threats");
-    setWhitelistText((companion.protectSettings?.whitelist ?? []).join(", "));
-  }, [
-    companion.followDistance,
-    companion.protectSettings?.range,
-    companion.protectSettings?.retaliateMobs,
-    companion.protectSettings?.retaliatePlayers,
-    companion.protectSettings?.protectAggro,
-    wards.join(","),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    (companion.protectSettings?.whitelist ?? []).join(",")
-  ]);
+  }, [companion.followDistance]);
 
   useEffect(() => {
     const onNearby = (p: { botId: string; players: NearbyPlayer[] }) => {
@@ -142,76 +122,26 @@ export function NearbyPlayers({ botId }: { botId: string }) {
 
   const toggleProtect = (name: string) => {
     const on = !isProtect(name);
-    const wl = whitelistText
-      .split(/[,;\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    // ilk korunan → ana takip; ek korunan → sadece liste (setAsMain false)
     const setAsMain = on && wards.length === 0;
+    // detay ayar Dövüş → Eşlik koruması; burada sadece liste + ana takip mesafesi
     void act(
       {
         type: "social-protect",
         player: name,
         enabled: on,
         followDistance: followDist,
-        range: protectRange,
-        protectAggro,
-        retaliateMobs,
-        retaliatePlayers,
-        whitelist: wl,
         setAsMain
       },
       on
         ? setAsMain
-          ? `Koruma + ana takip: ${name} (${protectAggro === "non_whitelist" ? "beyaz liste dışı" : "tehdit"})`
-          : `Koruma listesine eklendi: ${name} (takip: ${companion.followPlayer ?? name})`
+          ? `Koruma + ana takip: ${name}`
+          : `Koruma listesine eklendi: ${name}`
         : `Koruma listesinden çıktı: ${name}`
     );
   };
 
-  /** Bu kişiyi ana takip yap (koruma listesinde kalır) */
   const setAsMainFollow = (name: string) => {
-    void act(
-      { type: "social-follow", player: name, enabled: true, distance: followDist },
-      `Ana takip: ${name}`
-    );
-  };
-
-  const applySettings = (name: string) => {
-    const wl = whitelistText
-      .split(/[,;\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (isProtect(name) || wards.length > 0) {
-      // ayarları mevcut koruma üzerinden güncelle (listeye yeniden ekle enabled true)
-      const target = isProtect(name) ? name : wards[0]!;
-      void act(
-        {
-          type: "social-protect",
-          player: target,
-          enabled: true,
-          followDistance: followDist,
-          range: protectRange,
-          protectAggro,
-          retaliateMobs,
-          retaliatePlayers,
-          whitelist: wl
-        },
-        `Koruma ayarları güncellendi · ${protectAggro === "non_whitelist" ? "beyaz liste dışı" : "sadece tehdit"}`
-      );
-      if (isFollow(name)) {
-        void act({ type: "social-follow", player: name, enabled: true, distance: followDist });
-      }
-      return;
-    }
-    if (isFollow(name)) {
-      void act(
-        { type: "social-follow", player: name, enabled: true, distance: followDist },
-        `Takip mesafe: ${followDist}m → ${name}`
-      );
-      return;
-    }
-    toast("info", "Önce Takip veya Koru’yu aç, sonra ayarları uygula");
+    void act({ type: "social-follow", player: name, enabled: true, distance: followDist }, `Ana takip: ${name}`);
   };
 
   if (!bot) return null;
@@ -267,7 +197,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
 
       {wards.length > 0 && (
         <p className="mb-2 text-[10px] leading-relaxed text-zinc-500">
-          Çoklu koruma: <span className="text-indigo-300">{wards.join(", ")}</span>
+          Koruma: <span className="text-indigo-300">{wards.join(", ")}</span>
           {companion.followPlayer ? (
             <>
               {" "}
@@ -275,13 +205,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             </>
           ) : null}
           {" · "}
-          mod:{" "}
-          <span className="text-amber-300">
-            {(companion.protectSettings?.protectAggro ?? protectAggro) === "non_whitelist"
-              ? "beyaz liste dışı herkese saldır"
-              : "sadece tehdit/saldırgan"}
-          </span>
-          . Bot ana kişiyi takip eder.
+          ayarlar: <span className="text-amber-300/90">Dövüş sekmesi → Eşlik koruması</span>
         </p>
       )}
 
@@ -299,173 +223,47 @@ export function NearbyPlayers({ botId }: { botId: string }) {
           const aOn = isAttack(p.username);
           const pOn = isProtect(p.username);
           const main = isMain(p.username);
-          const openSettings = settingsFor === p.username;
           return (
             <div
               key={p.username}
-              className={`rounded-lg border px-2 py-1.5 ${
+              className={`flex flex-wrap items-center gap-2 rounded-lg border px-2 py-1.5 ${
                 pOn ? "border-indigo-800/60 bg-indigo-950/20" : "border-zinc-800 bg-zinc-950/40"
               }`}
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">
-                  {p.username}
-                  {main && <span className="ml-1 text-[10px] font-normal text-amber-400">ana</span>}
-                  {pOn && !main && <span className="ml-1 text-[10px] font-normal text-indigo-400">koru</span>}
-                </span>
-                <span className="mono text-[10px] text-zinc-500">{p.distance?.toFixed(1)} m</span>
-                <button type="button" disabled={!online} onClick={() => toggleFollow(p.username)} className={fOn ? btnFollowOn : btnIdle} title="Ana takip kişisi">
-                  {fOn ? "● Takip" : "Takip"}
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">
+                {p.username}
+                {main && <span className="ml-1 text-[10px] font-normal text-amber-400">ana</span>}
+                {pOn && !main && <span className="ml-1 text-[10px] font-normal text-indigo-400">koru</span>}
+              </span>
+              <span className="mono text-[10px] text-zinc-500">{p.distance?.toFixed(1)} m</span>
+              <button type="button" disabled={!online} onClick={() => toggleFollow(p.username)} className={fOn ? btnFollowOn : btnIdle}>
+                {fOn ? "● Takip" : "Takip"}
+              </button>
+              {pOn && !fOn && (
+                <button type="button" disabled={!online} onClick={() => setAsMainFollow(p.username)} className={btnMainOn}>
+                  Ana yap
                 </button>
-                {pOn && !fOn && (
-                  <button type="button" disabled={!online} onClick={() => setAsMainFollow(p.username)} className={btnMainOn} title="Bu korunani ana takip yap">
-                    Ana yap
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={!online}
-                  onClick={() => act({ type: "goto-player", player: p.username }, `Yanına: ${p.username}`)}
-                  className={btnIdle}
-                >
-                  Yanına
-                </button>
-                <button type="button" disabled={!online || pOn} onClick={() => toggleAttack(p.username)} className={aOn ? btnAttackOn : btnIdle}>
-                  {aOn ? "● Saldır" : "Saldır"}
-                </button>
-                <button
-                  type="button"
-                  disabled={!online}
-                  onClick={() => toggleProtect(p.username)}
-                  className={pOn ? btnProtectOn : btnIdle}
-                  title="Çoklu koruma: birden fazla kişiye Koru aç. İlk = ana takip; diğerlerine tehditte de müdahale."
-                >
-                  {pOn ? "● Koru" : "Koru"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSettingsFor(openSettings ? null : p.username)}
-                  className={btnIdle}
-                  title="Koruma / takip ayarları"
-                >
-                  ⚙
-                </button>
-              </div>
-
-              {openSettings && (
-                <div className="mt-2 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs">
-                  <div className="space-y-1.5 rounded-lg border border-indigo-900/40 bg-indigo-950/20 p-2">
-                    <div className="text-[10px] font-semibold tracking-wide text-indigo-300/90 uppercase">
-                      Koruma saldırı modu
-                    </div>
-                    <label className="flex cursor-pointer items-start gap-2 text-zinc-300">
-                      <input
-                        type="radio"
-                        name={`protect-aggro-${p.username}`}
-                        checked={protectAggro === "threats"}
-                        onChange={() => setProtectAggro("threats")}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <b className="text-zinc-100">1 · Sadece tehdit / saldırgan</b>
-                        <span className="mt-0.5 block text-[10px] text-zinc-500">
-                          Korunanın yanındaki düşman yaratıklar ve (aşağıda açıksa) saldırgan oyuncular.
-                          Beyaz listedekilere asla dokunulmaz.
-                        </span>
-                      </span>
-                    </label>
-                    <label className="flex cursor-pointer items-start gap-2 text-zinc-300">
-                      <input
-                        type="radio"
-                        name={`protect-aggro-${p.username}`}
-                        checked={protectAggro === "non_whitelist"}
-                        onChange={() => setProtectAggro("non_whitelist")}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <b className="text-zinc-100">2 · Beyaz liste dışı herkese saldır</b>
-                        <span className="mt-0.5 block text-[10px] text-zinc-500">
-                          Koruma menzilindeki tüm oyuncular (insanlar) — beyaz liste + korunanlar hariç.
-                          Yaratıklar ayrı kutu ile.
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-1 text-zinc-400">
-                      Takip mesafe
-                      <input
-                        type="number"
-                        min={1}
-                        max={16}
-                        value={followDist}
-                        onChange={(e) => setFollowDist(Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
-                        className="mono w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-200"
-                      />
-                    </label>
-                    <label className="flex items-center gap-1 text-zinc-400">
-                      Koruma yarıçap
-                      <input
-                        type="number"
-                        min={4}
-                        max={32}
-                        value={protectRange}
-                        onChange={(e) => setProtectRange(Math.max(4, Math.min(32, Number(e.target.value) || 10)))}
-                        className="mono w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-200"
-                      />
-                    </label>
-                    <label className="flex items-center gap-1.5 text-zinc-300">
-                      <input type="checkbox" checked={retaliateMobs} onChange={(e) => setRetaliateMobs(e.target.checked)} />
-                      Yaratıklara saldır
-                    </label>
-                    {protectAggro === "threats" ? (
-                      <label className="flex items-center gap-1.5 text-zinc-300">
-                        <input
-                          type="checkbox"
-                          checked={retaliatePlayers}
-                          onChange={(e) => setRetaliatePlayers(e.target.checked)}
-                        />
-                        Tehdit oyuncularına saldır (insan)
-                      </label>
-                    ) : (
-                      <span className="text-[10px] text-amber-400/90">
-                        Mod 2: menzildeki tüm oyunculara saldırılır (WL hariç)
-                      </span>
-                    )}
-                  </div>
-                  <label className="flex flex-col gap-0.5 text-zinc-400">
-                    Beyaz liste (virgülle — asla saldırılmaz; korunanlar otomatik eklenir)
-                    <input
-                      value={whitelistText}
-                      onChange={(e) => setWhitelistText(e.target.value)}
-                      placeholder="dost1, dost2"
-                      className="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-200 outline-none focus:border-indigo-500"
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-indigo-500"
-                      onClick={() => applySettings(p.username)}
-                    >
-                      Ayarları uygula
-                    </button>
-                    {pOn && !fOn && (
-                      <button
-                        type="button"
-                        className="rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-amber-500"
-                        onClick={() => setAsMainFollow(p.username)}
-                      >
-                        Ana takip yap
-                      </button>
-                    )}
-                    <span className="text-[10px] leading-relaxed text-zinc-600">
-                      Birden fazla Koru aç: bot ana kişiyi takip eder; diğer korunanlara saldırı olursa da savuşturur.
-                    </span>
-                  </div>
-                </div>
               )}
+              <button
+                type="button"
+                disabled={!online}
+                onClick={() => act({ type: "goto-player", player: p.username }, `Yanına: ${p.username}`)}
+                className={btnIdle}
+              >
+                Yanına
+              </button>
+              <button type="button" disabled={!online || pOn} onClick={() => toggleAttack(p.username)} className={aOn ? btnAttackOn : btnIdle}>
+                {aOn ? "● Saldır" : "Saldır"}
+              </button>
+              <button
+                type="button"
+                disabled={!online}
+                onClick={() => toggleProtect(p.username)}
+                className={pOn ? btnProtectOn : btnIdle}
+                title="Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi."
+              >
+                {pOn ? "● Koru" : "Koru"}
+              </button>
             </div>
           );
         })}
