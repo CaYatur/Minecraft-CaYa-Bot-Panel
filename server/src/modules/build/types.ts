@@ -1,4 +1,4 @@
-/** Şema kütüphanesi + inşaat runtime tipleri (Faz 14–16) */
+/** Schematic kütüphanesi + inşaat runtime tipleri (Faz 14–16) */
 
 export type SchematicFormat = "schem" | "caya-json" | "litematic";
 
@@ -65,7 +65,7 @@ export type BuildPhase =
   | "failed"
   | "cancelled";
 
-/** İnşa sırası: yakında/envanterde olan önce; eksik en sonda */
+/** İnşa sırası: yakında/inventoryde olan önce; eksik en sonda */
 export type BuildPlaceOrder = "nearby-first" | "layer-first";
 
 export interface BuildPlacedBlock {
@@ -92,7 +92,7 @@ export interface BuildRuntime {
   label: string;
   error?: string;
   startedAt: number | null;
-  /** son yerleştirilen blok (UI animasyon) */
+  /** son placeilen blok (UI animasyon) */
   lastBlock: BuildPlacedBlock | null;
   /** son N blok izi */
   recentBlocks: BuildPlacedBlock[];
@@ -101,10 +101,10 @@ export interface BuildRuntime {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
-  /** yerleştirme sırası tercihi */
+  /** place sırası tercihi */
   placeOrder?: BuildPlaceOrder;
   collectMissing?: boolean;
-  /** anlık iş: "Toplanıyor: oak_log · 3/16" / "Craft: …" */
+  /** anlık iş: "Collecting: oak_log · 3/16" / "Craft: …" */
   activity?: string | null;
   /** şu an üzerinde çalışılan malzeme adı */
   activityMaterial?: string | null;

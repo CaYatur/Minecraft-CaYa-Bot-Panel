@@ -6,7 +6,7 @@ import { v3 } from "../build/vec3util";
 
 export interface WaterGuardConfig {
   enabled: boolean;
-  /** Oksijen bu altına inince acil yüzeye çık (0–20) */
+  /** Oksijen bu altına inince urgent surface (0–20) */
   surfaceOxygenBelow: number;
   /** Karaya çıkmayı dene */
   seekLand: boolean;
@@ -31,10 +31,10 @@ export interface WaterGuardState {
 
 /**
  * Suda doğma / boğulma koruması:
- * - su altındayken yukarı yüz (jump = swim up)
+ * - su altındayken swim up (jump = swim up)
  * - oksijen düşükse öncelik yüzey
  * - mümkünse yakındaki karaya pathfinder
- * - yüzeydeyken yüzebilir, boğulmaz (nefes alıyorsa jump bırak)
+ * - yüzeydeyken yüzebilir, boğulmaz (nefes alıyorsa jump drop)
  */
 export class WaterGuardService {
   private bot: Bot | null = null;
@@ -83,7 +83,7 @@ export class WaterGuardService {
     if (!bot || !this.holdingSwimUp) return;
     try {
       bot.setControlState("jump", false);
-      // forward'ı sadece biz bastıysak — land pathfinder kendi yönetir; jump bırak yeter
+      // forward'ı sadece biz bastıysak — land pathfinder kendi yönetir; jump drop yeter
     } catch {
       /* */
     }
@@ -125,12 +125,12 @@ export class WaterGuardService {
 
     this.state.active = true;
     const needAir = submerged || oxygen < cfg.surfaceOxygenBelow;
-    // dövüş/MLG sırasında sadece boğulma engelle; karaya path + jump spam yok
+    // combat/MLG sırasında sadece boğulma engelle; karaya path + jump spam yok
     const yieldToCombat = combatBusy && oxygen >= 8 && !submerged;
 
     if (yieldToCombat) {
       if (this.holdingSwimUp) this.releaseSwimControls();
-      this.state.action = "dövüş öncelikli (su beklemede)";
+      this.state.action = "combat priority (water waiting)";
       // devam eden kara path'i kes
       if (this.busyLand) {
         try {
@@ -142,7 +142,7 @@ export class WaterGuardService {
       return;
     }
 
-    // 1) Yukarı yüz — boğulmamak için
+    // 1) Yukarı yüz — boğulmamak for
     if (needAir) {
       try {
         await bot.look(bot.entity.yaw, -0.6, false);
@@ -155,10 +155,10 @@ export class WaterGuardService {
       } catch {
         /* */
       }
-      this.state.action = oxygen < 8 ? "acil yüzeye çık" : "yukarı yüz";
+      this.state.action = oxygen < 8 ? "urgent surface" : "swim up";
       if (Date.now() - this.lastLog > 4000) {
         this.lastLog = Date.now();
-        this.log().info("Su koruması", `oksijen=${oxygen} · ${this.state.action}`);
+        this.log().info("Water guard", `oxygen=${oxygen} · ${this.state.action}`);
       }
     } else if (onSurface) {
       if (this.holdingSwimUp) {
@@ -169,16 +169,16 @@ export class WaterGuardService {
         }
         this.holdingSwimUp = false;
       }
-      this.state.action = "yüzeyde (güvenli)";
+      this.state.action = "at surface (safe)";
     }
 
-    // 2) Karaya çık — dövüş/MLG yokken ve oksijen/derinlik gerekince
+    // 2) Karaya çık — combat/MLG yokken ve oksijen/derinlik gerekince
     if (cfg.seekLand && !this.busyLand && Date.now() - this.lastLandSeek > 2500) {
       if (combatBusy || fallBusy) return;
       const hazardBusy = this.instance.survival?.hazardGuard?.getState?.()?.active;
       if (hazardBusy) return;
       const depth = waterDepthBelow(bot);
-      // sığ suda (depth&lt;2) ve oksijen iyi + yüzeyde → karaya zorlama (drowned dövüşünü bozma)
+      // sığ suda (depth&lt;2) ve oksijen iyi + yüzeyde → karaya zorlama (drowned combatünü bozma)
       if (onSurface && oxygen >= cfg.surfaceOxygenBelow && depth < 2 && !submerged) {
         return;
       }
@@ -189,7 +189,7 @@ export class WaterGuardService {
     }
   }
 
-  /** Dövüş / savunma / kaçış aktif mi? */
+  /** Dövüş / savunma / fleeing aktif mi? */
   private isCombatBusy(): boolean {
     try {
       const r = this.instance.combat.getRuntime();
@@ -210,18 +210,18 @@ export class WaterGuardService {
 
     const land = findNearbyLand(bot, cfg.landSearchRadius);
     if (!land) {
-      this.state.action = this.state.action || "kara yok — yüzmeye devam";
+      this.state.action = this.state.action || "no land — keep swimming";
       return;
     }
 
     this.busyLand = true;
     this.state.action = `karaya → ${land.x},${land.y},${land.z}`;
-    this.log().info("Su koruması: karaya çıkılıyor", `${land.x} ${land.y} ${land.z}`);
+    this.log().info("Water guard: going to land", `${land.x} ${land.y} ${land.z}`);
 
     try {
       const cur = this.instance.tasks.currentSummary;
       const oxygen = readOxygen(bot);
-      // dövüş görevi / herhangi USER+ görev varken ve oksijen idare ederse path açma
+      // combat görevi / herhangi USER+ görev varken ve oksijen idare ederse path açma
       if (this.isCombatBusy()) {
         this.busyLand = false;
         return;
@@ -236,9 +236,9 @@ export class WaterGuardService {
 
       const t0 = Date.now();
       while (Date.now() - t0 < 20_000 && this.instance.status === "online" && this.bot === bot) {
-        // dövüş başladı → path bırak, silaha alan aç
+        // combat başladı → path drop, silaha alan aç
         if (this.isCombatBusy() && readOxygen(bot) >= 8) {
-          this.state.action = "karaya iptal — dövüş";
+          this.state.action = "karaya cancelled — combat";
           break;
         }
         if (!isInWater(bot) && bot.entity.onGround) break;
@@ -254,7 +254,7 @@ export class WaterGuardService {
         await sleep(150);
       }
     } catch (e) {
-      this.log().debug("Karaya çıkış path", e instanceof Error ? e.message : String(e));
+      this.log().debug("Land path", e instanceof Error ? e.message : String(e));
     } finally {
       try {
         bot.pathfinder.setGoal(null);
@@ -299,7 +299,7 @@ function isInWater(bot: Bot): boolean {
   return false;
 }
 
-/** Kafa suyun içinde mi (nefes alamaz) */
+/** Kafa suyun forde mi (nefes alamaz) */
 function isHeadSubmerged(bot: Bot): boolean {
   try {
     const eye = (bot.entity as { eyeHeight?: number }).eyeHeight ?? 1.62;

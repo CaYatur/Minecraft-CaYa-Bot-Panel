@@ -3,7 +3,7 @@ import type { Entity } from "prismarine-entity";
 import type { Vec3 } from "vec3";
 
 /**
- * Hareket için yumuşak bakış — force=false (anlık snap anti-cheat flag'i).
+ * Hareket for yumuşak bakış — force=false (anlık snap anti-cheat flag'i).
  * Tek adım: pathfinder ile yarışmadan her tick küçük açı.
  */
 
@@ -64,7 +64,7 @@ export async function stepLookAt(
   await bot.look(bot.entity.yaw + stepYaw, bot.entity.pitch + stepPitch, false);
 }
 
-/** Birkaç adımda hedefe bak (takip döngüsü / goto bitişi) */
+/** Birkaç adımda targete bak (takip döngüsü / goto bitişi) */
 export async function easeLookAt(
   bot: Bot,
   point: { x: number; y: number; z: number },
@@ -91,7 +91,7 @@ export async function stepLookAtEntity(bot: Bot, entity: Entity, turnDeg = 16): 
   await stepLookAt(bot, entityLookPoint(entity), turnDeg);
 }
 
-/** Hareket yönüne bak (velocity veya hedef nokta) — goto insanîleşmesi */
+/** Hareket yönüne bak (velocity veya target nokta) — goto insanîleşmesi */
 export async function stepLookAlongMotion(
   bot: Bot,
   fallback: { x: number; y: number; z: number } | null,

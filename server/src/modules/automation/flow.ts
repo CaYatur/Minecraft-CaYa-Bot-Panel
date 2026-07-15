@@ -77,7 +77,7 @@ export interface AutomationIfNode extends AutomationNodeBase {
   type: "if";
   condition: AutomationConditionGroup;
   then: AutomationNode[];
-  /** ELSE IF, else içine başka IF eklenerek sınırsız iç içe çalışır. */
+  /** ELSE IF, else fore başka IF eklenerek sınırsız iç içe çalışır. */
   else?: AutomationNode[];
 }
 

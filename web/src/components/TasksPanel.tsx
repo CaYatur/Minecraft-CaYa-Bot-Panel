@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RotateCcw } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { fmtPos } from "../lib/format";
@@ -40,7 +41,7 @@ export function TasksPanel({ botId }: { botId: string }) {
   const saveWaypointHere = async (name: string) => {
     try {
       await api.post(`/api/bots/${botId}/waypoint-here`, { name });
-      toast("success", `Waypoint kaydedildi: ${name}`);
+      toast("success", t("tasks.waypointSaved", { name }));
       setWpName("");
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
@@ -61,7 +62,7 @@ export function TasksPanel({ botId }: { botId: string }) {
         await act({ type: "goto-player", player: parts[1] });
       } else if (verb === "wp" && parts[1]) {
         const wp = waypoints.find((w) => w.name.toLowerCase() === parts[1]!.toLowerCase());
-        if (!wp) throw new Error(`Waypoint yok: ${parts[1]}`);
+        if (!wp) throw new Error(t("tasks.noSuchWaypoint", { name: parts[1] }));
         await act({ type: "goto-waypoint", waypointId: wp.id });
       } else if (verb === "wpkaydet" && parts[1]) {
         await saveWaypointHere(parts[1]!);
@@ -86,9 +87,9 @@ export function TasksPanel({ botId }: { botId: string }) {
       } else if (verb === "uret" || verb === "üret" || verb === "craft") {
         await act({ type: "craft", item: parts[1] || "stick", count: parts[2] ? Number(parts[2]) : 1 });
       } else if (verb === "stop" || verb === "dur") {
-        await act({ type: "stop" }, "Hareket/dövüş durduruldu");
+        await act({ type: "stop" }, t("tasks.stopped"));
       } else {
-        throw new Error(`Anlaşılmadı. Komutlar: ${CMD_HELP}`);
+        throw new Error(t("tasks.unmatchedCommand", { help: CMD_HELP }));
       }
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
@@ -103,11 +104,11 @@ export function TasksPanel({ botId }: { botId: string }) {
     }
   };
 
-  const gotoWp = (wp: Waypoint) => act({ type: "goto-waypoint", waypointId: wp.id }, `${wp.name} hedefine gidiliyor`);
+  const gotoWp = (wp: Waypoint) => act({ type: "goto-waypoint", waypointId: wp.id }, t("tasks.gotoWaypointToast", { name: wp.name }));
   const delWp = async (wp: Waypoint) => {
     try {
       await api.del(`/api/waypoints/${wp.id}`);
-      toast("info", `Waypoint silindi: ${wp.name}`);
+      toast("info", t("tasks.waypointDeleted", { name: wp.name }));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -143,9 +144,9 @@ export function TasksPanel({ botId }: { botId: string }) {
               void act({ type: "reset-work" }, t("tasks.resetDone"));
             }}
             title={t("botDetail.resetWorkTitle")}
-            className="rounded-lg border border-amber-800/60 bg-amber-950/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-900/50"
+            className="flex items-center gap-1.5 rounded-lg border border-amber-800/60 bg-amber-950/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-900/50"
           >
-            {t("tasks.reset")}
+            <RotateCcw className="h-3.5 w-3.5" /> {t("tasks.reset")}
           </button>
         </div>
         <p className="mono mt-1 text-[10px] text-zinc-600">{CMD_HELP}</p>
@@ -154,7 +155,7 @@ export function TasksPanel({ botId }: { botId: string }) {
       <div className="grid gap-4 lg:grid-cols-2">
         {/* hızlı hareket */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Hızlı Hareket</div>
+          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("tasks.quickMove")}</div>
           <div className="flex flex-wrap items-center gap-2">
             {(
               [
@@ -172,59 +173,59 @@ export function TasksPanel({ botId }: { botId: string }) {
               />
             ))}
             <button
-              onClick={() => act({ type: "goto", x: Number(gx), y: Number(gy), z: Number(gz) }, "Hedefe gidiliyor")}
+              onClick={() => act({ type: "goto", x: Number(gx), y: Number(gy), z: Number(gz) }, t("tasks.gotoTarget"))}
               disabled={!gx || !gy || !gz}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-emerald-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Git
+              {t("tasks.goButton")}
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <input
               value={player}
               onChange={(e) => setPlayer(e.target.value)}
-              placeholder="Oyuncu adı"
+              placeholder={t("common.playerNamePlaceholder")}
               className="w-40 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
             />
             <button
-              onClick={() => act({ type: "goto-player", player }, `${player} yanına gidiliyor`)}
+              onClick={() => act({ type: "goto-player", player }, t("tasks.gotoPlayerToast", { name: player }))}
               disabled={!player}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Yanına Git
+              {t("tasks.goToPlayer")}
             </button>
             <button
-              onClick={() => act({ type: "follow", player, distance: 3 }, `${player} takip ediliyor`)}
+              onClick={() => act({ type: "follow", player, distance: 3 }, t("tasks.followingToast", { name: player }))}
               disabled={!player}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Takip Et
+              {t("tasks.followButton")}
             </button>
           </div>
         </div>
 
         {/* waypointler */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Waypointler</div>
+          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("tasks.waypointsLabel")}</div>
           <div className="mb-2 flex gap-2">
             <input
               value={wpName}
               onChange={(e) => setWpName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && wpName && saveWaypointHere(wpName)}
-              placeholder="Yeni waypoint adı"
+              placeholder={t("tasks.newWaypointPlaceholder")}
               className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
             />
             <button
               onClick={() => saveWaypointHere(wpName)}
               disabled={!wpName || bot.status !== "online"}
-              title={bot.status !== "online" ? "Bot çevrimdışı" : "Botun şu anki konumunu kaydet"}
+              title={bot.status !== "online" ? t("tasks.offlineTitle") : t("tasks.saveHereTitle")}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-indigo-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Buradan Kaydet
+              {t("tasks.saveHereButton")}
             </button>
           </div>
           <div className="max-h-40 space-y-1 overflow-y-auto">
-            {waypoints.length === 0 && <div className="py-3 text-center text-xs text-zinc-600">Bu sunucuda waypoint yok</div>}
+            {waypoints.length === 0 && <div className="py-3 text-center text-xs text-zinc-600">{t("tasks.noWaypoints")}</div>}
             {waypoints.map((wp) => (
               <div key={wp.id} className="flex items-center gap-2 rounded-lg bg-zinc-900/60 px-2 py-1.5 text-sm">
                 <span className="font-medium text-zinc-200">{wp.name}</span>
@@ -233,10 +234,10 @@ export function TasksPanel({ botId }: { botId: string }) {
                 </span>
                 <div className="ml-auto flex gap-1.5">
                   <button onClick={() => gotoWp(wp)} className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-emerald-300 hover:bg-zinc-700">
-                    Git
+                    {t("tasks.goButton")}
                   </button>
                   <button onClick={() => delWp(wp)} className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-red-300 hover:bg-zinc-700">
-                    Sil
+                    {t("tasks.deleteButton")}
                   </button>
                 </div>
               </div>
@@ -248,26 +249,26 @@ export function TasksPanel({ botId }: { botId: string }) {
       {/* görev kuyruğu */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 flex items-center">
-          <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Görev Kuyruğu</span>
+          <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("tasks.taskQueueLabel")}</span>
           <div className="ml-auto flex gap-1.5">
             <button
               onClick={() => api.post(`/api/bots/${botId}/tasks/pause`).catch(() => {})}
               className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-amber-300 hover:bg-zinc-700"
             >
-              Duraklat
+              {t("tasks.pauseButton")}
             </button>
             <button
               onClick={() => api.post(`/api/bots/${botId}/tasks/resume`).catch(() => {})}
               className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-emerald-300 hover:bg-zinc-700"
             >
-              Devam
+              {t("tasks.resumeButton")}
             </button>
             {(tasks.current || tasks.queue.length > 0) && (
               <button
                 onClick={() => api.post(`/api/bots/${botId}/tasks/cancel-all`).catch(() => {})}
                 className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-red-300 hover:bg-zinc-700"
               >
-                Tümünü İptal
+                {t("tasks.cancelAllButton")}
               </button>
             )}
           </div>
@@ -283,7 +284,7 @@ export function TasksPanel({ botId }: { botId: string }) {
                 onClick={() => cancelTask(tasks.current!)}
                 className="ml-auto rounded bg-zinc-800 px-2 py-0.5 text-xs text-red-300 hover:bg-zinc-700"
               >
-                İptal
+                {t("tasks.cancelButton")}
               </button>
             </div>
             {tasks.current.progress && (
@@ -310,20 +311,20 @@ export function TasksPanel({ botId }: { botId: string }) {
             )}
           </div>
         ) : (
-          <div className="py-2 text-center text-xs text-zinc-600 italic">Bot boşta — aktif görev yok</div>
+          <div className="py-2 text-center text-xs text-zinc-600 italic">{t("tasks.idleNoTask")}</div>
         )}
 
         {tasks.queue.length > 0 && (
           <div className="mt-2 space-y-1">
-            {tasks.queue.map((t, i) => (
-              <div key={t.id} className="flex items-center gap-2 rounded bg-zinc-900/60 px-2 py-1 text-xs text-zinc-400">
+            {tasks.queue.map((task, i) => (
+              <div key={task.id} className="flex items-center gap-2 rounded bg-zinc-900/60 px-2 py-1 text-xs text-zinc-400">
                 <span className="mono text-zinc-600">#{i + 1}</span>
-                <span>{t.label}</span>
+                <span>{task.label}</span>
                 <button
-                  onClick={() => cancelTask(t)}
+                  onClick={() => cancelTask(task)}
                   className="ml-auto rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-zinc-700"
                 >
-                  İptal
+                  {t("tasks.cancelButton")}
                 </button>
               </div>
             ))}

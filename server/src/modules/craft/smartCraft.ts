@@ -71,7 +71,7 @@ function normalize(name: string) {
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
   return bot;
 }
 
@@ -201,7 +201,7 @@ export function smartPreviewPlan(instance: BotInstance, item: string, count = 1)
 
   const walk = (current: string, wanted: number, depth: number, stack: Set<string>) => {
     if (depth > MAX_DEPTH || stack.has(current)) {
-      plan.push({ kind: "gather", item: current, count: wanted, note: "zincir sınırı" });
+      plan.push({ kind: "gather", item: current, count: wanted, note: "chain limit" });
       return;
     }
     const realHave = countItem(bot, current);
@@ -268,7 +268,7 @@ export async function runSmartCraftInline(
     await ensureItem(ctx, name, target, 0);
     const finalCount = countItem(bot, name);
     if (finalCount < target) {
-      throw new Error(`${name}: hedef ${target}, envanter ${finalCount}`);
+      throw new Error(`${name}: target ${target}, inventory ${finalCount}`);
     }
     report({ done: target, total: target, label: `Craft tamam: ${name} ×${finalCount}` });
   } finally {
@@ -284,16 +284,16 @@ async function ensureItem(
   depth: number
 ): Promise<void> {
   const { bot, instance, token, report } = ctx;
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
-  if (depth > MAX_DEPTH) throw new Error(`${itemName}: craft zinciri çok derin`);
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+  if (depth > MAX_DEPTH) throw new Error(`${itemName}: craft chain too deep`);
   if (countItem(bot, itemName) >= targetCount) return;
-  if (ctx.stack.has(itemName)) throw new Error(`${itemName}: döngüsel craft zinciri`);
+  if (ctx.stack.has(itemName)) throw new Error(`${itemName}: cyclic craft chain`);
 
   ctx.stack.add(itemName);
   try {
     let missing = targetCount - countItem(bot, itemName);
 
-    // Önce oyuncunun yakındaki sandık/barrel/shulker depolarını kullan.
+    // Önce oyuncunun yakındaki chest/barrel/shulker depolarını kullan.
     if (missing > 0) {
       await withdrawBuildMaterials(instance, [itemName], missing, token, (label) => {
         report({ done: countItem(bot, itemName), total: targetCount, label });
@@ -316,7 +316,7 @@ async function ensureItem(
     const itemId = bot.registry.itemsByName[itemName]?.id;
     const recipe = itemId == null ? null : selectRecipe(bot, itemName, itemId);
     if (!recipe || itemId == null) {
-      report({ done: countItem(bot, itemName), total: targetCount, label: `Toplanıyor: ${itemName}` });
+      report({ done: countItem(bot, itemName), total: targetCount, label: `Collecting: ${itemName}` });
       await instance.gather.runCollectBlock(itemName, targetCount, token, report);
       return;
     }
@@ -325,7 +325,7 @@ async function ensureItem(
     const operations = Math.ceil((targetCount - countItem(bot, itemName)) / outputCount);
     const ingredients = recipeIngredients(recipe);
     if (!ingredients.size) {
-      throw new Error(`${itemName}: tarif girdileri okunamadı`);
+      throw new Error(`${itemName}: could not read recipe inputs`);
     }
 
     for (const [ingredientId, perOperation] of ingredients) {
@@ -335,7 +335,7 @@ async function ensureItem(
       report({
         done: ctx.stepsDone,
         total: ctx.stepsDone + ingredients.size + 1,
-        label: `${itemName} için ${ingredient} hazırlanıyor`
+        label: `${itemName} for ${ingredient} preparing`
       });
       await ensureItem(ctx, ingredient, ingredientTarget, depth + 1);
     }
@@ -357,7 +357,7 @@ async function executeRecipe(
   let guard = 0;
 
   while (countItem(bot, itemName) < targetCount && guard++ < 128) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     const missing = targetCount - countItem(bot, itemName);
     const output = recipeOutputCount(selected, itemId);
     const wantedOperations = Math.max(1, Math.ceil(missing / output));
@@ -368,7 +368,7 @@ async function executeRecipe(
       table = await ensureCraftingTable(ctx);
       executable = bot.recipesFor(itemId, null, 1, table as never) as unknown[];
     }
-    if (!executable.length) throw new Error(`Tarif uygulanamıyor: ${itemName}`);
+    if (!executable.length) throw new Error(`Recipe not applicable: ${itemName}`);
 
     const before = countItem(bot, itemName);
     report({ done: before, total: targetCount, label: `Craft: ${itemName} ${before}/${targetCount}` });
@@ -380,12 +380,12 @@ async function executeRecipe(
     }
     await sleep(80);
     const after = countItem(bot, itemName);
-    if (after <= before) throw new Error(`${itemName}: craft sonrası envanter artmadı`);
+    if (after <= before) throw new Error(`${itemName}: inventory did not increase after craft`);
     ctx.stepsDone++;
   }
 
   if (countItem(bot, itemName) < targetCount) {
-    throw new Error(`${itemName}: craft deneme sınırı`);
+    throw new Error(`${itemName}: craft attempt limit`);
   }
 }
 
@@ -411,7 +411,7 @@ async function placePortableBlock(
   itemName: string
 ): Promise<{ block: unknown; position: { x: number; y: number; z: number } }> {
   const { bot, token } = ctx;
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const vec3Module = require("vec3");
   const Vec3 = (vec3Module.Vec3 ?? vec3Module) as new (x: number, y: number, z: number) => {
@@ -440,7 +440,7 @@ async function placePortableBlock(
     if (targetBlock && !targetBlock.name.includes("air")) continue;
 
     const item = bot.inventory.items().find((entry) => entry.name === itemName);
-    if (!item) throw new Error(`${itemName} envanterde yok`);
+    if (!item) throw new Error(`${itemName} not in inventory`);
     try {
       bot.pathfinder?.setGoal(null);
       bot.clearControlStates();
@@ -454,10 +454,10 @@ async function placePortableBlock(
         return { block: placed, position: { x: target.x, y: target.y, z: target.z } };
       }
     } catch {
-      // sonraki güvenli yüzey
+      // sonraki safe yüzey
     }
   }
-  throw new Error(`${itemName} için güvenli geçici yer bulunamadı`);
+  throw new Error(`${itemName} no safe temporary spot found for`);
 }
 
 async function hardenConcreteToTarget(
@@ -474,7 +474,7 @@ async function hardenConcreteToTarget(
   await ensureItem(ctx, powderName, countItem(bot, powderName) + missing, depth + 1);
   const workstation = findConcreteWaterEdge(bot);
   if (!workstation) {
-    throw new Error(`${concreteName}: yakınlarda güvenli su kenarı bulunamadı`);
+    throw new Error(`${concreteName}: no safe water edge nearby`);
   }
 
   await runGoto(
@@ -489,10 +489,10 @@ async function hardenConcreteToTarget(
 
   while (!token.cancelled && countItem(bot, concreteName) < targetCount) {
     const powder = bot.inventory.items().find((item) => item.name === powderName);
-    if (!powder) throw new Error(`${concreteName}: ${powderName} tükendi`);
+    if (!powder) throw new Error(`${concreteName}: ${powderName} exhausted`);
     const targetBlock = bot.blockAt(workstation.target);
     if (targetBlock && !targetBlock.name.includes("air")) {
-      throw new Error(`${concreteName}: su kenarı çalışma hücresi doldu`);
+      throw new Error(`${concreteName}: water-edge work cell full`);
     }
 
     bot.pathfinder?.setGoal(null);
@@ -508,7 +508,7 @@ async function hardenConcreteToTarget(
       if (hardened?.name === powderName && bot.canDigBlock(hardened)) {
         try { await bot.dig(hardened); } catch { /* */ }
       }
-      throw new Error(`${concreteName}: powder suyla temas edip sertleşmedi`);
+      throw new Error(`${concreteName}: powder did not harden on water contact`);
     }
 
     try {
@@ -523,11 +523,11 @@ async function hardenConcreteToTarget(
     report({
       done: countItem(bot, concreteName),
       total: targetCount,
-      label: `Suyla sertleştiriliyor: ${concreteName} · kalan ${Math.max(0, missing)}`
+      label: `Hardening with water: ${concreteName} · remaining ${Math.max(0, missing)}`
     });
   }
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 }
 
 function findConcreteWaterEdge(bot: Bot): {
@@ -593,13 +593,13 @@ async function smeltToTarget(
     await ensureItem(ctx, "oak_planks", countItem(bot, "oak_planks") + Math.ceil(missing / 1.5), depth + 1);
     fuel = bot.inventory.items().find((item) => item.name === "oak_planks");
   }
-  if (!fuel) throw new Error(`${outputName}: fırın yakıtı yok`);
+  if (!fuel) throw new Error(`${outputName}: no furnace fuel`);
 
   const input = bot.inventory.items().find((item) => item.name === inputName);
-  if (!input) throw new Error(`${outputName}: fırın girdisi yok (${inputName})`);
+  if (!input) throw new Error(`${outputName}: no furnace input (${inputName})`);
 
   const openFurnace = (bot as unknown as { openFurnace(block: unknown): Promise<unknown> }).openFurnace;
-  if (typeof openFurnace !== "function") throw new Error("Mineflayer openFurnace desteği yok");
+  if (typeof openFurnace !== "function") throw new Error("Mineflayer openFurnace not supported");
   const furnace = (await openFurnace.call(bot, furnaceBlock)) as {
     putInput(type: number, metadata: number | null, count: number): Promise<void>;
     putFuel(type: number, metadata: number | null, count: number): Promise<void>;
@@ -632,9 +632,9 @@ async function smeltToTarget(
     furnace.close();
   }
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   if (countItem(bot, outputName) < targetCount) {
-    throw new Error(`${outputName}: fırın hedefi tamamlanamadı`);
+    throw new Error(`${outputName}: furnace target not completed`);
   }
 }
 
@@ -658,7 +658,7 @@ async function cleanupPortableBlock(
     await sleep(120);
     await ctx.instance.gather.runCollectDrops(expectedName, 7, { cancelled: false }, () => {});
   } catch {
-    ctx.instance.getLogger().warn(`Geçici ${expectedName} geri alınamadı`);
+    ctx.instance.getLogger().warn(`Temporary ${expectedName} could not reclaim`);
   }
 }
 

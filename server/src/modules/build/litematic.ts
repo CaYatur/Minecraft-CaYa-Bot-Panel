@@ -29,7 +29,7 @@ export async function parseLitematicBuffer(buf: Buffer): Promise<LitematicParseR
 
   const regionsRaw = root.Regions as Record<string, RegionRaw> | undefined;
   if (!regionsRaw || typeof regionsRaw !== "object") {
-    throw new Error("Litematic: Regions bulunamadı — dosya bozuk veya desteklenmeyen sürüm");
+    throw new Error("Litematic: Regions not found — file corrupt or unsupported version");
   }
 
   const all: SchematicBlock[] = [];
@@ -55,7 +55,7 @@ export async function parseLitematicBuffer(buf: Buffer): Promise<LitematicParseR
     const bits = Math.max(2, Math.ceil(Math.log2(Math.max(palette.length, 2))));
     const volume = sizeX * sizeY * sizeZ;
     if (volume > MAX_LITEMATIC_BLOCKS) {
-      throw new Error(`Litematic bölge çok büyük (${volume} > ${MAX_LITEMATIC_BLOCKS})`);
+      throw new Error(`Litematic region too large (${volume} > ${MAX_LITEMATIC_BLOCKS})`);
     }
 
     for (let i = 0; i < volume; i++) {
@@ -80,7 +80,7 @@ export async function parseLitematicBuffer(buf: Buffer): Promise<LitematicParseR
       });
 
       if (all.length > MAX_LITEMATIC_BLOCKS) {
-        throw new Error(`Litematic toplam blok limiti aşıldı (${MAX_LITEMATIC_BLOCKS})`);
+        throw new Error(`Litematic total block limit exceeded (${MAX_LITEMATIC_BLOCKS})`);
       }
     }
 
@@ -88,7 +88,7 @@ export async function parseLitematicBuffer(buf: Buffer): Promise<LitematicParseR
     void regionName;
   }
 
-  if (!all.length) throw new Error("Litematic: yerleştirilebilir blok yok (boş şema?)");
+  if (!all.length) throw new Error("Litematic: no placeable blocks (empty schematic?)");
 
   // normalize to 0-based
   let minX = Infinity,

@@ -1,6 +1,7 @@
 import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
+import type { CountMode } from "./index";
 import { runGoto } from "../movement";
 import { ringSearch } from "./ringSearch";
 
@@ -72,7 +73,7 @@ function sleep(ms: number) {
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
   return bot;
 }
 
@@ -103,8 +104,8 @@ function entityExists(bot: Bot, id: number | undefined): boolean {
 }
 
 /**
- * Yerdeki item entity'lerini gerçekten kaybolana veya envanter artana kadar takip eder.
- * Eski kod yalnızca hedefe yürüdüğü için, pickup gerçekleşmese bile başarı sayıyordu.
+ * Yerdeki item entity'lerini gerçekten kaybolmain veya inventory artmain kadar takip eder.
+ * Eski kod yalnızca targete yürüdüğü for, pickup gerçekleşmese bile başarı sayıyordu.
  */
 export async function runSmartCollectDrops(
   instance: BotInstance,
@@ -150,7 +151,7 @@ export async function runSmartCollectDrops(
     report({
       done: verified,
       total: verified + drops.length,
-      label: `Yerdeki eşya: ${targetName ?? "item"}`
+      label: `Ground items: ${targetName ?? "item"}`
     });
 
     try {
@@ -186,7 +187,7 @@ export async function runSmartCollectDrops(
       failures.delete(target.id);
     } else {
       failures.set(target.id, (failures.get(target.id) ?? 0) + 1);
-      // Akıntıda veya blok içinde kalan item için biraz farklı açıdan tekrar yaklaş.
+      // Akıntıda veya blok forde remaining item for biraz farklı açıdan tekrar yaklaş.
       try {
         await runGoto(
           instance,
@@ -203,8 +204,8 @@ export async function runSmartCollectDrops(
     }
   }
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
-  report({ done: verified, total: verified, label: `Yerdeki eşya alındı: ${verified}` });
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+  report({ done: verified, total: verified, label: `Ground items withdrawn: ${verified}` });
   return verified;
 }
 
@@ -218,7 +219,7 @@ export async function collectDropsAfterDig(
   try {
     await runSmartCollectDrops(instance, filter, 7, token, () => {}, 3_200);
   } catch {
-    // Kazma işlemini yalnızca pickup best-effort hatası yüzünden başarısız sayma.
+    // Kazma işlemini yalnızca pickup best-effort hatası yüzünden failed sayma.
   }
 }
 
@@ -264,29 +265,36 @@ function isLikelyCraftedItem(name: string): boolean {
 }
 
 /**
- * Build malzemesi için mantıklı kaynak çözümü.
+ * Build malzemesi for mantıklı kaynak çözümü.
  * - species planks yalnızca aynı species log/stem kullanır
- * - craftable sonuçlar doğrudan dünyada aranmak yerine recipe zincirine gider
+ * - craftable sonuçlar doğrudan worldda aranmak yerine recipe zincirine gider
  * - doğrudan blok araması `includes` değil kesin isim eşleşmesidir
  */
 export async function runSmartCollectBlock(
   instance: BotInstance,
   name: string,
-  need: number,
+  amount: number,
   token: TaskToken,
-  report: ProgressFn
+  report: ProgressFn,
+  countMode: CountMode = "target"
 ): Promise<void> {
   const bot = requireBot(instance);
   const requested = name.replace(/^minecraft:/, "");
-  const target = Math.max(1, Math.floor(need));
-  const have = () => countNamed(bot, [requested]);
+  const have = () => requested === "log"
+    ? bot.inventory.items().reduce((sum, item) => sum + ((item.name.endsWith("_log") || item.name.endsWith("_stem")) ? item.count : 0), 0)
+    : countNamed(bot, [requested]);
+  const start = have();
+  const target = countMode === "add"
+    ? start + Math.max(1, Math.floor(amount))
+    : Math.max(1, Math.floor(amount));
 
   if (requested.endsWith("_log") || requested.endsWith("_stem") || requested === "log") {
     await instance.gather.runCollectWood(
       target,
       requested === "log" ? undefined : requested,
       token,
-      report
+      report,
+      "target"
     );
     return;
   }
@@ -297,11 +305,11 @@ export async function runSmartCollectBlock(
     if (!missingPlanks) return;
     const rawHave = countNamed(bot, [rawWood]);
     const rawTarget = rawHave + Math.ceil(missingPlanks / 4);
-    report({ done: have(), total: target, label: `${requested} için ${rawWood} aranıyor` });
+    report({ done: have(), total: target, label: `${requested} for ${rawWood} searching` });
     if (rawWood === "bamboo_block") {
       await runDirectWorldGather(instance, rawWood, rawTarget, token, report);
     } else {
-      await instance.gather.runCollectWood(rawTarget, rawWood, token, report);
+      await instance.gather.runCollectWood(rawTarget, rawWood, token, report, "target");
     }
     await instance.craft.runCraftInline(requested, target, token, report);
     return;
@@ -312,7 +320,7 @@ export async function runSmartCollectBlock(
       .replace(/^deepslate_/, "")
       .replace(/_ore$/, "")
       .replace(/^raw_/, "");
-    await instance.gather.runMine(ore, target, "legit", token, report);
+    await instance.gather.runMine(ore, target, "legit", token, report, "target");
     return;
   }
 
@@ -356,22 +364,22 @@ async function runDirectWorldGather(
         probe: (probeBot) =>
           Boolean(probeBot.findBlock({ matching: (candidate) => matcher(candidate.name), maxDistance: 20 }))
       });
-      if (!found) throw new Error(`${requested} bulunamadı (çevre araması tükendi)`);
+      if (!found) throw new Error(`${requested} not found (area search exhausted)`);
       block = bot.findBlock({ matching: (b) => matcher(b.name), maxDistance: 32 });
     }
     if (!block) continue;
 
     const before = got;
-    // Mevcut GatherService'in güvenli tool/path/dig akışını kullanabilmek için
-    // tek hedefli bir blok toplama yerine doğrudan kazma API'si yok; aynı dosyadaki
+    // Mevcut GatherService'in safe tool/path/dig akışını kullmainbilmek for
+    // tek targetli bir blok toplama yerine doğrudan kazma API'si yok; aynı dosyadaki
     // digBlock bu çağrıdan sonra drop pickup ile yamalanır. Burada blok yakınına gideriz.
     await runGoto(instance, block.position.x, block.position.y, block.position.z, 3, token, () => {});
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
     const live = bot.blockAt(block.position);
     if (!live || !matcher(live.name) || !bot.canDigBlock(live)) {
       noProgress++;
-      if (noProgress >= 5) throw new Error(`${requested}: kazılabilir hedef bulunamadı`);
+      if (noProgress >= 5) throw new Error(`${requested}: no diggable target found`);
       continue;
     }
 
@@ -394,7 +402,7 @@ async function runDirectWorldGather(
       noProgress++;
       if (noProgress >= 5) {
         throw new Error(
-          `${requested} kazılamadı: ${error instanceof Error ? error.message : String(error)}`
+          `${requested} could not dig: ${error instanceof Error ? error.message : String(error)}`
         );
       }
       continue;
@@ -403,8 +411,8 @@ async function runDirectWorldGather(
     got = countHave();
     noProgress = got > before ? 0 : noProgress + 1;
     report({ done: Math.min(got, target), total: target, label: `${requested} ${got}/${target}` });
-    if (noProgress >= 5) throw new Error(`${requested}: kazıldı fakat drop envantere gelmedi`);
+    if (noProgress >= 5) throw new Error(`${requested}: dug but drop did not enter inventory`);
   }
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 }

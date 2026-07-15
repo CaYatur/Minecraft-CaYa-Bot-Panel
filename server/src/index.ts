@@ -10,7 +10,7 @@ import { BotManager } from "./core/BotManager";
 import { createLogger } from "./utils/logger";
 
 const PORT = Number(process.env.CAYA_PORT || 3001);
-const HOST = process.env.CAYA_HOST || "127.0.0.1"; // güvenlik: varsayılan sadece localhost
+const HOST = process.env.CAYA_HOST || "127.0.0.1"; // security: default localhost only
 
 const log = createLogger("server");
 
@@ -28,13 +28,13 @@ function readSupportedVersions(): string[] {
 }
 
 function main() {
-  // İ4 güvenlik ağı: tek bir botun beklenmedik hatası tüm paneli düşürmemeli.
+  // İ4 safek ağı: tek bir botun beklenmedik hatası tüm paneli düşürmemeli.
   // Hata yutulmaz — panel loguna ERROR olarak düşer.
   process.on("uncaughtException", (err) => {
-    log.error("Yakalanmamış istisna (proses ayakta tutuldu)", String(err?.stack ?? err));
+    log.error("Uncaught exception (process kept alive)", String(err?.stack ?? err));
   });
   process.on("unhandledRejection", (reason) => {
-    log.error("Yakalanmamış promise reddi (proses ayakta tutuldu)", String(reason));
+    log.error("Unhandled promise rejection (process kept alive)", String(reason));
   });
 
   const supportedVersions = readSupportedVersions();
@@ -43,7 +43,7 @@ function main() {
   manager.boot();
 
   const app = express();
-  // şema yükleme base64 için büyük body; diğer rotalar da aynı limit (localhost panel)
+  // şema yükleme base64 for büyük body; diğer rotalar da aynı limit (localhost panel)
   app.use(express.json({ limit: "32mb" }));
   app.use("/api", createRestRouter(manager, supportedVersions));
   app.use("/api", restErrorHandler);
@@ -55,7 +55,7 @@ function main() {
       if (req.path.startsWith("/api") || req.path.startsWith("/socket.io")) return next();
       res.sendFile(path.join(WEB_DIST_DIR, "index.html"));
     });
-    log.info("Derlenmiş panel bulundu — statik olarak servis ediliyor");
+    log.info("Compiled panel found — serving statically");
   }
 
   const httpServer = http.createServer(app);
@@ -63,11 +63,11 @@ function main() {
   setupSocket(io, manager, supportedVersions);
 
   httpServer.listen(PORT, HOST, () => {
-    log.success(`CaYa Bot Panel API hazır: http://${HOST}:${PORT} (mineflayer sürümleri: ${supportedVersions.length})`);
+    log.success(`Minecraft CaYa Bot Panel API ready: http://${HOST}:${PORT} (mineflayer versions: ${supportedVersions.length})`);
   });
 
   const shutdown = () => {
-    log.info("Kapatılıyor — tüm botlar durduruluyor…");
+    log.info("Shutting down — stopping all bots…");
     manager.shutdown();
     setTimeout(() => process.exit(0), 500);
   };

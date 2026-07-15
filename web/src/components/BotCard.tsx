@@ -1,4 +1,6 @@
 import { Link } from "react-router-dom";
+import { Backpack, Drumstick, Heart, MapPin } from "lucide-react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { dimensionLabel, fmtPos } from "../lib/format";
 import type { BotSnapshot, ServerProfile } from "../lib/types";
@@ -8,6 +10,7 @@ import { StatusBadge } from "./StatusBadge";
 
 export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProfile }) {
   const toast = useAppStore((s) => s.toast);
+  const { t, locale } = useI18n();
   const running = bot.status !== "stopped";
   const problem = bot.runtime.kickReason || bot.runtime.lastError;
   // ana envanter + hotbar doluluk (36 slot) — 30+ olunca kartta uyarı rozeti
@@ -31,7 +34,7 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
         <Link to={`/bots/${bot.config.id}`} className="group min-w-0">
           <div className="truncate font-semibold text-zinc-100 group-hover:text-indigo-300">{bot.config.username}</div>
           <div className="truncate text-xs text-zinc-500">
-            {server ? `${server.name} · ${server.host}:${server.port}` : "sunucu yok"}
+            {server ? `${server.name} · ${server.host}:${server.port}` : t("botCard.noServer")}
           </div>
         </Link>
         <StatusBadge status={bot.status} />
@@ -39,16 +42,32 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
 
       {bot.status === "online" ? (
         <div className="flex flex-col gap-1.5">
-          <StatBar value={bot.runtime.health} max={20} color="bg-red-500" label="Can" icon="❤️" />
-          <StatBar value={bot.runtime.food} max={20} color="bg-amber-500" label="Açlık" icon="🍗" />
+          <StatBar
+            value={bot.runtime.health}
+            max={20}
+            color="bg-red-500"
+            label={t("botDetail.health")}
+            icon={<Heart className="h-3 w-3 text-red-400" />}
+          />
+          <StatBar
+            value={bot.runtime.food}
+            max={20}
+            color="bg-amber-500"
+            label={t("botDetail.food")}
+            icon={<Drumstick className="h-3 w-3 text-amber-400" />}
+          />
           <div className="mono flex items-center justify-between text-[11px] text-zinc-500">
-            <span>
-              📍 {fmtPos(bot.runtime.position)} · {dimensionLabel(bot.runtime.dimension)}
+            <span className="flex items-center gap-1">
+              <MapPin className="h-3 w-3 shrink-0" /> {fmtPos(bot.runtime.position)} ·{" "}
+              {dimensionLabel(bot.runtime.dimension, locale)}
             </span>
             <span className="flex items-center gap-2">
               {invUsed !== null && invUsed >= 30 && (
-                <span className={invUsed >= 36 ? "text-red-400" : "text-amber-400"} title="Envanter doluluk">
-                  🎒 {invUsed}/36
+                <span
+                  className={`flex items-center gap-1 ${invUsed >= 36 ? "text-red-400" : "text-amber-400"}`}
+                  title={t("botCard.inventoryFull")}
+                >
+                  <Backpack className="h-3 w-3" /> {invUsed}/36
                 </span>
               )}
               {bot.runtime.ping} ms
@@ -60,7 +79,7 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
           {problem}
         </div>
       ) : (
-        <div className="text-xs text-zinc-600 italic">Bot kapalı</div>
+        <div className="text-xs text-zinc-600 italic">{t("botCard.offline")}</div>
       )}
 
       <div className="mt-auto flex items-center gap-2">
@@ -72,13 +91,13 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
               : "bg-emerald-600 text-white hover:bg-emerald-500"
           }`}
         >
-          {running ? "Durdur" : "Başlat"}
+          {running ? t("botDetail.stop") : t("botDetail.start")}
         </button>
         <Link
           to={`/bots/${bot.config.id}`}
           className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
         >
-          Detay
+          {t("botCard.detail")}
         </Link>
       </div>
     </div>

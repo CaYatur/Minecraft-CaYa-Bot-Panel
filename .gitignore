@@ -5,6 +5,9 @@ node_modules/
 dist/
 web/dist/
 server/dist/
+release/
+release2/
+dist-electron/
 
 # runtime data (kalıcı veriler repoya girmez)
 data/

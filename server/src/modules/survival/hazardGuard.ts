@@ -6,11 +6,11 @@ import { v3 } from "../build/vec3util";
 
 export interface HazardGuardConfig {
   enabled: boolean;
-  /** Ateş/lav kaçış yarıçapı */
+  /** Ateş/lav fleeing yarıçapı */
   escapeRadius: number;
-  /** Su bulunca söndür / lavdan çık */
+  /** Su bulunca söndür / exit lava */
   seekWater: boolean;
-  /** Envanterde water_bucket varsa acil dök (ateş üstünde) */
+  /** Inventory has insufficient water_bucket varsa acil dök (ateş üstünde) */
   useWaterBucket: boolean;
 }
 
@@ -31,8 +31,8 @@ export interface HazardGuardState {
 
 /**
  * Ateş / lav / magma koruması (otomatik):
- * - lavdaysa çık (jump + en yakın güvenli blok)
- * - yanıyorsa suya koş veya kovayla sön
+ * - lavdaysa çık (jump + en yakın safe blocks)
+ * - on firesa suya koş veya kovayla sön
  * - altta magma/ateş varsa kaç
  */
 export class HazardGuardService {
@@ -106,15 +106,15 @@ export class HazardGuardService {
     this.state.active = danger;
 
     if (!danger) {
-      if (this.state.action && this.state.action !== "güvenli") {
-        this.state.action = "güvenli";
+      if (this.state.action && this.state.action !== "safe") {
+        this.state.action = "safe";
       }
       return;
     }
 
-    // 1) Lav içinde — hemen yukarı/yan kaç
+    // 1) Lav forde — hemen yukarı/yan kaç
     if (inLava) {
-      this.state.action = "lavdan çık";
+      this.state.action = "exit lava";
       try {
         bot.setControlState("jump", true);
         bot.setControlState("forward", true);
@@ -124,7 +124,7 @@ export class HazardGuardService {
       }
       if (Date.now() - this.lastLog > 3000) {
         this.lastLog = Date.now();
-        this.log().warn("Lav koruması", "lavdayım — çıkış");
+        this.log().warn("Lava guard", "in lava — exiting");
       }
     }
 
@@ -133,21 +133,21 @@ export class HazardGuardService {
       const used = await this.tryWaterBucket(bot);
       if (used) {
         this.lastBucket = Date.now();
-        this.state.action = "su kovası ile sön";
-        this.log().info("Tehlike koruması", "water_bucket kullanıldı");
+        this.state.action = "extinguish with water bucket";
+        this.log().info("Hazard guard", "water_bucket used");
       }
     }
 
-    // 3) Path ile güvenli / su noktası
+    // 3) Path ile safe / su noktası
     if (!this.busy && Date.now() - this.lastEscape > 1800) {
       this.lastEscape = Date.now();
       void this.escapeToSafety(bot, cfg, onFire, inLava);
     }
 
-    // lavdan çıktıysa kontrolleri bırak (pathfinder devralır)
+    // exit lavatıysa kontrolleri drop (pathfinder devralır)
     if (!inLava) {
       try {
-        // pathfinder forward kullanır; jump bırak
+        // pathfinder forward kullanır; jump drop
         if (!isInWaterBlock(bot)) bot.setControlState("jump", false);
       } catch {
         /* */
@@ -164,7 +164,7 @@ export class HazardGuardService {
       await bot.equip(bucket, "hand");
       // ayak altına / önüne dök
       const p = bot.entity.position;
-      await bot.look(bot.entity.yaw, 0.9, false); // biraz aşağı
+      await bot.look(bot.entity.yaw, 0.9, false); // slightly down
       await sleep(40);
       await bot.activateItem();
       await sleep(60);
@@ -215,9 +215,9 @@ export class HazardGuardService {
           y: Math.floor(bot.entity.position.y),
           z: Math.floor(bot.entity.position.z + away.z * 6)
         };
-        this.state.action = "rastgele kaçış";
+        this.state.action = "rastgele fleeing";
       } else {
-        this.state.action = onFire ? "suya/güvenliğe koş" : "lavdan uzaklaş";
+        this.state.action = onFire ? "run to water/safe" : "move away from lava";
       }
 
       ensureMovement(this.instance, { allowSprintNow: true });
@@ -233,7 +233,7 @@ export class HazardGuardService {
         await sleep(120);
       }
     } catch (e) {
-      this.log().debug("Tehlike kaçışı", e instanceof Error ? e.message : String(e));
+      this.log().debug("Hazard flee", e instanceof Error ? e.message : String(e));
     } finally {
       try {
         bot.pathfinder.setGoal(null);

@@ -11,7 +11,7 @@ export interface BucketScoopConfig {
   enabled: boolean;
   scoopWater: boolean;
   scoopLava: boolean;
-  /** tarama yarıçapı (blok) */
+  /** tarama yarıçapı (blocks) */
   radius: number;
   /** denemeler arası ms */
   cooldownMs: number;
@@ -64,16 +64,16 @@ export class BucketScoopService {
     if (!cfg.scoopWater && !cfg.scoopLava) return;
     if (Date.now() - this.lastAt < cfg.cooldownMs) return;
 
-    // düşerken / dövüş / yanıyorken uğraşma (silah elini bozma)
+    // düşerken / combat / on fireken uğraşma (silah elini bozma)
     if (!this.isSafe(bot)) return;
 
     const empty = countItemName(bot, "bucket");
     if (empty < 1) return;
 
-    // MLG geri-al kuyruğu doluysa (su) çakışma — FallGuard reclaim etsin
+    // MLG reclaim kuyruğu doluysa (su) çakışma — FallGuard reclaim etsin
     try {
       const fg = this.instance.survival?.getFallGuardState?.();
-      if (fg?.lastAction?.includes("geri-al") && fg.lastAction.includes("water")) {
+      if (fg?.lastAction?.includes("reclaim") && fg.lastAction.includes("water")) {
         // yumuşak: reclaim aktifken scoop yok
         if (fg.active || fg.falling) return;
       }

@@ -93,9 +93,9 @@ export class BotInstance extends EventEmitter {
       (text) => {
         if (this.bot && this.status === "online") {
           this.bot.chat(text);
-          this.log.debug(`Sohbete gönderildi: ${text}`);
+          this.log.debug(`Sent to chat: ${text}`);
         } else {
-          this.log.warn("Bot çevrimdışı — sohbet mesajı gönderilemedi", text);
+          this.log.warn("Bot offline — chat message could not be sent", text);
         }
       },
       () => this.config.chat.minMessageIntervalMs,
@@ -110,7 +110,7 @@ export class BotInstance extends EventEmitter {
       });
     });
     this.tasks.on("taskDone", (s: TaskSummary) => {
-      this.log.success(`Görev tamamlandı: ${s.label}`);
+      this.log.success(`Task completed: ${s.label}`);
       this.emit("taskEvent", {
         botId: this.config.id,
         kind: "done" as const,
@@ -122,7 +122,7 @@ export class BotInstance extends EventEmitter {
       });
     });
     this.tasks.on("taskFailed", (s: TaskSummary, err: string) => {
-      this.log.error(`Görev başarısız: ${s.label}`, err);
+      this.log.error(`Task failed: ${s.label}`, err);
       this.emit("taskEvent", {
         botId: this.config.id,
         kind: "failed" as const,
@@ -136,7 +136,7 @@ export class BotInstance extends EventEmitter {
     });
   }
 
-  /** Menzildeki oyuncular (entity varsa mesafe; yoksa tab-only). */
+  /** Menzildeki oyuncular (entity varsa distance; yoksa tab-only). */
   getNearbyPlayers(maxDist = 48): Array<{
     username: string;
     distance: number | null;
@@ -184,7 +184,7 @@ export class BotInstance extends EventEmitter {
     if (!force && key === this.lastNearbyKey) return;
     this.lastNearbyKey = key;
     this.emit("nearby", { botId: this.config.id, players: list });
-    // tab isimleri join/leave için
+    // tab isimleri join/leave for
     this.emit("tabPlayers", { botId: this.config.id, names: Object.keys(this.bot?.players ?? {}).filter((n) => n !== this.bot?.username) });
   }
 
@@ -217,7 +217,7 @@ export class BotInstance extends EventEmitter {
     }
     this.teardownBot();
     this.setStatus("stopped");
-    this.log.info("Bot durduruldu");
+    this.log.info("Bot stopped");
   }
 
   /** called by manager before deleting the instance */
@@ -230,25 +230,11 @@ export class BotInstance extends EventEmitter {
     this.limiter.enqueue(text);
   }
 
-  /** Takip/goto/saldırı hedefi botun kendisi mi? */
-  isSelfPlayerName(name: string | undefined | null): boolean {
-    if (!name?.trim()) return false;
-    const n = name.trim().toLowerCase();
-    if (n === this.config.username.toLowerCase()) return true;
-    try {
-      const live = this.bot?.username?.toLowerCase();
-      if (live && n === live) return true;
-    } catch {
-      /* */
-    }
-    return false;
-  }
-
   get chatQueueLength(): number {
     return this.limiter.length;
   }
 
-  /** modules (combat vb.) için paylaşılan logger — sohbete asla yazmaz (İ1) */
+  /** modules (combat vb.) for paylaşılan logger — sohbete asla yazmaz (İ1) */
   getLogger(): BotLogger {
     return this.log;
   }
@@ -267,15 +253,12 @@ export class BotInstance extends EventEmitter {
   }
 
   /**
-   * Bot bağlı kalır; tüm görev / hareket / dövüş companion / inşaat / pathfinder temizlenir.
+   * Bot bağlı kalır; tüm görev / hareket / combat companion / inşaat / pathfinder temizlenir.
    * Takılma / bug sonrası sunucu kapat-aç yerine panelden kurtarma.
    */
-  resetAllWork(reason = "panelden tüm işler sıfırlandı") {
-    try {
-      this.tasks.resume();
-    } catch {
-      /* */
-    }
+  resetAllWork(reason = "all work reset from panel") {
+    // cancelAll zaten held durumunu temizler. Önce resume() çağırmak kuyruğun
+    // bir tick çalışmasına yol açıp cancelled edilen görevi yeniden başlatabiliyordu.
     try {
       this.tasks.cancelAll(reason);
     } catch {
@@ -322,6 +305,12 @@ export class BotInstance extends EventEmitter {
         /* */
       }
       try {
+        const digBot = bot as unknown as { stopDigging?(): void };
+        digBot.stopDigging?.();
+      } catch {
+        /* */
+      }
+      try {
         bot.clearControlStates();
       } catch {
         /* */
@@ -337,6 +326,12 @@ export class BotInstance extends EventEmitter {
           /* */
         }
         try {
+          const digBot = bot as unknown as { stopDigging?(): void };
+          digBot.stopDigging?.();
+        } catch {
+          /* */
+        }
+        try {
           bot.clearControlStates();
         } catch {
           /* */
@@ -346,7 +341,7 @@ export class BotInstance extends EventEmitter {
       setTimeout(reClear, 450);
     }
 
-    this.log.info("Tüm işler sıfırlandı (soft-reset)", reason);
+    this.log.info("All work reset (soft-reset)", reason);
     // görev paneli / durum
     this.emit("task", {
       botId: this.config.id,
@@ -390,13 +385,9 @@ export class BotInstance extends EventEmitter {
       }
       case "goto-player": {
         const player = str(action.player, "player");
-        if (this.isSelfPlayerName(player)) {
-          this.log.warn(`goto-player reddedildi: hedef botun kendisi (${player})`);
-          return null;
-        }
         const range = clampRange(action.range ?? 2);
         return this.tasks.enqueue(
-          { type, label: `oyuncuya git: ${player}`, priority: PRIORITY.USER, params: { player, range } },
+          { type, label: `goto player: ${player}`, priority: PRIORITY.USER, params: { player, range } },
           () => (token, report) => runGotoPlayer(this, player, range, token, report)
         );
       }
@@ -407,53 +398,35 @@ export class BotInstance extends EventEmitter {
           return null;
         }
         const player = str(action.player, "player");
-        if (this.isSelfPlayerName(player)) {
-          this.log.warn(`follow reddedildi: bot kendisini takip edemez (${player})`);
-          return null;
-        }
         const distance = clampRange(action.distance ?? 3);
         this.combat.setFollow(player, true, distance);
         return this.tasks.currentSummary?.type === "follow" ? this.tasks.currentSummary : null;
       }
       case "stop":
         stopMovement(this);
-        this.combat.clearCompanion("kullanıcı stop");
-        this.log.info("Hareket ve görev kuyruğu durduruldu (kullanıcı)");
+        this.combat.clearCompanion("user stop");
+        this.log.info("Movement and task queue stopped (user)");
         return null;
-      // Bug / takılma: bot bağlı kalsın, tüm işleri bırak (sunucu restart gerekmez)
+      // Bug / takılma: bot bağlı kalsın, tüm işleri drop (sunucu restart gerekmez)
       case "reset-work":
       case "reset-all":
       case "işleri-sıfırla":
       case "soft-reset":
-        this.resetAllWork(String(action.reason ?? "panelden tüm işler sıfırlandı"));
+        this.resetAllWork(String(action.reason ?? "all work reset from panel"));
         return null;
       // yakındaki oyuncular — toggle companion
       case "social-follow": {
         const enabled = action.enabled !== false && action.enabled !== "false";
-        const player = str(action.player, "player");
-        if (enabled && this.isSelfPlayerName(player)) {
-          this.log.warn(`social-follow reddedildi: bot kendisini takip edemez (${player})`);
-          return null;
-        }
-        this.combat.setFollow(player, enabled, action.distance != null ? Number(action.distance) : undefined);
+        this.combat.setFollow(str(action.player, "player"), enabled, action.distance != null ? Number(action.distance) : undefined);
         return null;
       }
       case "social-attack": {
         const enabled = action.enabled !== false && action.enabled !== "false";
-        const player = str(action.player, "player");
-        if (enabled && this.isSelfPlayerName(player)) {
-          this.log.warn(`social-attack reddedildi: bot kendisine saldıramaz (${player})`);
-          return null;
-        }
-        this.combat.setAttack(player, enabled);
+        this.combat.setAttack(str(action.player, "player"), enabled);
         return null;
       }
       case "social-protect": {
         const enabled = action.enabled !== false && action.enabled !== "false";
-        if (enabled && this.isSelfPlayerName(str(action.player, "player"))) {
-          this.log.warn(`social-protect reddedildi: bot kendisini koruyamaz (${action.player})`);
-          return null;
-        }
         const wl = Array.isArray(action.whitelist)
           ? (action.whitelist as unknown[]).map(String)
           : typeof action.whitelist === "string"
@@ -483,7 +456,7 @@ export class BotInstance extends EventEmitter {
         return null;
       }
       case "protect-settings": {
-        // dövüş paneli — koruma listesini bozmadan ayar
+        // combat paneli — koruma listesini bozmadan ayar
         const wl = Array.isArray(action.whitelist)
           ? (action.whitelist as unknown[]).map(String)
           : typeof action.whitelist === "string"
@@ -510,7 +483,7 @@ export class BotInstance extends EventEmitter {
         this.sendChat(text);
         return null;
       }
-      // ---- Faz 6 dövüş --------------------------------------------------------
+      // ---- Faz 6 combat --------------------------------------------------------
       case "attack": {
         // enabled false → saldırı toggle kapat; true/yok → başlat (toggle panel)
         if (action.enabled === false || action.enabled === "false") {
@@ -544,13 +517,34 @@ export class BotInstance extends EventEmitter {
       // ---- Faz 8 gather --------------------------------------------------------
       case "collect-wood":
       case "odun-topla":
-        return this.gather.enqueueCollectWood(Number(action.count ?? 16), action.logType ? String(action.logType) : undefined);
+        return this.gather.enqueueCollectWood(
+          Number(action.count ?? 16),
+          action.logType ? String(action.logType) : undefined,
+          PRIORITY.USER,
+          action.countMode === "add" ? "add" : "target"
+        );
+      case "collect":
+      case "collect-item":
+      case "collect_item":
+      case "collect-block":
+        return this.gather.enqueueCollectBlock(
+          String(action.item ?? action.block ?? action.name ?? ""),
+          Number(action.count ?? 8),
+          PRIORITY.USER,
+          action.countMode === "add" ? "add" : "target"
+        );
       case "collect-drops":
       case "eşya-topla":
         return this.gather.enqueueCollectDrops(action.filter ? String(action.filter) : undefined, Number(action.radius ?? 16));
       case "mine":
       case "maden-topla":
-        return this.gather.enqueueMine(String(action.ore ?? "iron"), Number(action.count ?? 8), action.mode === "utility" ? "utility" : "legit");
+        return this.gather.enqueueMine(
+          String(action.ore ?? "iron"),
+          Number(action.count ?? 8),
+          action.mode === "utility" ? "utility" : "legit",
+          PRIORITY.USER,
+          action.countMode === "add" ? "add" : "target"
+        );
       // ---- Faz 9 craft ---------------------------------------------------------
       case "craft":
       case "üret":
@@ -558,10 +552,28 @@ export class BotInstance extends EventEmitter {
       // ---- Faz 10 depo ---------------------------------------------------------
       case "deposit":
       case "depoya-bırak":
+      case "depoya-drop":
         return this.enqueueDeposit(String(action.filter ?? ""));
       case "withdraw":
       case "depodan-al":
         return this.enqueueWithdraw(String(action.item ?? ""), Number(action.count ?? 1));
+      case "drop-items":
+      case "drop_items":
+      case "discard-item":
+      case "discard_items":
+      case "eşya-at":
+        return this.enqueueDropItems({
+          item: String(action.item ?? action.name ?? ""),
+          count: Number(action.count ?? 1),
+          mode:
+            action.dropMode === "all" || action.dropMode === "keep"
+              ? action.dropMode
+              : "count",
+          match: action.match === "contains" ? "contains" : "exact",
+          respectKeepItems: action.respectKeepItems !== false && action.respectKeepItems !== "false",
+          failIfMissing: action.failIfMissing === true || action.failIfMissing === "true",
+          requireCount: action.requireCount === true || action.requireCount === "true"
+        });
       case "fetch":
       case "getir":
         return this.enqueueFetch(String(action.item ?? ""), Number(action.count ?? 1), String(action.player ?? action.kime ?? ""));
@@ -620,21 +632,21 @@ export class BotInstance extends EventEmitter {
         this.build.stopBuild("panel");
         return null;
       default:
-        throw new Error(`Bilinmeyen aksiyon tipi: ${type || "(boş)"}`);
+        throw new Error(`Unknown action type: ${type || "(empty)"}`);
     }
   }
 
   private enqueueDeposit(filter: string) {
     return this.tasks.enqueue(
-      { type: "deposit", label: `depoya bırak${filter ? `: ${filter}` : ""}`, priority: PRIORITY.USER, params: { filter }, requeueOnPreempt: true },
+      { type: "deposit", label: `deposit${filter ? `: ${filter}` : ""}`, priority: PRIORITY.USER, params: { filter }, requeueOnPreempt: true },
       () => async (token, report) => {
         const bot = this.bot;
-        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
-        report({ done: 0, total: 1, label: "sandık aranıyor" });
+        if (!bot || this.status !== "online") throw new Error("Bot offline");
+        report({ done: 0, total: 1, label: "looking for chest" });
         const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "trapped_chest" || b.name === "barrel", maxDistance: 32 });
-        if (!chest) throw new Error("Yakında sandık yok — önce sandık açarak world-memory'ye kaydedin");
+        if (!chest) throw new Error("No nearby chest — open a chest first so world-memory can store it");
         await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
         const win = await bot.openContainer(chest);
         const keep = this.config.inventory.keepItems;
         const items = bot.inventory.items().filter((i) => !keep.includes(i.name) && (!filter || i.name.includes(filter)));
@@ -668,54 +680,154 @@ export class BotInstance extends EventEmitter {
       { type: "withdraw", label: `depodan al: ${item}×${count}`, priority: PRIORITY.USER, params: { item, count }, requeueOnPreempt: true },
       () => async (token, report) => {
         const bot = this.bot;
-        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
-        report({ done: 0, total: 1, label: "sandık" });
+        if (!bot || this.status !== "online") throw new Error("Bot offline");
+        report({ done: 0, total: 1, label: "chest" });
         const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "barrel", maxDistance: 32 });
-        if (!chest) throw new Error("Yakında sandık yok");
+        if (!chest) throw new Error("No nearby chest");
         await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
         const win = await bot.openContainer(chest);
         try {
           const id = bot.registry.itemsByName[item]?.id;
-          if (id == null) throw new Error(`Eşya yok: ${item}`);
+          if (id == null) throw new Error(`Item missing: ${item}`);
           const w = win as unknown as { withdraw?: (t: number, m: null, c: number) => Promise<void> };
           if (w.withdraw) await w.withdraw(id, null, count);
-          else throw new Error("Sandık withdraw API yok");
+          else throw new Error("Chest withdraw API unavailable");
         } finally {
           win.close();
         }
-        report({ done: 1, total: 1, label: "alındı" });
+        report({ done: 1, total: 1, label: "withdrawn" });
+      }
+    );
+  }
+
+  private enqueueDropItems(options: {
+    item: string;
+    count: number;
+    mode: "count" | "all" | "keep";
+    match: "exact" | "contains";
+    respectKeepItems: boolean;
+    failIfMissing: boolean;
+    requireCount: boolean;
+  }) {
+    const requestedItem = options.item.replace(/^minecraft:/, "").trim().toLowerCase();
+    if (!requestedItem) throw new Error("Item name required to drop");
+
+    const count = Math.max(0, Math.floor(Number.isFinite(options.count) ? options.count : 0));
+    if (options.mode !== "all" && count < 0) throw new Error("Item count must be 0 or greater");
+
+    const labelMode = options.mode === "all" ? "all" : options.mode === "keep" ? `${count} drop` : `${count} at`;
+    return this.tasks.enqueue(
+      {
+        type: "drop-items",
+        label: `drop item: ${requestedItem} (${labelMode})`,
+        priority: PRIORITY.USER,
+        params: { ...options, item: requestedItem, count },
+        // Eşya atmak geri alınamaz; savunma görevi keserse otomatik tekrar çalıştırma.
+        requeueOnPreempt: false
+      },
+      () => async (token, report) => {
+        const bot = this.bot;
+        if (!bot || this.status !== "online") throw new Error("Bot offline");
+
+        const matchesName = (name: string) => {
+          const normalized = name.replace(/^minecraft:/, "").toLowerCase();
+          return options.match === "contains" ? normalized.includes(requestedItem) : normalized === requestedItem;
+        };
+        const isProtectedSlot = (slot: number) => slot < 9 || slot === 45;
+        const isKeepProtected = (name: string) =>
+          options.respectKeepItems &&
+          this.config.inventory.keepItems.some((keep) => {
+            const normalized = keep.replace(/^minecraft:/, "").trim().toLowerCase();
+            return Boolean(normalized) && (normalized === name.toLowerCase() || name.toLowerCase().includes(normalized));
+          });
+        const eligible = () =>
+          bot.inventory
+            .items()
+            .filter((stack) => !isProtectedSlot(stack.slot) && matchesName(stack.name) && !isKeepProtected(stack.name));
+
+        const initial = eligible();
+        const available = initial.reduce((sum, stack) => sum + stack.count, 0);
+        const protectedMatches = bot.inventory
+          .items()
+          .filter((stack) => matchesName(stack.name) && (isProtectedSlot(stack.slot) || isKeepProtected(stack.name)))
+          .reduce((sum, stack) => sum + stack.count, 0);
+
+        if (available <= 0) {
+          if (options.failIfMissing) {
+            const suffix = protectedMatches > 0 ? ` (${protectedMatches} kept on equipment/keep list)` : "";
+            throw new Error(`No droppable ${requestedItem}${suffix}`);
+          }
+          report({ done: 0, total: 0, label: `${requestedItem}: nothing to drop` });
+          return;
+        }
+
+        const planned =
+          options.mode === "all"
+            ? available
+            : options.mode === "keep"
+              ? Math.max(0, available - count)
+              : Math.min(available, count);
+
+        if (options.mode === "count" && options.requireCount && available < count) {
+          throw new Error(`Not enough ${requestedItem} in inventory (${available}/${count}); nothing was dropped`);
+        }
+        if (planned <= 0) {
+          report({ done: 0, total: 0, label: `${requestedItem}: keep amount already satisfied` });
+          return;
+        }
+
+        let dropped = 0;
+        report({ done: 0, total: planned, label: `${requestedItem} preparing` });
+        while (dropped < planned) {
+          if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+          const stack = eligible()[0];
+          if (!stack) break;
+          const amount = Math.min(stack.count, planned - dropped);
+          try {
+            await bot.toss(stack.type, stack.metadata ?? null, amount);
+          } catch (error) {
+            throw new Error(`Could not drop item (${stack.name}×${amount}): ${error instanceof Error ? error.message : String(error)}`);
+          }
+          dropped += amount;
+          report({ done: dropped, total: planned, label: `${requestedItem} ${dropped}/${planned} dropped` });
+          await bot.waitForTicks(1);
+        }
+
+        if (dropped < planned) {
+          throw new Error(`Drop interrupted (${dropped}/${planned})`);
+        }
       }
     );
   }
 
   private enqueueFetch(item: string, count: number, player: string) {
     return this.tasks.enqueue(
-      { type: "fetch", label: `getir: ${item}×${count} → ${player || "?"}`, priority: PRIORITY.USER, params: { item, count, player }, requeueOnPreempt: true },
+      { type: "fetch", label: `fetch: ${item}×${count} → ${player || "?"}`, priority: PRIORITY.USER, params: { item, count, player }, requeueOnPreempt: true },
       () => async (token, report) => {
-        report({ done: 0, total: 3, label: "temin" });
+        report({ done: 0, total: 3, label: "prepare" });
         const bot = this.bot;
-        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
-        // Nested enqueue beklemez — elde varsa devam; yoksa net hata (kullanıcı önce mine/craft/withdraw yapsın)
+        if (!bot || this.status !== "online") throw new Error("Bot offline");
+        // Nested enqueue does not wait — continue if held; otherwise clear error (mine/craft/withdraw first)
         const have = bot.inventory.items().filter((i) => i.name.includes(item)).reduce((s, i) => s + i.count, 0);
         if (have < count) {
           throw new Error(
-            `Envanterde ${item} yetersiz (${have}/${count}). Önce depodan-al / maden / üret, sonra getir.`
+            `Not enough ${item} in inventory (${have}/${count}). Withdraw / mine / craft first, then fetch.`
           );
         }
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
-        report({ done: 1, total: 3, label: "oyuncuya git" });
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+        report({ done: 1, total: 3, label: "goto player" });
         if (player) {
           await runGotoPlayer(this, player, 2, token, report);
         } else {
-          throw new Error("Getir için hedef oyuncu adı gerekli");
+          throw new Error("Target player name required for fetch");
         }
-        report({ done: 2, total: 3, label: "bırak" });
+        report({ done: 2, total: 3, label: "drop" });
         const stack = bot.inventory.items().find((i) => i.name.includes(item));
-        if (!stack) throw new Error(`Eşya kayboldu: ${item}`);
+        if (!stack) throw new Error(`Item disappeared: ${item}`);
         try {
           await bot.toss(stack.type, null, Math.min(count, stack.count));
         } catch (e) {
-          throw new Error(`Toss başarısız: ${e instanceof Error ? e.message : e}`);
+          throw new Error(`Toss failed: ${e instanceof Error ? e.message : e}`);
         }
         report({ done: 3, total: 3, label: "getir bitti" });
       }
@@ -727,14 +839,14 @@ export class BotInstance extends EventEmitter {
   private connect() {
     const server = this.getServer(this.config.serverId);
     if (!server) {
-      this.runtime.lastError = "Sunucu profili bulunamadı — bot bir sunucuya bağlanamıyor.";
+      this.runtime.lastError = "Server profile not found — bot cannot connect to a server.";
       this.log.error(this.runtime.lastError);
       this.setStatus("error");
       return;
     }
 
     this.setStatus("connecting");
-    this.log.info(`Bağlanılıyor: ${server.host}:${server.port} (sürüm: ${server.version})`);
+    this.log.info(`Connecting: ${server.host}:${server.port} (version: ${server.version})`);
 
     let bot: Bot;
     try {
@@ -750,7 +862,7 @@ export class BotInstance extends EventEmitter {
     } catch (err) {
       const msg = friendlyError(err);
       this.runtime.lastError = msg;
-      this.log.error("Bağlantı başlatılamadı", msg);
+      this.log.error("Could not start connection", msg);
       // unsupported-version style errors won't fix themselves — don't loop
       if (/sürüm|version/i.test(msg)) {
         this.wantsRunning = false;
@@ -768,17 +880,17 @@ export class BotInstance extends EventEmitter {
 
   private hookBotEvents(bot: Bot) {
     bot.once("login", () => {
-      this.log.info("Sunucuya giriş yapıldı, spawn bekleniyor…");
+      this.log.info("Logged in to server, waiting for spawn…");
     });
 
-    let invHooked = false; // spawn her respawn'da tetiklenir — kancalar bot başına BİR kez
+    let invHooked = false; // spawn fires on every respawn — hooks once per bot
     bot.on("spawn", () => {
       this.reconnectAttempt = 0;
       this.runtime.kickReason = undefined;
       this.runtime.lastError = undefined;
       this.updateDimension();
       this.setStatus("online");
-      this.log.success("Bot dünyaya girdi (spawn)");
+      this.log.success("Bot entered the world (spawn)");
       this.emitVitals();
       this.startPositionLoop();
       if (!invHooked) {
@@ -793,7 +905,7 @@ export class BotInstance extends EventEmitter {
         // ölüm sonrası yeniden doğuş — combat attach tekrarlanmaz; koruma/takip resume
         this.combat.onRespawnOrSpawn();
       }
-      this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
+      this.scheduleInventorySync(); // full resync after respawn (TODO §12)
       this.emit("spawned", { botId: this.config.id });
       // yakındaki oyuncular paneli hemen dolsun
       setTimeout(() => this.emitNearby(true), 500);
@@ -801,7 +913,7 @@ export class BotInstance extends EventEmitter {
 
     bot.on("respawn", () => {
       this.updateDimension();
-      this.log.info("Yeniden doğuldu / boyut değişti");
+      this.log.info("Respawned / dimension changed");
       // bazı sunucularda spawn'dan önce respawn gelir
       this.combat.onRespawnOrSpawn();
     });
@@ -820,16 +932,16 @@ export class BotInstance extends EventEmitter {
 
     // death: CombatService kaydı + ölüm waypoint (BotManager deathAt dinler)
     bot.on("death", () => {
-      this.log.warn("Bot öldü", `Konum: ${fmtPos(this.runtime.position)}`);
+      this.log.warn("Bot died", `Position: ${fmtPos(this.runtime.position)}`);
     });
 
     bot.on("kicked", (reason: unknown) => {
       const text = chatComponentToText(reason) || String(reason);
       this.runtime.kickReason = text;
-      this.log.error("Sunucudan atıldı (kick)", text);
+      this.log.error("Kicked from server", text);
       this.setStatus("kicked");
       // premium-doğrulama kick'inde tekrar denemek anlamsız
-      if (text.includes("premium doğrulama")) {
+      if (text.includes("premium verification")) {
         this.wantsRunning = false;
       }
     });
@@ -837,17 +949,17 @@ export class BotInstance extends EventEmitter {
     bot.on("error", (err: Error) => {
       const msg = friendlyError(err);
       this.runtime.lastError = msg;
-      this.log.error("Bağlantı hatası", msg);
+      this.log.error("Connection error", msg);
       if (this.status !== "kicked") this.setStatus("error");
       this.scheduleReconnect();
     });
 
     bot.on("end", (reason: string) => {
-      this.log.info(`Bağlantı kapandı (${reason || "bilinmiyor"})`);
+      this.log.info(`Connection closed (${reason || "unknown"})`);
       if (this.tasks.currentSummary) {
-        this.log.warn("Bağlantı koptuğu için aktif görevler iptal edildi (görev kalıcılığı: Faz 10)");
+        this.log.warn("Active tasks cancelled due to lost connection (task persistence: Phase 10)");
       }
-      this.tasks.cancelAll("bağlantı koptu");
+      this.tasks.cancelAll("connection lost");
       this.teardownBot();
       if (this.wantsRunning) {
         this.scheduleReconnect();
@@ -862,7 +974,7 @@ export class BotInstance extends EventEmitter {
      * 2) `message` + sender UUID (1.19+ playerChat paketi 4. arg)
      * 3) JSON component (chat.type.text / clickEvent /msg)
      * 4) düz metin regex + öğrenilmiş isimler
-     * Dedup: aynı oyuncu+metin 2 sn içinde iki kez yazılmaz.
+     * Dedup: aynı oyuncu+metin 2 sn forde iki kez yazılmaz.
      */
     bot.on("chat", (username: string, message: string) => {
       if (!username || message == null) return;
@@ -902,7 +1014,7 @@ export class BotInstance extends EventEmitter {
 
       const plainClean = stripColorCodes(plain);
 
-      // 0) AuthMe / hoş geldin / join — her zaman sunucu (tıklanabilir isim olsa bile)
+      // 0) AuthMe / hoş geldin / join — her zaman sunucu (tıklmainbilir isim olsa bile)
       if (isLikelySystemMessage(plainClean)) {
         this.ingestServerChat(plain, ansi);
         return;
@@ -1071,7 +1183,7 @@ export class BotInstance extends EventEmitter {
 
     // ANSI: yalnızca tam satır (isim/rütbe içeriyorsa) sakla; yoksa panoda isim kaybolmasın
     const ansiFull = ansi && lineIncludesUsername(ansi, username) ? ansi : undefined;
-    // gövde renkleri için ayrı alan yok — text düz; prefix ayrı
+    // gövde renkleri for ayrı alan yok — text düz; prefix ayrı
 
     const entry: ChatEntry = {
       ts: Date.now(),
@@ -1140,7 +1252,7 @@ export class BotInstance extends EventEmitter {
     const delay = RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
     this.reconnectAttempt++;
     this.setStatus("reconnecting");
-    this.log.info(`Yeniden bağlanma ${Math.round(delay / 1000)} sn sonra (deneme ${this.reconnectAttempt})`);
+    this.log.info(`Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.wantsRunning) this.connect();
@@ -1183,7 +1295,7 @@ export class BotInstance extends EventEmitter {
       const p = bot.entity.position;
       this.runtime.position = { x: round2(p.x), y: round2(p.y), z: round2(p.z) };
 
-      // ping'i ~2 sn'de bir güncelle (ayrı timer açmamak için aynı döngüde)
+      // ping'i ~2 sn'de bir güncelle (ayrı timer açmamak for aynı döngüde)
       if (++this.pingCounter % 8 === 0) {
         const ping = bot.players?.[bot.username]?.ping;
         if (typeof ping === "number" && ping !== this.runtime.ping) {
@@ -1206,7 +1318,7 @@ export class BotInstance extends EventEmitter {
     }, POSITION_EMIT_MS);
   }
 
-  // ---- envanter (Faz 5) ---------------------------------------------------------
+  // ---- inventory (Faz 5) ---------------------------------------------------------
 
   private hookInventory(bot: Bot) {
     const push = () => this.scheduleInventorySync();
@@ -1224,7 +1336,7 @@ export class BotInstance extends EventEmitter {
       try {
         this.lastInventory = snapshotInventory(bot);
       } catch (err) {
-        this.log.debug("Envanter okunamadı", String(err));
+        this.log.debug("Could not read inventory", String(err));
         return;
       }
       this.emit("inventory", { botId: this.config.id, inventory: this.lastInventory });
@@ -1232,7 +1344,7 @@ export class BotInstance extends EventEmitter {
       const used = usedMainSlots(this.lastInventory);
       if (used >= 36 && !this.invWasFull) {
         this.invWasFull = true;
-        this.log.warn("Envanter tamamen doldu (36/36) — toplama görevleri duraklayabilir");
+        this.log.warn("Inventory completely full (36/36) — gathering tasks may pause");
         this.emit("inventoryFull", { botId: this.config.id });
       } else if (used < 36 && this.invWasFull) {
         this.invWasFull = false;
@@ -1252,9 +1364,9 @@ export class BotInstance extends EventEmitter {
           /* zırh yoksa sorun değil */
         }
       }, 2000);
-      this.log.debug("armor-manager yüklendi (en iyi zırhı otomatik giyer)");
+      this.log.debug("armor-manager loaded (auto-equips best armor)");
     } catch (err) {
-      this.log.warn("armor-manager yüklenemedi — otomatik zırh devre dışı", String(err));
+      this.log.warn("armor-manager failed to load — auto armor disabled", String(err));
     }
   }
 
@@ -1283,12 +1395,12 @@ function sanitizeFile(s: string): string {
 }
 function num(v: unknown, field: string): number {
   const n = Number(v);
-  if (!Number.isFinite(n)) throw new Error(`Geçersiz sayı: ${field}`);
+  if (!Number.isFinite(n)) throw new Error(`Invalid number: ${field}`);
   return n;
 }
 function str(v: unknown, field: string): string {
   const s = String(v ?? "").trim();
-  if (!s) throw new Error(`Boş olamaz: ${field}`);
+  if (!s) throw new Error(`Cannot be empty: ${field}`);
   return s;
 }
 function clampRange(v: unknown): number {

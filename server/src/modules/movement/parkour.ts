@@ -21,7 +21,7 @@ export interface ParkourConfig {
   maxGap: ParkourGap;
   /** merdiven parkuru / tırmanma */
   ladderParkour: boolean;
-  /** sprint zorunlu (3–4 blok için) */
+  /** sprint zorunlu (3–4 blok for) */
   sprintJumps: boolean;
 }
 
@@ -42,7 +42,7 @@ function sleep(ms: number) {
 /** circular import yok — parkour kendi Movements kurar */
 function ensureParkourBot(instance: BotInstance): Bot {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
   const anyBot = bot as unknown as { pathfinder?: { setMovements(m: unknown): void; setGoal(g: unknown): void } };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   const cfg = instance.config.movement;
@@ -70,7 +70,7 @@ function clearControls(bot: Bot) {
   }
 }
 
-// caya-rubberband-fix-v1: Pathfinder ile manuel kontrol arasında tek sahipli güvenli devir.
+// caya-rubberband-fix-v1: Pathfinder ile manuel kontrol arasında tek sahipli safe devir.
 const caya_rubberband_fix_v1 = true;
 async function handoffToManualControl(bot: Bot, settleMs = 140): Promise<void> {
   try {
@@ -91,7 +91,7 @@ async function handoffToManualControl(bot: Bot, settleMs = 140): Promise<void> {
     await sleep(20);
   }
 
-  // En az iki fizik tick'i: eski pathfinder kontrol paketlerinin boşalması için.
+  // En az iki fizik tick'i: eski pathfinder kontrol paketlerinin boşalması for.
   await sleep(50);
   clearControls(bot);
 }
@@ -101,7 +101,7 @@ async function alignManualLookAt(bot: Bot, target: ReturnType<typeof v3>): Promi
   try {
     await bot.lookAt(target, false);
   } catch {
-    /* bakış başarısızsa hareket kodu güvenli biçimde devam eder */
+    /* bakış failedsa hareket kodu safe biçimde devam eder */
   }
   await sleep(50);
 }
@@ -110,7 +110,7 @@ async function alignManualYaw(bot: Bot, yaw: number, pitch = 0): Promise<void> {
   try {
     await bot.look(yaw, pitch, false);
   } catch {
-    /* bakış başarısızsa hareket kodu güvenli biçimde devam eder */
+    /* bakış failedsa hareket kodu safe biçimde devam eder */
   }
   await sleep(50);
 }
@@ -150,7 +150,7 @@ export function measureGapBlocks(
 }
 
 /**
- * Botun baktığı yönde / hedefe doğru 2–4 blok parkour inişi ara.
+ * Botun baktığı yönde / targete doğru 2–4 blok parkour inişi ara.
  */
 export function findGapLanding(
   bot: Bot,
@@ -173,7 +173,7 @@ export function findGapLanding(
   // 2..maxGap blok önde iniş platformu ara (aynı / ±1 y)
   for (let gap = 2; gap <= maxGap; gap++) {
     for (const dy of [0, 1, -1, 2, -2]) {
-      // gap = boşluk; iniş ≈ gap+1 blok merkez mesafesi
+      // gap = boşluk; iniş ≈ gap+1 blok merkez distancesi
       const dist = gap + 0.2;
       for (const side of [0, 0.35, -0.35]) {
         // yan ofset (diagonal parkour)
@@ -244,17 +244,17 @@ export async function executeGapJump(
   await sleep(edgeMs);
   if (token.cancelled) {
     clearControls(bot);
-    throw new Error(token.reason ?? "iptal");
+    throw new Error(token.reason ?? "cancelled");
   }
 
-  // zıpla — kısa basış, sonra bırak
+  // zıpla — kısa basış, sonra drop
   if (g >= 4) await sleep(60);
   bot.setControlState("jump", true);
   await sleep(g >= 4 ? 80 : g === 3 ? 70 : 60);
   bot.setControlState("jump", false);
   if (token.cancelled) {
     clearControls(bot);
-    throw new Error(token.reason ?? "iptal");
+    throw new Error(token.reason ?? "cancelled");
   }
 
   // havada yön tut (daha kontrollü süre)
@@ -266,13 +266,13 @@ export async function executeGapJump(
   while (Date.now() - t0 < airMs && !token.cancelled) {
     const pos = bot.entity.position;
     const vy = bot.entity.velocity?.y ?? 0;
-    // inişi kaçırdı / tehlikeli düşüş — lookAt durdur, MLG'ye bırak
+    // inişi kaçırdı / tehlikeli düşüş — lookAt durdur, MLG'ye drop
     if (pos.y < ly - 1.4 && vy < -0.35) {
       fellPast = true;
       clearControls(bot);
       break;
     }
-    // FallGuard MLG başladıysa parkur bakışını bırak
+    // FallGuard MLG başladıysa parkur bakışını drop
     const fg = instance.survival?.getFallGuardState?.();
     if (fg?.active || (fg?.falling && (fg.predictedDamage ?? 0) >= 2)) {
       fellPast = true;
@@ -280,7 +280,7 @@ export async function executeGapJump(
       break;
     }
     // Havada yaw değiştirme: yön, başlangıç hizası ve hareket momentumu ile korunur.
-    // inişe yaklaştıysa bırak
+    // inişe yaklaştıysa drop
     const d = pos.distanceTo(v3(lx, ly, lz) as never);
     if (d < 1.2 && bot.entity.onGround) break;
     await sleep(40);
@@ -288,13 +288,13 @@ export async function executeGapJump(
 
   clearControls(bot);
   if (fellPast) {
-    instance.getLogger().info("Parkur atlama", "iniş kaçtı — MLG'ye bırakıldı");
+    instance.getLogger().info("Parkour jump", "landing missed — abandoned to MLG");
     await yieldFallToMlg(instance, bot, token);
     return false;
   }
   await sleep(80);
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
   // başarı: iniş bloğuna yakın ve yerde
   const pos = bot.entity.position;
@@ -305,9 +305,9 @@ export async function executeGapJump(
 
   if (landed) {
     report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
-    instance.getLogger().info(`Parkur atlama başarılı`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
+    instance.getLogger().info(`Parkour jump succeeded`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
   } else {
-    instance.getLogger().debug("Parkur atlama zayıf iniş", `gap=${g} d=${Math.hypot(pos.x - lx, pos.z - lz).toFixed(1)}`);
+    instance.getLogger().debug("Parkour jump weak landing", `gap=${g} d=${Math.hypot(pos.x - lx, pos.z - lz).toFixed(1)}`);
   }
   return landed;
 }
@@ -369,7 +369,7 @@ function ladderIntoWall(bot: Bot, lx: number, ly: number, lz: number): { x: numb
 }
 
 /**
- * Düşüş: kontrol bırak, MLG'ye bırak, lookAt yok.
+ * Düşüş: kontrol drop, MLG'ye drop, lookAt yok.
  */
 async function yieldFallToMlg(
   instance: BotInstance,
@@ -417,7 +417,7 @@ function isAborted(token: TaskToken, shouldAbort?: ClimbAbortFn): boolean {
   return false;
 }
 
-/** Pathfinder ile merdiven üstüne çıkmayı dene — takılınca / abort'ta hemen bırak */
+/** Pathfinder ile merdiven üstüne çıkmayı dene — takılınca / abort'ta hemen drop */
 async function climbViaPathfinder(
   instance: BotInstance,
   bot: Bot,
@@ -460,7 +460,7 @@ async function climbViaPathfinder(
     const watch = setInterval(() => {
       if (settled) return;
       if (isAborted(token, shouldAbort)) {
-        instance.getLogger().info("Merdiven path iptal", "hedef değişti / iptal — bırakıldı");
+        instance.getLogger().info("Ladder path cancelled", "target changed / cancelled — abandoned");
         done(false);
         return;
       }
@@ -478,7 +478,7 @@ async function climbViaPathfinder(
         lastY = y;
         lastProgressAt = Date.now();
       } else if (Date.now() - lastProgressAt > 2800) {
-        instance.getLogger().info("Merdiven path stuck", `${(Date.now() - lastProgressAt) / 1000}s ilerleme yok — bırak`);
+        instance.getLogger().info("Merdiven path stuck", `${(Date.now() - lastProgressAt) / 1000}s ilerleme yok — drop`);
         done(false);
       }
     }, 150);
@@ -541,10 +541,10 @@ async function climbManualHold(
       return "ok";
     }
 
-    // hedef artık bu yüksekliği istemiyorsa (oyuncu indi / hedef değişti)
+    // target artık bu yüksekliği istemiyorsa (oyuncu indi / target değişti)
     if (shouldAbort?.()) {
       clearControls(bot);
-      instance.getLogger().info("Merdiven manuel iptal", "hedef artık merdiven gerektirmiyor");
+      instance.getLogger().info("Ladder manual cancelled", "target no longer needs ladder");
       return "abort";
     }
 
@@ -553,7 +553,7 @@ async function climbManualHold(
 
     if ((vy < -0.35 && !stillOnLadder(bot)) || (drop >= 1.4 && !stillOnLadder(bot)) || (drop >= 1.8 && vy < -0.4)) {
       clearControls(bot);
-      instance.getLogger().info("Merdiven düştü", `peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)} — MLG`);
+      instance.getLogger().info("Fell from ladder", `peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)} — MLG`);
       await yieldFallToMlg(instance, bot, token);
       return "fell";
     }
@@ -571,7 +571,7 @@ async function climbManualHold(
       lastProgressAt = Date.now();
       reattachOnce = false;
     } else if (Date.now() - lastProgressAt > 2200) {
-      // bir kez yeniden yapış; olmazsa hemen bırak (takılı kalma yok)
+      // bir kez yeniden yapış; olmazsa hemen drop (takılı kalma yok)
       if (!reattachOnce) {
         reattachOnce = true;
         clearControls(bot);
@@ -587,7 +587,7 @@ async function climbManualHold(
         lastProgressAt = Date.now();
       } else {
         clearControls(bot);
-        instance.getLogger().info("Merdiven stuck", "ilerleme yok — bırakıldı (hedefe kilit yok)");
+        instance.getLogger().info("Ladder stuck", "ilerleme yok — abandoned (targete kilit yok)");
         return "stuck";
       }
     }
@@ -650,7 +650,7 @@ async function exitLadderTop(bot: Bot): Promise<void> {
 }
 
 export interface ClimbLadderOpts {
-  /** true → merdiveni bırak (hedef değişti / oyuncu indi / iptal) */
+  /** true → merdiveni drop (target değişti / oyuncu indi / cancelled) */
   shouldAbort?: ClimbAbortFn;
   /** pathfinder tırmanış üst süre (ms) */
   pathMs?: number;
@@ -660,8 +660,8 @@ export interface ClimbLadderOpts {
 
 /**
  * Merdiven tırman:
- * 1) pathfinder  2) manuel hold  3) düşüş→MLG  4) takılınca/abort'ta hemen bırak
- * shouldAbort: hedef oyuncu indiyse / merdiven gerekmiyorsa true dön
+ * 1) pathfinder  2) manuel hold  3) düşüş→MLG  4) takılınca/abort'ta hemen drop
+ * shouldAbort: target oyuncu indiyse / merdiven gerekmiyorsa true dön
  */
 export async function climbLadderParkour(
   instance: BotInstance,
@@ -685,7 +685,7 @@ export async function climbLadderParkour(
   }
 
   if (isAborted(token, shouldAbort)) {
-    report?.({ done: 1, total: 1, label: "merdiven iptal" });
+    report?.({ done: 1, total: 1, label: "merdiven cancelled" });
     return false;
   }
 
@@ -698,18 +698,18 @@ export async function climbLadderParkour(
 
   const colTopY = ladderColumnTopY(bot, ladder0.x, ladder0.y, ladder0.z);
   let wantY = Math.min(targetY, colTopY);
-  // hedef zaten bu yükseklikte / altındaysa tırmanma
+  // target zaten bu yükseklikte / altındaysa tırmanma
   if (wantY <= p0.y + 0.8) {
     report?.({ done: 1, total: 1, label: "merdiven gerekmiyor" });
     return false;
   }
 
   report?.({ done: 0, total: 1, label: `merdiven → y=${Math.floor(wantY)}` });
-  instance.getLogger().info("Merdiven tırmanış", `sütun üst≈${colTopY} hedef=${wantY.toFixed(1)}`);
+  instance.getLogger().info("Ladder climb", `column top≈${colTopY} target=${wantY.toFixed(1)}`);
 
   const abortClimb = () => {
     if (isAborted(token, shouldAbort)) return true;
-    // canlı hedef Y düştüyse (shouldAbort içinde de olabilir) — ekstra güvenlik yok
+    // canlı target Y düştüyse (shouldAbort forde de olabilir) — ekstra safek yok
     return false;
   };
 
@@ -724,13 +724,13 @@ export async function climbLadderParkour(
   );
   if (isAborted(token, shouldAbort)) {
     clearControls(bot);
-    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
+    report?.({ done: 1, total: 1, label: "merdiven cancelled (target)" });
     return false;
   }
   if (pfOk && bot.entity.position.y >= wantY - 0.8) {
     await exitLadderTop(bot);
     const ok = bot.entity.position.y >= wantY - 1.0;
-    report?.({ done: 1, total: 1, label: ok ? "merdiven OK (path)" : "merdiven kısmi" });
+    report?.({ done: 1, total: 1, label: ok ? "ladder OK (path)" : "ladder partial" });
     if (ok) instance.getLogger().info("Merdiven parkuru tamam", `pathfinder y=${bot.entity.position.y.toFixed(1)}`);
     return ok;
   }
@@ -738,7 +738,7 @@ export async function climbLadderParkour(
   clearControls(bot);
   await sleep(80);
   if (isAborted(token, shouldAbort)) {
-    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
+    report?.({ done: 1, total: 1, label: "merdiven cancelled (target)" });
     return false;
   }
 
@@ -765,39 +765,39 @@ export async function climbLadderParkour(
 
   if (result === "abort" || isAborted(token, shouldAbort)) {
     clearControls(bot);
-    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
+    report?.({ done: 1, total: 1, label: "merdiven cancelled (target)" });
     return false;
   }
   if (result === "fell" || result === "stuck") {
     clearControls(bot);
-    report?.({ done: 1, total: 1, label: result === "fell" ? "merdiven düştü" : "merdiven stuck — bırakıldı" });
+    report?.({ done: 1, total: 1, label: result === "fell" ? "ladder fell" : "merdiven stuck — abandoned" });
     return false;
   }
   if (result !== "ok" || bot.entity.position.y < wantY - 1.0) {
     clearControls(bot);
-    report?.({ done: 1, total: 1, label: "merdiven yarıda" });
+    report?.({ done: 1, total: 1, label: "ladder incomplete" });
     return false;
   }
 
   await sleep(120);
   await exitLadderTop(bot);
   const ok = bot.entity.position.y >= wantY - 1.0;
-  report?.({ done: 1, total: 1, label: ok ? "merdiven OK" : "merdiven kısmi" });
+  report?.({ done: 1, total: 1, label: ok ? "ladder OK" : "ladder partial" });
   if (ok) instance.getLogger().info("Merdiven parkuru tamam", `manuel y=${bot.entity.position.y.toFixed(1)}`);
   return ok;
 }
 
 export interface ParkourGotoOpts {
   /**
-   * Canlı hedef (oyuncu takip/goto). Her turda yenilenir.
-   * null = hedef kayboldu → çık.
+   * Canlı target (oyuncu takip/goto). Her turda yenilenir.
+   * null = target kayboldu → çık.
    */
   liveTarget?: () => { x: number; y: number; z: number } | null;
 }
 
 /**
  * Parkour destekli goto: pathfinder + gap jump + merdiven.
- * liveTarget varsa hedef hareket edince merdiven bırakılır / path yenilenir.
+ * liveTarget varsa target hareket edince merdiven dropılır / path yenilenir.
  */
 export async function runParkourGoto(
   instance: BotInstance,
@@ -810,7 +810,7 @@ export async function runParkourGoto(
   opts?: ParkourGotoOpts
 ): Promise<void> {
   const bot = instance.bot;
-  if (!bot?.entity) throw new Error("Bot çevrimdışı");
+  if (!bot?.entity) throw new Error("Bot offline");
   const cfg = parkourFromMovement(instance.config.movement);
 
   ensureParkourBot(instance);
@@ -836,18 +836,18 @@ export async function runParkourGoto(
   while (!token.cancelled && attempts < maxAttempts) {
     attempts++;
     if (!refreshTarget()) {
-      report({ done: 1, total: 1, label: "parkur hedef kayboldu" });
+      report({ done: 1, total: 1, label: "parkur target kayboldu" });
       return;
     }
 
     const dist = bot.entity.position.distanceTo(v3(gx, gy, gz) as never);
     if (dist <= range + 0.8) {
-      report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
+      report({ done: 1, total: 1, label: "parkour reached target" });
       return;
     }
 
     const yNow = bot.entity.position.y;
-    // merdiven sadece hedef hâlâ anlamlı şekilde yukarıdaysa
+    // merdiven sadece target hâlâ anlamlı şekilde yukarıdaysa
     const needClimb = cfg.ladderParkour && gy > yNow + 2.2 && Date.now() >= ladderCooldownUntil;
     if (needClimb) {
       const fy = Math.floor(yNow);
@@ -869,7 +869,7 @@ export async function runParkourGoto(
             if (!refreshTarget()) return true;
             // oyuncu indiyse / merdiven artık gereksiz
             if (gy <= (bot.entity?.position.y ?? 0) + 1.5) return true;
-            // hedef yatayda uzaklaştı ve yükseklik farkı azaldı
+            // target yatayda uzaklaştı ve yükseklik farkı azaldı
             const horiz = Math.hypot(
               gx - (bot.entity?.position.x ?? 0),
               gz - (bot.entity?.position.z ?? 0)
@@ -882,7 +882,7 @@ export async function runParkourGoto(
         });
         if (!climbed) {
           ladderCooldownUntil = Date.now() + 4000;
-          instance.getLogger().info("Parkur", "merdiven bırakıldı — pathfinder / yeni hedef");
+          instance.getLogger().info("Parkur", "merdiven abandoned — pathfinder / yeni target");
           clearControls(bot);
           await sleep(150);
         } else if ((bot.entity?.position.y ?? 0) > beforeY + 0.8) {
@@ -892,7 +892,7 @@ export async function runParkourGoto(
     }
 
     if (!refreshTarget()) {
-      report({ done: 1, total: 1, label: "parkur hedef kayboldu" });
+      report({ done: 1, total: 1, label: "parkur target kayboldu" });
       return;
     }
 
@@ -901,7 +901,7 @@ export async function runParkourGoto(
       await runPathOnce(instance, goal, token, 20_000);
       if (!refreshTarget()) return;
       if (bot.entity.position.distanceTo(v3(gx, gy, gz) as never) <= range + 1) {
-        report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
+        report({ done: 1, total: 1, label: "parkour reached target" });
         return;
       }
     } catch (e) {
@@ -925,12 +925,12 @@ export async function runParkourGoto(
     }
   }
 
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   refreshTarget();
   if (bot.entity.position.distanceTo(v3(gx, gy, gz) as never) > range + 1.5) {
-    throw new Error("Parkur ile hedefe ulaşılamadı");
+    throw new Error("Could not reach target via parkour");
   }
-  report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
+  report({ done: 1, total: 1, label: "parkour reached target" });
 }
 
 async function runPathOnce(
@@ -973,13 +973,13 @@ async function runPathOnce(
       if (token.cancelled) {
         cleanup();
         stop();
-        reject(new Error(token.reason ?? "iptal"));
+        reject(new Error(token.reason ?? "cancelled"));
       }
     }, 200);
     const deadline = setTimeout(() => {
       cleanup();
       stop();
-      reject(new Error("parkur path zaman aşımı"));
+      reject(new Error("parkour path timeout"));
     }, timeoutMs);
     bot.on("goal_reached", onReached);
     bot.on("path_update", onPath);

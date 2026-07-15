@@ -31,7 +31,7 @@ interface WorldMemoryFile {
 }
 
 /**
- * Ortak dünya hafızası (Faz 10) — sunucu bazlı sandık/cevher notları.
+ * Ortak world hafızası (Faz 10) — sunucu bazlı chest/cevher notları.
  */
 export class WorldMemory {
   private data: WorldMemoryFile = { chests: [], ores: [] };

@@ -1,8 +1,8 @@
 /**
- * Şema blok sınıflandırması — yerleştirilemeyen / çoklu / özel.
+ * Schematic blok sınıflandırması — placeilemeyen / çoklu / özel.
  */
 
-/** Yerleştirme denemesi atlanır (sunucu / bot sınırları) */
+/** Placeme denemesi atlanır (sunucu / bot sınırları) */
 export const SKIP_BLOCKS = new Set([
   "air",
   "cave_air",
@@ -36,15 +36,15 @@ export function isUpperHalf(name: string, props?: Record<string, string | number
   return false;
 }
 
-/** Bed foot/head — mineflayer genelde foot yerleştirir */
+/** Bed foot/head — mineflayer genelde foot placeir */
 export function isBedHead(name: string, props?: Record<string, string | number | boolean>): boolean {
   return name.includes("bed") && props?.part === "head";
 }
 
 export function shouldSkipBlock(name: string, props?: Record<string, string | number | boolean>): string | null {
   const n = name.replace(/^minecraft:/, "");
-  if (SKIP_BLOCKS.has(n)) return "yerleştirilemez";
-  if (isUpperHalf(n, props)) return "üst yarı (alt ile gelir)";
-  if (isBedHead(n, props)) return "yatak başı (ayak ile gelir)";
+  if (SKIP_BLOCKS.has(n)) return "not placeable";
+  if (isUpperHalf(n, props)) return "upper half (comes with bottom)";
+  if (isBedHead(n, props)) return "bed head (comes with foot)";
   return null;
 }

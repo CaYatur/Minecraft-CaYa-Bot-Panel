@@ -14,7 +14,7 @@ export { PanelError };
 
 const BOTS_FILE = "bots.json";
 const SERVERS_FILE = "servers.json";
-const BULK_START_STAGGER_MS = 2_000; // sunucuyu bağlantı seliyle boğmamak için (Faz 2)
+const BULK_START_STAGGER_MS = 2_000; // stagger bulk starts to avoid flooding the server (Faz 2)
 
 export interface CreateBotInput {
   username: string;
@@ -41,11 +41,11 @@ export class BotManager extends EventEmitter {
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
     for (const cfg of configs) this.instantiate(cfg);
-    this.log.info(`${this.servers.length} sunucu profili, ${configs.length} bot tanımı yüklendi`);
+    this.log.info(`${this.servers.length} server profiles, ${configs.length} bot configs loaded`);
 
     const autostart = [...this.bots.values()].filter((b) => b.config.autostart);
     if (autostart.length > 0) {
-      this.log.info(`${autostart.length} bot autostart ile işaretli — kademeli başlatılıyor (İ4)`);
+      this.log.info(`${autostart.length} bot(s) marked autostart — starting gradually (I4)`);
       this.startStaggered(autostart.map((b) => b.config.id));
     }
   }
@@ -61,17 +61,17 @@ export class BotManager extends EventEmitter {
       version: normalizeVersion(input.version),
       note: input.note
     };
-    if (!profile.host) throw new PanelError("Sunucu adresi (host) boş olamaz.");
+    if (!profile.host) throw new PanelError("Server host cannot be empty.");
     this.servers.push(profile);
     void saveJson(SERVERS_FILE, this.servers);
-    this.log.success(`Sunucu profili eklendi: ${profile.name} (${profile.host}:${profile.port})`);
+    this.log.success(`Server profile added: ${profile.name} (${profile.host}:${profile.port})`);
     this.emit("changed");
     return profile;
   }
 
   updateServer(id: string, patch: Partial<Omit<ServerProfile, "id">>): ServerProfile {
     const profile = this.servers.find((s) => s.id === id);
-    if (!profile) throw new PanelError("Sunucu profili bulunamadı.", 404);
+    if (!profile) throw new PanelError("Server profile not found.", 404);
     if (patch.host !== undefined) profile.host = String(patch.host).trim();
     if (patch.port !== undefined) profile.port = clampPort(patch.port);
     if (patch.version !== undefined) profile.version = normalizeVersion(patch.version);
@@ -85,11 +85,11 @@ export class BotManager extends EventEmitter {
   deleteServer(id: string) {
     const inUse = [...this.bots.values()].filter((b) => b.config.serverId === id);
     if (inUse.length > 0) {
-      throw new PanelError(`Bu profili ${inUse.length} bot kullanıyor — önce o botları sil veya taşı.`, 409);
+      throw new PanelError(`This profile is used by ${inUse.length} bot(s) — delete or move them first.`, 409);
     }
     const before = this.servers.length;
     this.servers = this.servers.filter((s) => s.id !== id);
-    if (this.servers.length === before) throw new PanelError("Sunucu profili bulunamadı.", 404);
+    if (this.servers.length === before) throw new PanelError("Server profile not found.", 404);
     void saveJson(SERVERS_FILE, this.servers);
     this.emit("changed");
   }
@@ -107,7 +107,7 @@ export class BotManager extends EventEmitter {
     cfg.autostart = Boolean(input.autostart);
     const instance = this.instantiate(cfg);
     this.persistBots();
-    this.log.success(`Bot oluşturuldu: ${username}`);
+    this.log.success(`Bot created: ${username}`);
     this.emit("botAdded", instance);
     return instance;
   }
@@ -129,7 +129,7 @@ export class BotManager extends EventEmitter {
       try {
         this.assertValidNewBot(name, serverId);
       } catch {
-        continue; // isim çakıştı → sıradaki numara
+        continue; // name conflict → next number
       }
       const cfg = defaultBotConfig(name, serverId);
       cfg.autostart = autostart;
@@ -139,7 +139,7 @@ export class BotManager extends EventEmitter {
       made++;
     }
     this.persistBots();
-    this.log.success(`${created.length} bot oluşturuldu (şablon: ${tpl})`);
+    this.log.success(`${created.length} bots created (template: ${tpl})`);
     return created;
   }
 
@@ -151,12 +151,12 @@ export class BotManager extends EventEmitter {
       const name = String(username).trim();
       this.assertValidNewBot(name, serverId ?? inst.config.serverId, id);
       inst.config.username = name;
-      if (inst.status !== "stopped") this.log.warn("Kullanıcı adı değişti — etkisi için botu yeniden başlat", name);
+      if (inst.status !== "stopped") this.log.warn("Username changed — restart the bot for it to take effect", name);
     }
     if (serverId !== undefined && serverId !== inst.config.serverId) {
-      if (!this.getServer(serverId)) throw new PanelError("Hedef sunucu profili bulunamadı.", 404);
+      if (!this.getServer(serverId)) throw new PanelError("Target server profile not found.", 404);
       inst.config.serverId = serverId;
-      if (inst.status !== "stopped") this.log.warn("Sunucu değişti — etkisi için botu yeniden başlat");
+      if (inst.status !== "stopped") this.log.warn("Server changed — restart the bot for it to take effect");
     }
     inst.config = mergeConfig(inst.config, rest as Partial<BotConfig>);
     this.persistBots();
@@ -169,7 +169,7 @@ export class BotManager extends EventEmitter {
     inst.dispose();
     this.bots.delete(id);
     this.persistBots();
-    this.log.info(`Bot silindi: ${inst.config.username}`);
+    this.log.info(`Bot deleted: ${inst.config.username}`);
     this.emit("botRemoved", id);
   }
 
@@ -178,7 +178,18 @@ export class BotManager extends EventEmitter {
   }
 
   stopBot(id: string) {
+    this.rules.cancelRunsForBot(id, "bot durduruldu", 0);
     this.mustGet(id).stop();
+  }
+
+  /**
+   * Bot bağlı kalırken gerçekten HER işi durdurur: görev kuyruğu, pathfinder,
+   * build/combat yardımcıları ve o bot for çalışan otomasyon akışları.
+   */
+  cancelAllWork(id: string, reason = "all cancelled from panel") {
+    const inst = this.mustGet(id);
+    this.rules.cancelRunsForBot(id, reason, 5_000);
+    inst.resetAllWork(reason);
   }
 
   /** staggered start to avoid connection-flood kicks (Faz 2) */
@@ -196,7 +207,10 @@ export class BotManager extends EventEmitter {
 
   stopAll(ids?: string[]) {
     const targets = (ids ?? [...this.bots.keys()]).map((id) => this.bots.get(id)).filter(isDefined);
-    for (const t of targets) t.stop();
+    for (const t of targets) {
+      this.rules.cancelRunsForBot(t.config.id, "botlar topluca durduruldu", 0);
+      t.stop();
+    }
     return targets.length;
   }
 
@@ -206,7 +220,7 @@ export class BotManager extends EventEmitter {
 
   mustGet(id: string): BotInstance {
     const inst = this.bots.get(id);
-    if (!inst) throw new PanelError("Bot bulunamadı.", 404);
+    if (!inst) throw new PanelError("Bot not found.", 404);
     return inst;
   }
 
@@ -232,9 +246,9 @@ export class BotManager extends EventEmitter {
   // ---- waypoints (değişiklikler "changed" ile panellere yayınlanır) -------------
 
   createWaypoint(serverId: string, input: { name: string; x: number; y: number; z: number; dimension?: string; note?: string }): Waypoint {
-    if (!this.getServer(serverId)) throw new PanelError("Sunucu profili bulunamadı.", 404);
+    if (!this.getServer(serverId)) throw new PanelError("Server profile not found.", 404);
     const wp = this.waypoints.create(serverId, input);
-    this.log.success(`Waypoint kaydedildi: ${wp.name} (${wp.x}, ${wp.y}, ${wp.z})`);
+    this.log.success(`Waypoint saved: ${wp.name} (${wp.x}, ${wp.y}, ${wp.z})`);
     this.emit("changed");
     return wp;
   }
@@ -263,7 +277,7 @@ export class BotManager extends EventEmitter {
     merged.username = cfg.username || merged.username;
     merged.serverId = cfg.serverId || merged.serverId;
     const inst = new BotInstance(merged, (sid) => this.getServer(sid));
-    // Faz 6: ölüm konumu → sunucu bazlı "ölüm-<bot>" waypoint (loot için)
+    // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)
     inst.on(
       "deathAt",
       (info: {
@@ -277,7 +291,7 @@ export class BotManager extends EventEmitter {
         ts: number;
       }) => {
         try {
-          const name = `ölüm-${info.username}`;
+          const name = `death-${info.username}`;
           const existing = this.waypoints.forServer(info.serverId).find((w) => w.name.toLowerCase() === name.toLowerCase());
           if (existing) {
             try {
@@ -292,27 +306,19 @@ export class BotManager extends EventEmitter {
             y: info.y,
             z: info.z,
             dimension: info.dimension,
-            note: `Otomatik ölüm noktası ${new Date(info.ts).toISOString()}`
+            note: `Auto death point ${new Date(info.ts).toISOString()}`
           });
         } catch (err) {
-          this.log.warn("Ölüm waypoint yazılamadı", err instanceof Error ? err.message : String(err));
+          this.log.warn("Could not write death waypoint", err instanceof Error ? err.message : String(err));
         }
         if (info.botId) this.rules.onBotEvent(info.botId, "died");
       }
     );
-    inst.on(
-      "chatParsed",
-      (entry: { botId: string; username?: string; text: string; kind: string; self?: boolean }) => {
-        // Botun kendi mesajı (echo) otomasyonu ASLA tetiklemez — aksi halde
-        // "gel" / "bot durum" gibi kelimeler kendi cevabında tekrar ateşlenir.
-        if (entry.self) return;
-        const me = inst.config.username?.toLowerCase();
-        if (entry.username && me && entry.username.toLowerCase() === me) return;
-        if (entry.kind === "player" || entry.kind === "whisper") {
-          this.rules.onChat(entry.botId, entry.username, entry.text);
-        }
+    inst.on("chatParsed", (entry: { botId: string; username?: string; text: string; kind: string }) => {
+      if (entry.kind === "player" || entry.kind === "whisper") {
+        this.rules.onChat(entry.botId, entry.username, entry.text);
       }
-    );
+    });
     inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
     inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
     inst.on("attacked", (p: { botId: string; attacker?: string; source: "mob" | "player" }) => {
@@ -370,9 +376,9 @@ export class BotManager extends EventEmitter {
 
   private assertValidNewBot(username: string, serverId: string, ignoreBotId?: string) {
     if (!USERNAME_RE.test(username)) {
-      throw new PanelError("Geçersiz kullanıcı adı: 3-16 karakter, sadece harf/rakam/alt çizgi.");
+      throw new PanelError("Invalid username: 3-16 characters, letters/digits/underscore only.");
     }
-    if (!this.getServer(serverId)) throw new PanelError("Sunucu profili bulunamadı.", 404);
+    if (!this.getServer(serverId)) throw new PanelError("Server profile not found.", 404);
     const clash = [...this.bots.values()].find(
       (b) =>
         b.config.id !== ignoreBotId &&
@@ -381,7 +387,7 @@ export class BotManager extends EventEmitter {
     );
     if (clash) {
       throw new PanelError(
-        `"${username}" bu sunucuda zaten tanımlı — offline modda isim kimliktir, aynı isim aynı sunucuya iki kez giremez.`,
+        `"${username}" is already defined on this server — offline mode uses name as identity.`,
         409
       );
     }
@@ -390,7 +396,7 @@ export class BotManager extends EventEmitter {
 
 function clampPort(p: unknown): number {
   const n = Math.floor(Number(p));
-  if (!Number.isFinite(n) || n < 1 || n > 65535) throw new PanelError("Geçersiz port (1-65535).");
+  if (!Number.isFinite(n) || n < 1 || n > 65535) throw new PanelError("Invalid port (1-65535).");
   return n;
 }
 

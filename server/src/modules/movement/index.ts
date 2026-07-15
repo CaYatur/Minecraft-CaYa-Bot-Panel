@@ -14,20 +14,20 @@ import { installWaterMovementAssist } from "./water";
  * kendi verdiği bakış (yaw) ile çizer. Rota aktifken bot.look'a dokunmak botu yanlış
  * yöne yürütür, zıplamaları ıskalatır, merdivenden düşürür ("geri atılma" hatası).
  * İnsanî bakış SADECE bot dururken (pathfinder.isMoving() === false) uygulanır.
- * Aynı sebeple takipte goal sürekli yenilenmez: GoalFollow(dynamic=true) hedefi
+ * Aynı sebeple takipte goal sürekli yenilenmez: GoalFollow(dynamic=true) targeti
  * kendisi izler; yenileme yalnızca entity REFERANSI değişince yapılır.
  */
 
 const GOTO_TIMEOUT_MS = 180_000;
-const STUCK_WINDOW_MS = 10_000; // bu süre yer değiştirme yoksa: 1 kez rota tazele, sonra pes et
+const STUCK_WINDOW_MS = 10_000; // if no position change: repath once then give up
 const FOLLOW_TICK_MS = 150;
-const FOLLOW_REPORT_MS = 1500; // panel report en fazla bu sıklıkta (10Hz spam yok)
-const FOLLOW_STUCK_MS = 5_000; // takipte takılma bekçisi: rota GÜNCEL oyuncu konumuna tazelenir
+const FOLLOW_REPORT_MS = 1500; // panel report at most this often (no 10Hz spam)
+const FOLLOW_STUCK_MS = 5_000; // follow stuck watchdog: repath to current player pos
 const LADDER_HOP_COOLDOWN_MS = 5_000;
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı — hareket görevi çalıştırılamaz.");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline — cannot run movement task.");
   return bot;
 }
 
@@ -54,9 +54,9 @@ export interface EnsureMovementOpts {
   allowSprintNow?: boolean;
   /** true → parkur zorla açık (config'i ezer) */
   parkour?: boolean;
-  /** takip için canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
+  /** takip for canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
   canDig?: boolean;
-  /** blok yerleştirme (scaffold). Takipte varsayılan KAPALI — merdiven/parkurda
+  /** blok place (scaffold). Takipte varsayılan KAPALI — merdiven/parkurda
    *  konan blok botu sıkıştırıyor ve haritayı bozuyordu. */
   allowPlace?: boolean;
   /** "follow": canDig=false + allowPlace=false varsayılır */
@@ -88,7 +88,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   }
 
   // DİKKAT: Movements yapıcısı scafoldingBlocks'u KENDİLİĞİNDEN doldurur (dirt/cobble).
-  // Yerleştirme istenmiyorsa listeyi BOŞALTMAK şart — atlamak yetmez.
+  // Placeme istenmiyorsa listeyi BOŞALTMAK şart — atlamak yetmez.
   const placeAllowed = opts?.allowPlace !== undefined ? opts.allowPlace : opts?.mode !== "follow";
   if (!placeAllowed) {
     movements.scafoldingBlocks = [];
@@ -139,13 +139,13 @@ async function ladderHopAssist(bot: Bot, target: Entity): Promise<boolean> {
   const by = Math.floor(feet.y);
   const bz = Math.floor(feet.z);
 
-  // komşu merdiven adayları (kendi kolonu hariç), hedefe en yakın olanı seç
+  // komşu merdiven adayları (kendi kolonu hariç), targete en yakın olanı seç
   let best: { x: number; y: number; z: number; dTarget: number } | null = null;
   for (let dx = -3; dx <= 3; dx++) {
     for (let dz = -3; dz <= 3; dz++) {
       if (dx === 0 && dz === 0) continue; // kendi kolonu
       const horiz = Math.hypot(dx, dz);
-      if (horiz > 3.2) continue; // zıplama menzili dışı
+      if (horiz > 3.2) continue; // outside jump range
       for (let dy = -1; dy <= 3; dy++) {
         const x = bx + dx;
         const y = by + dy;
@@ -165,12 +165,12 @@ async function ladderHopAssist(bot: Bot, target: Entity): Promise<boolean> {
     /* */
   }
   try {
-    // hedef merdivenin hücre merkezine dön (force=false — yumuşak dönüş)
+    // target merdivenin hücre merkezine dön (force=false — yumuşak dönüş)
     await bot.lookAt(new Vec3(best.x + 0.5, best.y + 0.5, best.z + 0.5), false);
   } catch {
     return false;
   }
-  await sleep(150); // nişan otursun
+  await sleep(150); // let aim settle
 
   bot.setControlState("forward", true);
   bot.setControlState("jump", true);
@@ -194,7 +194,7 @@ async function ladderHopAssist(bot: Bot, target: Entity): Promise<boolean> {
 }
 
 /**
- * Statik hedefe git; söz verir. Bakış müdahalesi YOK — pathfinder sürer.
+ * Statik targete git; söz verir. Bakış müdahalesi YOK — pathfinder sürer.
  * Takılma bekçisi: STUCK_WINDOW_MS boyunca yer değiştirme yoksa rota bir kez
  * tazelenir; ikinci pencerede de kıpırdamazsa anlaşılır hatayla düşer (Faz 4 [~] maddesi).
  */
@@ -237,12 +237,12 @@ function pathfinderGoal(
       if (result.status === "noPath") {
         finish(() => {
           stopGoal();
-          reject(new Error("Hedefe ulaşan güvenli yol bulunamadı (noPath)."));
+          reject(new Error("No safe path to target (noPath)."));
         });
       } else if (result.status === "timeout") {
         finish(() => {
           stopGoal();
-          reject(new Error("Yol hesaplama zaman aşımına uğradı — hedef çok uzak veya kapalı olabilir."));
+          reject(new Error("Pathfinding timed out — target may be too far or blocked."));
         });
       }
     };
@@ -252,12 +252,12 @@ function pathfinderGoal(
       if (token.cancelled) {
         finish(() => {
           stopGoal();
-          reject(new Error(token.reason ?? "Görev iptal edildi."));
+          reject(new Error(token.reason ?? "Task cancelled."));
         });
         return;
       }
       if (instance.status !== "online" || !bot.entity) {
-        finish(() => reject(new Error("Bağlantı koptu — hareket görevi sonlandı.")));
+        finish(() => reject(new Error("Connection lost — movement task ended.")));
         return;
       }
 
@@ -272,14 +272,14 @@ function pathfinderGoal(
           lastMoveAt = Date.now();
           opts?.onStuckRetry?.();
           try {
-            bot.pathfinder.setGoal(goal); // sıfırdan yeniden hesapla
+            bot.pathfinder.setGoal(goal); // recompute from scratch
           } catch {
             /* */
           }
         } else {
           finish(() => {
             stopGoal();
-            reject(new Error("İlerleme yok — bot takıldı (rota iki kez hesaplandı, hedefe gidilemiyor)."));
+            reject(new Error("No progress — bot stuck (path recalculated twice, cannot reach)."));
           });
         }
       }
@@ -288,7 +288,7 @@ function pathfinderGoal(
     const deadline = setTimeout(() => {
       finish(() => {
         stopGoal();
-        reject(new Error("Hedefe zamanında ulaşılamadı (görev zaman aşımı)."));
+        reject(new Error("Could not reach target in time (task timeout)."));
       });
     }, timeoutMs);
 
@@ -298,6 +298,17 @@ function pathfinderGoal(
   });
 }
 
+export interface GotoOptions {
+  /** Yol hesaplanırken arazi kazılabilsin mi? Kaynak/ağaç aramada false kullanılır. */
+  canDig?: boolean;
+  /** Pathfinder geçici blok/scaffold koyabilsin mi? */
+  allowPlace?: boolean;
+  /** Yerleşik parkur hareketleri açık mı? */
+  parkour?: boolean;
+  /** Bu hareket for özel zaman aşımı. */
+  timeoutMs?: number;
+}
+
 export async function runGoto(
   instance: BotInstance,
   x: number,
@@ -305,27 +316,68 @@ export async function runGoto(
   z: number,
   range: number,
   token: TaskToken,
-  report: ProgressFn
+  report: ProgressFn,
+  options?: GotoOptions
 ): Promise<void> {
   const bot = requireBot(instance);
   const dist = Math.round(bot.entity.position.distanceTo({ x, y, z } as never));
-  report({ done: 0, total: dist, label: `hedefe gidiliyor (${dist} blok)` });
+  report({ done: 0, total: dist, label: `targete gidiliyor (${dist} blocks)` });
 
-  ensureMovement(instance, { mode: "goto" });
+  ensureMovement(instance, {
+    mode: "goto",
+    canDig: options?.canDig,
+    allowPlace: options?.allowPlace,
+    parkour: options?.parkour
+  });
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
-  if (token.cancelled) throw new Error(token.reason ?? "Görev iptal edildi.");
+  if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
 
   await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
-    onStuckRetry: () => report({ done: 0, total: dist, label: "takıldı — rota yeniden hesaplanıyor" })
+    timeoutMs: options?.timeoutMs,
+    onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
   });
 
-  // varışta hedefe bak (bot artık DURUYOR — bakış serbest)
+  // varışta targete bak (bot artık DURUYOR — bakış serbest)
   try {
     await easeLookAt(bot, { x, y: y + 1.2, z }, turnSpeed(instance), 8);
   } catch {
     /* */
   }
-  report({ done: dist, total: dist, label: "hedefe ulaşıldı" });
+  report({ done: dist, total: dist, label: "reached destination" });
+}
+
+
+/**
+ * Yüzey keşfi for X/Z targetine gider; target Y seviyesini zorlamaz. Böylece ağaç
+ * ararken tepeye ulaşmak for dağı delmek yerine doğal yüzey yolunu kullanır.
+ */
+export async function runGotoXZ(
+  instance: BotInstance,
+  x: number,
+  z: number,
+  range: number,
+  token: TaskToken,
+  report: ProgressFn,
+  options?: GotoOptions
+): Promise<void> {
+  const bot = requireBot(instance);
+  const dist = Math.round(Math.hypot(bot.entity.position.x - x, bot.entity.position.z - z));
+  report({ done: 0, total: dist, label: `searching on surface (${dist} blocks)` });
+
+  ensureMovement(instance, {
+    mode: "goto",
+    canDig: options?.canDig,
+    allowPlace: options?.allowPlace,
+    parkour: options?.parkour
+  });
+  if (moveCfg(instance).humanize !== false) await sleep(40 + Math.floor(Math.random() * 90));
+  if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
+
+  await pathfinderGoal(instance, new goals.GoalXZ(x, z), token, {
+    timeoutMs: options?.timeoutMs,
+    onStuckRetry: () => report({ done: 0, total: dist, label: "recalculating surface path" })
+  });
+  report({ done: dist, total: dist, label: "reached search point" });
 }
 
 export async function runGotoPlayer(
@@ -341,19 +393,19 @@ export async function runGotoPlayer(
     const inTab = Boolean(bot.players[playerName]);
     throw new Error(
       inTab
-        ? `${playerName} sunucuda ama görüş menzili dışında — konumu bilinmiyor. Yakınına bir waypoint verip oradan dene.`
-        : `${playerName} sunucuda görünmüyor.`
+        ? `${playerName} on server but out of sight range — position unknown. Place a nearby waypoint and retry.`
+        : `${playerName} not visible on server.`
     );
   }
   report({ done: 0, total: 1, label: `${playerName} oyuncusuna gidiliyor` });
 
   ensureMovement(instance, { mode: "goto" });
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120));
-  if (token.cancelled) throw new Error(token.reason ?? "Görev iptal edildi.");
+  if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
 
   const p = entity.position;
   await pathfinderGoal(instance, new goals.GoalNear(p.x, p.y, p.z, Math.max(1, range)), token, {
-    onStuckRetry: () => report({ done: 0, total: 1, label: "takıldı — rota yeniden hesaplanıyor" })
+    onStuckRetry: () => report({ done: 0, total: 1, label: "stuck — recalculating path" })
   });
 
   const e2 = bot.players[playerName]?.entity;
@@ -364,7 +416,7 @@ export async function runGotoPlayer(
       /* */
     }
   }
-  report({ done: 1, total: 1, label: `${playerName} yanına ulaşıldı` });
+  report({ done: 1, total: 1, label: `${playerName} reached player` });
 }
 
 /**
@@ -428,20 +480,20 @@ export async function runFollow(
   };
 
   const restoreFollowMovement = () => {
-    // normal takip: yerleştirme kapalı (merdivende rastgele blok spam olmasın)
+    // normal follow: place kapalı (merdivende rastgele blok spam olmasın)
     ensureMovement(instance, { mode: "follow", allowPlace: false });
   };
 
   try {
     while (!token.cancelled) {
       const bot = requireBot(instance);
-      if ((bot.health ?? 0) <= 0 || !bot.entity) throw new Error("Bot öldü — takip durdu.");
+      if ((bot.health ?? 0) <= 0 || !bot.entity) throw new Error("Bot died — follow stopped.");
 
       let tracked = bot.players[playerName]?.entity ?? null;
       if (!tracked) {
-        throttledReport(`${playerName} görünmüyor — bekleniyor`);
+        throttledReport(`${playerName} not visible — bekleniyor`);
         await sleep(1200);
-        if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
+        if (instance.status !== "online") throw new Error("Connection lost — follow ended.");
         continue;
       }
 
@@ -458,7 +510,7 @@ export async function runFollow(
       let lastMoveAt = Date.now();
       let consecutiveStucks = 0;
       let lastHopAt = 0;
-      let scaffoldUntil = 0; // bu zamana kadar scaffold açık kalabilir
+      let scaffoldUntil = 0; // scaffold may stay open until this time
       let lastNoPathAt = 0;
 
       const onPath = (result: { status: string }) => {
@@ -468,7 +520,7 @@ export async function runFollow(
         const live = bot.players[playerName]?.entity;
         if (!live || !bot.entity) return;
         // yol yok → blok koyarak path dene (sadece takip takılınca)
-        throttledReport(`takip: ${playerName} · yol yok — blok ile geçiş…`);
+        throttledReport(`follow: ${playerName} · no path — bridging…`);
         enableScaffoldForStuck(bot);
         scaffoldUntil = Date.now() + 20_000;
         try {
@@ -483,7 +535,7 @@ export async function runFollow(
         while (!token.cancelled && instance.status === "online") {
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
             clearGoal(bot);
-            throw new Error("Bot öldü — takip durdu.");
+            throw new Error("Bot died — follow stopped.");
           }
           const cur = bot.players[playerName]?.entity ?? null;
           if (!cur || cur !== tracked) {
@@ -527,7 +579,7 @@ export async function runFollow(
               onLadderNow(bot)
             ) {
               lastHopAt = Date.now();
-              throttledReport(`takip: ${playerName} · merdiven atlayışı deneniyor…`);
+              throttledReport(`follow: ${playerName} · trying ladder jump…`);
               clearGoal(bot);
               try {
                 await ladderHopAssist(bot, cur);
@@ -536,7 +588,7 @@ export async function runFollow(
               }
             } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
               // 2. takılma + merdiven değil → scaffold ile yol aç
-              throttledReport(`takip: ${playerName} · takıldı — blok koyarak geçiş…`);
+              throttledReport(`follow: ${playerName} · stuck — bridging…`);
               enableScaffoldForStuck(bot);
               scaffoldUntil = Date.now() + 25_000;
               try {
@@ -545,7 +597,7 @@ export async function runFollow(
                 /* */
               }
             } else {
-              throttledReport(`takip: ${playerName} · takıldı — rota tazeleniyor`);
+              throttledReport(`follow: ${playerName} · stuck — refreshing path`);
               try {
                 bot.pathfinder.setGoal(null);
               } catch {
@@ -560,7 +612,7 @@ export async function runFollow(
             }
           }
 
-          throttledReport(`takip: ${playerName} · ${Math.round(d)}m (hedef ${holdDist}m)`);
+          throttledReport(`follow: ${playerName} · ${Math.round(d)}m (target ${holdDist}m)`);
           await sleep(FOLLOW_TICK_MS);
         }
       } finally {
@@ -568,7 +620,7 @@ export async function runFollow(
       }
 
       clearGoal(bot);
-      if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
+      if (instance.status !== "online") throw new Error("Connection lost — follow ended.");
     }
   } finally {
     const b = instance.bot;
@@ -577,7 +629,7 @@ export async function runFollow(
 }
 
 export function stopMovement(instance: BotInstance) {
-  instance.tasks.cancelAll("kullanıcı durdurdu");
+  instance.tasks.cancelAll("stopped by user");
   const bot = instance.bot;
   if (!bot) return;
   try {
@@ -599,6 +651,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Deneysel el-yapımı parkur SADECE açık "parkour-goto" aksiyonuyla erişilir —
-// normal goto/follow akışına otomatik karışmaz (güvenilirlik için ayrıştırıldı).
+// normal goto/follow akışına otomatik karışmaz (güvenilirlik for ayrıştırıldı).
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";
 export { stepLookAtEntity, easeLookAt, stepLookAt, entityLookPoint } from "./look";

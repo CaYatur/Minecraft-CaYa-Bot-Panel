@@ -39,7 +39,7 @@ export interface FallGuardConfig {
    * Gerçek tetik: hız + ping ile dinamik hesaplanır; bu değer alt sınır / UI.
    */
   mlgTriggerBlocks: number;
-  /** Sadece tehlikeli/ölümcül düşüşte müdahale */
+  /** Sadece tehlikeli/lethal fallte müdahale */
   onlyWhenDangerous: boolean;
   /** MLG sonrası malzeme geri al (su neredeyse her zaman) */
   autoReclaim: boolean;
@@ -55,7 +55,7 @@ export const DEFAULT_FALL_GUARD: FallGuardConfig = {
   enabled: true,
   minDamageHp: 4,
   lethalHealthMargin: 2,
-  // 4.5 blok raycast sınırına yakın erken tetik — asıl yerleştirme daha alçakta
+  // 4.5 blok raycast sınırına yakın erken tetik — asıl place daha alçakta
   mlgTriggerBlocks: 5.5,
   onlyWhenDangerous: true,
   autoReclaim: true,
@@ -64,7 +64,7 @@ export const DEFAULT_FALL_GUARD: FallGuardConfig = {
   reclaimBlocks: true
 };
 
-/** MLG sonrası geri alınacak yerleştirme kaydı */
+/** MLG sonrası geri alınacak place kaydı */
 interface MlgRecoverJob {
   id: number;
   method: FallMethod;
@@ -75,21 +75,21 @@ interface MlgRecoverJob {
   /** son deneme zamanı */
   lastTryAt: number;
   tries: number;
-  /** bu zamana kadar dene */
+  /** bu time kadar dene */
   deadline: number;
   /** su = yüksek öncelik */
   priority: number;
   /** isteğe bağlı blok adı (kırılacak) */
   blockName?: string;
-  /** peş peşe güvensiz tick — vakit kaybını kes */
+  /** peş peşe unsafe tick — vakit kaybını kes */
   unsafeStreak?: number;
-  /** MLG sonrası hedef dolu kova sayısı (geri alınca buna ulaş) */
+  /** MLG sonrası target dolu kova sayısı (geri alınca buna ulaş) */
   wantFilledCount?: number;
   filledName?: string;
   usedBuckets?: number;
 }
 
-/** Blok etkileşim menzili (su koyabilmek için katı bloğa bakış) */
+/** Blok etkileşim menzili (su koyabilmek for katı bloğa bakış) */
 const BLOCK_REACH = 4.45;
 // caya-combat-mlg-stability-v2: MLG hazırlık kilidi + tahmini iniş doğrulaması.
 const caya_combat_mlg_stability_v2_fall_guard = true;
@@ -136,7 +136,7 @@ const SOFT_LANDING = new Set([
 ]);
 
 /**
- * Su/tekne MLG için kötü yüzey — yaprak, çit, cam paneli, karpet vb.
+ * Su/tekne MLG for kötü yüzey — yaprak, çit, cam paneli, karpet vb.
  * Üzerine su koymak boşa gider veya hasarı kesmez.
  */
 function isBadWaterSurfaceName(n0: string): boolean {
@@ -169,7 +169,7 @@ function isBadWaterSurfaceName(n0: string): boolean {
   if (n.includes("candle") || n.includes("head") || n.includes("skull") || n.includes("pot")) return true;
   if (n.includes("chain") || n === "pointed_dripstone" || n.includes("amethyst_bud")) return true;
   if (n === "hopper" || n === "lectern" || n.includes("anvil") || n === "bell") return true;
-  if (n.includes("chest") || n.includes("barrel") || n === "ender_chest") return true; // üstü garip
+  if (n.includes("chest") || n.includes("barrel") || n === "ender_chest") return true; // weird top
   return false;
 }
 
@@ -197,7 +197,7 @@ function isFallThroughName(n0: string): boolean {
 }
 
 /**
- * Yüksekten düşerken hasar almamak / ölmemek için MLG ve yumuşak iniş.
+ * Yüksekten düşerken hasar almamak / ölmemek for MLG ve yumuşak iniş.
  * Pathfinder/görevlerden bağımsız, tick bazlı.
  */
 export class FallGuardService {
@@ -221,7 +221,7 @@ export class FallGuardService {
   getState(): FallGuardState {
     const reclaim =
       this.recoverJobs.length > 0
-        ? `geri-al kuyruk:${this.recoverJobs.map((j) => j.method).join(",")}`
+        ? `reclaim kuyruk:${this.recoverJobs.map((j) => j.method).join(",")}`
         : this.state.lastAction;
     return {
       ...this.state,
@@ -259,7 +259,7 @@ export class FallGuardService {
     this.state = idleState();
   }
 
-  /** MLG yerleştirme kaydı — sonra geri alınacak */
+  /** MLG place kaydı — sonra geri alınacak */
   private enqueueRecover(
     method: FallMethod,
     pos: { x: number; y: number; z: number },
@@ -279,7 +279,7 @@ export class FallGuardService {
       if (!cfg.reclaimBoat) return;
     } else if (!cfg.reclaimBlocks) return;
 
-    // aynı method için tek iş (konum sonrakine güncellenir)
+    // aynı method for tek iş (konum sonrakine güncellenir)
     this.recoverJobs = this.recoverJobs.filter((j) => j.method !== method);
 
     const now = Date.now();
@@ -303,8 +303,8 @@ export class FallGuardService {
     this.recoverJobs.push(job);
     this.recoverJobs.sort((a, b) => b.priority - a.priority || a.placedAt - b.placedAt);
     this.log().info(
-      "MLG geri-al kuyruğa",
-      `${method} @${job.x},${job.y},${job.z}${job.wantFilledCount != null ? ` · hedef dolu=${job.wantFilledCount}` : ""}`
+      "MLG reclaim queued",
+      `${method} @${job.x},${job.y},${job.z}${job.wantFilledCount != null ? ` · target dolu=${job.wantFilledCount}` : ""}`
     );
   }
 
@@ -332,13 +332,13 @@ export class FallGuardService {
       if (this.state.falling || this.fallPeakY != null) {
         this.fallPeakY = null;
         this.state = idleState();
-        this.state.lastAction = "düşüş yok sayıldı (efekt/mod)";
+        this.state.lastAction = "fall ignored (effect/mod)";
         this.emit(true);
       }
       return;
     }
 
-    // --- MLG malzeme geri alma (iniş sonrası / güvenli an) ---
+    // --- MLG malzeme geri alma (iniş sonrası / safe an) ---
     if (this.recoverJobs.length && !this.busy && !this.reclaimBusy) {
       void this.processRecoverQueue(bot);
     }
@@ -346,12 +346,12 @@ export class FallGuardService {
     const vy0 = bot.entity.velocity?.y ?? 0;
     const grounded = isEffectivelyGrounded(bot);
 
-    // Yere değiyor / suda / merdivende — MLG YOK (sadece geri-al)
+    // Yere değiyor / suda / merdivende — MLG YOK (sadece reclaim)
     if (grounded) {
       if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
         this.state.lastAction =
-          this.recoverJobs.length > 0 ? `iniş tamam · geri-al bekliyor (${this.recoverJobs.length})` : "iniş tamam";
+          this.recoverJobs.length > 0 ? `landing done · reclaim pending (${this.recoverJobs.length})` : "landing done";
         this.fallPeakY = null;
         this.emit(true);
       }
@@ -388,7 +388,7 @@ export class FallGuardService {
           remainingBlocks: round1(remSoft),
           predictedDamage: 0,
           lethal: false,
-          lastAction: `yumuşak iniş: ${groundInfo.name}`,
+          lastAction: `soft landing: ${groundInfo.name}`,
           inventoryOptions: availableMethods(bot, this.instance.config.inventory.bannedItems)
         };
         this.emit();
@@ -398,29 +398,29 @@ export class FallGuardService {
 
     const remaining = groundInfo != null ? Math.max(0, feetY - groundInfo.standY) : estimateRemainingBlind(bot);
 
-    // --- zaten yere yapışık / yumuşak iniş: su dökme ---
+    // --- zaten yere yapışık / soft landing: su dökme ---
     // remaining çok küçük + yavaş = ayak değiyor (onGround bayrağı gecikebilir)
     if (remaining <= 0.45) {
-      this.state.lastAction = "yerde (kalan≤0.45) — MLG yok";
+      this.state.lastAction = "yerde (remaining≤0.45) — MLG yok";
       this.fallPeakY = null;
       this.emit();
       return;
     }
     if (remaining <= 1.15 && Math.abs(vy) < 0.5) {
-      this.state.lastAction = "yumuşak iniş (yavaş+yakın) — MLG yok";
+      this.state.lastAction = "soft landing (slow+near) — no MLG";
       this.emit();
       return;
     }
     // kısa düşüş (2-3 blok zıplama / basamak): hasar yok denecek kadar
     if (metaFall < 3.2 && remaining < 2.8 && Math.abs(vy) < 0.95) {
-      this.state.lastAction = "kısa düşüş — MLG yok";
+      this.state.lastAction = "short fall — no MLG";
       this.emit();
       return;
     }
 
     const fromPeak =
       groundInfo != null && this.fallPeakY != null ? Math.max(0, this.fallPeakY - groundInfo.standY) : remaining;
-    // en iyi düşüş mesafesi: meta (gerçek) öncelikli; peak abartmasın
+    // en iyi düşüş distancesi: meta (gerçek) öncelikli; peak abartmasın
     const bestFall = Math.max(metaFall, Math.min(fromPeak, metaFall > 1 ? metaFall + Math.max(0, remaining - 0.5) : fromPeak));
 
     const { feather, protection } = armorFallEnchants(bot);
@@ -459,7 +459,7 @@ export class FallGuardService {
     }
     // hasar 0 tahmin — dökme
     if (predictedDamage < 1 && !lethal) {
-      this.state.lastAction = "hasar≈0 — MLG yok";
+      this.state.lastAction = "dmg≈0 — MLG yok";
       this.emit();
       return;
     }
@@ -474,16 +474,16 @@ export class FallGuardService {
     const method = pickBestMethod(options, remaining, lethal, predictedDamage, Math.abs(vy));
     if (method === "none") {
       if (lethal) void this.tryEquipTotem(bot);
-      this.state.lastAction = lethal ? "kurtarma yok — totem/ölümcül!" : "kurtarma malzemesi yok";
+      this.state.lastAction = lethal ? "no recovery — totem/lethal!" : "no recovery material";
       this.emit();
       if (lethal && Date.now() - this.lastWarnAt > 3000) {
         this.lastWarnAt = Date.now();
-        this.log().warn("Ölümcül düşüş — MLG malzemesi yok", `~${predictedDamage} HP · ${bestFall.toFixed(1)} blok`);
+        this.log().warn("Lethal fall — no MLG material", `~${predictedDamage} HP · ${bestFall.toFixed(1)} blok`);
       }
       return;
     }
 
-    // su için kötü yüzey (yaprak/ot vb.) → tekne/blok yastığa kay
+    // su for kötü yüzey (yaprak/ot vb.) → tekne/blok yastığa kay
     type PlaceMethod = Exclude<FallMethod, "none">;
     let chosen: PlaceMethod = method as PlaceMethod;
     if ((chosen === "water" || chosen === "powder_snow") && !hasWaterPlaceableNearby(bot, remaining + 1)) {
@@ -491,7 +491,7 @@ export class FallGuardService {
       const alt = altOrder.find((m) => options.includes(m));
       if (alt) {
         chosen = alt;
-        this.state.lastAction = `yüzey kötü (yaprak/ot?) → ${alt}`;
+        this.state.lastAction = `bad surface (leaves/grass?) → ${alt}`;
       }
     }
 
@@ -499,20 +499,20 @@ export class FallGuardService {
     const windows = mlgWindows(chosen, Math.abs(vy), cfg.mlgTriggerBlocks, getBotPingMs(bot));
     // Bakış ve ekipman hazırlığı preEquip kilidi altında tek sıra halinde yürür.
 
-    // hazırlık: hâlâ yüksekte — kova/blok ele
+    // prep: hâlâ yüksekte — kova/blok ele
     if (remaining > windows.prepareFrom) {
       if (!this.busy) void this.preEquip(bot, chosen);
       this.state.method = chosen;
-      this.state.lastAction = `hazırlık: ${chosen} (${remaining.toFixed(1)}m · v=${Math.abs(vy).toFixed(2)})`;
+      this.state.lastAction = `prep: ${chosen} (${remaining.toFixed(1)}m · v=${Math.abs(vy).toFixed(2)})`;
       this.emit();
       return;
     }
 
-    // yerleştirme penceresi: çok yüksekte raycast vurmaz; çok alçakta geç kalınır
+    // place penceresi: çok yüksekte raycast vurmaz; çok alçakta geç kalınır
     if (remaining > windows.placeMax) {
       if (!this.busy) void this.preEquip(bot, chosen);
       this.state.method = chosen;
-      this.state.lastAction = `bekle: ${chosen} @${windows.placeMax.toFixed(1)}m (şimdi ${remaining.toFixed(1)})`;
+      this.state.lastAction = `wait: ${chosen} @${windows.placeMax.toFixed(1)}m (now ${remaining.toFixed(1)})`;
       this.emit();
       return;
     }
@@ -530,8 +530,8 @@ export class FallGuardService {
     this.state.lastAction = `MLG: ${chosen}`;
     this.emit(true);
     this.log().info(
-      `Düşüş kurtarma: ${chosen}`,
-      `kalan ${remaining.toFixed(1)} · hasar≈${predictedDamage} HP · düşüş≈${bestFall.toFixed(1)} · vY=${vy.toFixed(2)} · pencere ${windows.placeMin.toFixed(1)}–${windows.placeMax.toFixed(1)}${lethal ? " ÖLÜMCÜL" : ""}`
+      `Fall recovery: ${chosen}`,
+      `remaining ${remaining.toFixed(1)} · dmg≈${predictedDamage} HP · fall≈${bestFall.toFixed(1)} · vY=${vy.toFixed(2)} · window ${windows.placeMin.toFixed(1)}–${windows.placeMax.toFixed(1)}${lethal ? " LETHAL" : ""}`
     );
 
     try {
@@ -551,9 +551,9 @@ export class FallGuardService {
 
       // son kontrol: yere değdiyse dökme
       if (isEffectivelyGrounded(bot)) {
-        this.state.lastAction = "MLG iptal — yere değdi";
+        this.state.lastAction = "MLG cancelled — touched ground";
         this.fallPeakY = null;
-        this.log().info("MLG iptal", "yere değmiş / güvenli");
+        this.log().info("MLG cancelled", "touched ground / safe");
         return;
       }
       const remNow = (() => {
@@ -562,8 +562,8 @@ export class FallGuardService {
         return Math.max(0, bot.entity.position.y - g.standY);
       })();
       if (remNow <= 0.4) {
-        this.state.lastAction = "MLG iptal — kalan çok az";
-        this.log().info("MLG iptal", `kalan ${remNow.toFixed(2)}`);
+        this.state.lastAction = "MLG cancelled — remaining too low";
+        this.log().info("MLG cancelled", `remaining ${remNow.toFixed(2)}`);
         return;
       }
 
@@ -573,18 +573,18 @@ export class FallGuardService {
       const ok = await this.executeMethod(bot, chosen, remNow);
       if (ok) {
         this.lastMlgAt = Date.now();
-        this.state.lastAction = `uygulandı: ${chosen}`;
-        this.log().info(`MLG başarılı: ${chosen}`, `kalan≈${remNow.toFixed(1)}`);
+        this.state.lastAction = `applied: ${chosen}`;
+        this.log().info(`MLG success: ${chosen}`, `remaining≈${remNow.toFixed(1)}`);
         this.scheduleReclaimAfterLand(chosen);
       } else {
         this.lastMlgAt = 0;
-        this.state.lastAction = `başarısız: ${chosen} — yeniden denenecek`;
-        this.log().warn("Düşüş kurtarma yerleşmedi", `${chosen} · kalan ${remNow.toFixed(1)}`);
+        this.state.lastAction = `failed: ${chosen} — yeniden denenecek`;
+        this.log().warn("Fall recovery did not place", `${chosen} · remaining ${remNow.toFixed(1)}`);
       }
     } catch (e) {
       this.lastMlgAt = 0;
       this.state.lastAction = `hata: ${e instanceof Error ? e.message : String(e)}`;
-      this.log().warn("Düşüş kurtarma başarısız", e instanceof Error ? e.message : String(e));
+      this.log().warn("Fall recovery failed", e instanceof Error ? e.message : String(e));
     } finally {
       this.busy = false;
       this.state.active = false;
@@ -609,7 +609,7 @@ export class FallGuardService {
     this.preEquipBusy = true;
     try {
       // Önce eşya; sonra tek bir bakış. Eski kod aynı 40 ms döngüsünde üst üste
-      // equip/look promise'leri başlatıp yerleştirme sırasını bozabiliyordu.
+      // equip/look promise'leri başlatıp place sırasını bozabiliyordu.
       if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       if (method === "water" || method === "powder_snow" || method === "boat") {
         await snapLookDown(bot);
@@ -631,12 +631,12 @@ private async tryEquipTotem(bot: Bot) {
     try {
       await bot.equip(totem, "off-hand");
       this.state.lastAction = "totem sol el";
-      this.log().info("Totem of Undying sol ele alındı (ölümcül düşüş)");
+      this.log().info("Totem of Undying held offhand (lethal fall)");
       this.emit(true);
     } catch {
       try {
         await bot.equip(totem, "hand");
-        this.state.lastAction = "totem ana el";
+        this.state.lastAction = "totem main el";
       } catch {
         /* */
       }
@@ -647,17 +647,17 @@ private async tryEquipTotem(bot: Bot) {
   private scheduleReclaimAfterLand(method: FallMethod) {
     // place* metodları zaten enqueueRecover çağırır; burada sadece hatırlatma log
     if (method === "water" || method === "powder_snow") {
-      this.state.lastAction = `uygulandı: ${method} · su geri alınacak`;
+      this.state.lastAction = `applied: ${method} · water will be reclaimed`;
     } else {
-      this.state.lastAction = `uygulandı: ${method} · malzeme geri alınacak`;
+      this.state.lastAction = `applied: ${method} · materials will be reclaimed`;
     }
   }
 
-  /** @returns true if placement likely succeeded */
+  /** @returns true if placent likely succeeded */
   private async executeMethod(bot: Bot, method: FallMethod, remaining: number): Promise<boolean> {
     const banned = this.instance.config.inventory.bannedItems;
     const item = findItemForMethod(bot, method, banned);
-    if (!item) throw new Error(`${method} eşyası yok`);
+    if (!item) throw new Error(`${method} item missing`);
 
     if (method === "water" || method === "powder_snow") {
       return this.placeBucketMlg(bot, item, method);
@@ -699,7 +699,7 @@ private async tryEquipTotem(bot: Bot) {
   /**
    * Su / powder snow kovası MLG.
    * Kritik: suyu havaya koyamazsın — raycast katı bloğa değmeli (reach ~4.5).
-   * Çok yüksekte activateItem sessizce başarısız olur.
+   * Çok yüksekte activateItem sessizce failed olur.
    */
   private async placeBucketMlg(bot: Bot, item: Item, method: FallMethod): Promise<boolean> {
     const filledName = method === "powder_snow" ? "powder_snow_bucket" : "water_bucket";
@@ -722,8 +722,8 @@ private async tryEquipTotem(bot: Bot) {
         usedBuckets: used
       });
       this.log().info(
-        "MLG su yerleşti (" + why + ")",
-        filledName + " " + filledBefore + "→" + filledAfter + " · boş " + emptyBefore + "→" + emptyAfter
+        "MLG water placed (" + why + ")",
+        filledName + " " + filledBefore + "→" + filledAfter + " · empty " + emptyBefore + "→" + emptyAfter
       );
       return true;
     };
@@ -747,7 +747,7 @@ private async tryEquipTotem(bot: Bot) {
           t?.x ?? Math.floor(p.x),
           t ? t.y + 1 : Math.floor(p.y),
           t?.z ?? Math.floor(p.z),
-          "envanter"
+          "inventory"
         );
       }
 
@@ -766,7 +766,7 @@ private async tryEquipTotem(bot: Bot) {
 
       const target = findBestWaterPlaceTarget(bot, rem);
       if (!target) {
-        this.state.lastAction = "MLG: tahmini iniş altında uygun tam blok yok";
+        this.state.lastAction = "MLG: no solid block under predicted landing";
         await snapLookDown(bot);
         await sleep(12);
         continue;
@@ -776,8 +776,8 @@ private async tryEquipTotem(bot: Bot) {
       const solid = bot.blockAt(v3(target.x, target.y, target.z));
       const above = bot.blockAt(v3(target.x, target.y + 1, target.z));
       if (above && (above.name.includes("water") || above.name === "powder_snow")) {
-        // Önceden var olan suyu kendimiz yerleştirmiş gibi geri-al kuyruğuna ekleme.
-        this.state.lastAction = "MLG: iniş yüzeyi zaten yumuşak";
+        // Önceden var olan suyu kendimiz placemiş gibi reclaim kuyruğuna ekleme.
+        this.state.lastAction = "MLG: landing surface already soft";
         return true;
       }
       if (!solid || !isWaterPlaceableBlock(solid)) {
@@ -789,7 +789,7 @@ private async tryEquipTotem(bot: Bot) {
       if (held?.name !== item.name) {
         const again = bot.inventory.items().find((candidate) => candidate.name === item.name);
         if (!again) {
-          if (inventorySaysPlaced()) return markSuccess(target.x, target.y + 1, target.z, "kova-kullanıldı");
+          if (inventorySaysPlaced()) return markSuccess(target.x, target.y + 1, target.z, "bucket-used");
           return false;
         }
         try {
@@ -831,14 +831,14 @@ private async tryEquipTotem(bot: Bot) {
       }
 
       if (inventorySaysPlaced()) {
-        return markSuccess(target.x, target.y + 1, target.z, "envanter-sonra");
+        return markSuccess(target.x, target.y + 1, target.z, "inventory-sonra");
       }
       if (
         isInLiquid(bot) ||
         hasWaterNear(bot, target.x, target.y + 1, target.z) ||
         (method === "powder_snow" && hasPowderSnowNear(bot))
       ) {
-        return markSuccess(target.x, target.y + 1, target.z, "dünya");
+        return markSuccess(target.x, target.y + 1, target.z, "world");
       }
 
       await sleep(10);
@@ -851,8 +851,8 @@ private async tryEquipTotem(bot: Bot) {
     }
 
     this.log().warn(
-      "MLG su yerleşmedi",
-      filledName + " " + filledBefore + "→" + countItemName(bot, filledName) + " · boş " + emptyBefore + "→" + countItemName(bot, "bucket")
+      "MLG water not placed",
+      filledName + " " + filledBefore + "→" + countItemName(bot, filledName) + " · empty " + emptyBefore + "→" + countItemName(bot, "bucket")
     );
     return false;
   }
@@ -982,7 +982,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
   // ---- MLG malzeme geri alma ------------------------------------------------
 
   /**
-   * Güvenli mi? Zor durumda (can kritik, yanıyor, yakın düşman dövüşü, düşüşte)
+   * Güvenli mi? Zor durumda (can kritik, on fire, near enemy combatü, düşüşte)
    * su bile gecikir; diğer malzemeler daha sıkı.
    */
   private isSafeToReclaim(bot: Bot, job: MlgRecoverJob): { ok: boolean; reason?: string } {
@@ -997,12 +997,12 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     const vy = bot.entity.velocity?.y ?? 0;
     const metaFall = Number((bot.entity as { fallDistance?: number }).fallDistance ?? 0);
     if (!bot.entity.onGround && !isInLiquid(bot) && (vy < -0.4 || metaFall > 2)) {
-      return { ok: false, reason: "hâlâ düşüyor" };
+      return { ok: false, reason: "still falling" };
     }
 
     // ateş / lav — önce kaç
     try {
-      if ((bot as { onFire?: boolean }).onFire) return { ok: false, reason: "yanıyor" };
+      if ((bot as { onFire?: boolean }).onFire) return { ok: false, reason: "on fire" };
     } catch {
       /* */
     }
@@ -1011,22 +1011,22 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     // can çok düşük — su yine de al (kova hayati); blok/tekne ertele
     if (hp <= 4 && !isWater) return { ok: false, reason: "can kritik" };
 
-    // dövüş: yakın hostile ve can düşükse ertele (su: sadece mob ≤2.5m ve can≤6)
+    // combat: yakın hostile ve can düşükse ertele (su: sadece mob ≤2.5m ve can≤6)
     const nearThreat = nearestHostileDist(bot);
     if (nearThreat != null) {
       if (isWater) {
-        if (nearThreat < 2.2 && hp <= 6) return { ok: false, reason: "yakın düşman+düşük can" };
+        if (nearThreat < 2.2 && hp <= 6) return { ok: false, reason: "near enemy+low health" };
       } else if (nearThreat < 4.5) {
-        return { ok: false, reason: "yakın düşman" };
+        return { ok: false, reason: "near enemy" };
       }
     }
 
     // combat mode saldırı/savunma + çok yakın tehdit
     try {
       const mode = this.instance.combat?.getRuntime?.()?.mode;
-      if (mode === "fleeing") return { ok: false, reason: "kaçış" };
+      if (mode === "fleeing") return { ok: false, reason: "fleeing" };
       if ((mode === "attacking" || mode === "defending") && nearThreat != null && nearThreat < 3 && !isWater) {
-        return { ok: false, reason: "dövüş" };
+        return { ok: false, reason: "combat" };
       }
     } catch {
       /* */
@@ -1049,33 +1049,33 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
 
     const safety = this.isSafeToReclaim(bot, job);
     if (!safety.ok) {
-      // güvensiz: vakit kaybetme — sayaç artır, kısa süre sonra vazgeç
+      // unsafe: vakit kaybetme — sayaç artır, kısa süre sonra vazgeç
       job.unsafeStreak = (job.unsafeStreak ?? 0) + 1;
       job.lastTryAt = now;
       const isWater = job.method === "water" || job.method === "powder_snow";
-      // tehdit/kaçış/yanma: su için de çabuk bırak (hayati değil, hayatta kal)
+      // tehdit/fleeing/yanma: su for de çabuk drop (hayati değil, hayatta kal)
       const hardUnsafe =
-        safety.reason === "kaçış" ||
-        safety.reason === "yanıyor" ||
+        safety.reason === "fleeing" ||
+        safety.reason === "on fire" ||
         safety.reason === "lav" ||
-        safety.reason === "yakın düşman+düşük can" ||
-        safety.reason === "hâlâ düşüyor";
+        safety.reason === "near enemy+low health" ||
+        safety.reason === "still falling";
       if (hardUnsafe && job.unsafeStreak >= (isWater ? 3 : 1)) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
-        this.state.lastAction = `geri-al iptal (güvensiz: ${safety.reason})`;
-        this.log().info("MLG geri-al ertelendi/iptal", `${job.method} · ${safety.reason}`);
+        this.state.lastAction = `reclaim cancel (unsafe: ${safety.reason})`;
+        this.log().info("MLG reclaim ertelendi/cancelled", `${job.method} · ${safety.reason}`);
         this.emit(true);
         return;
       }
       if (!isWater && job.unsafeStreak >= 2) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
-        this.state.lastAction = `geri-al iptal: ${job.method} (${safety.reason})`;
+        this.state.lastAction = `reclaim cancelled: ${job.method} (${safety.reason})`;
         return;
       }
       // su: biraz bekle (iniş oturması) ama sonsuza kadar uğraşma
       if (isWater && job.unsafeStreak >= 12) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
-        this.state.lastAction = `geri-al vazgeçildi (sürekli güvensiz)`;
+        this.state.lastAction = `reclaim aborted (persistently unsafe)`;
         return;
       }
       return;
@@ -1097,19 +1097,19 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
 
       if (ok) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
-        this.state.lastAction = `geri alındı: ${job.method}`;
-        this.log().info(`MLG malzeme geri alındı: ${job.method}`, `@${job.x},${job.y},${job.z}`);
+        this.state.lastAction = `geri withdrawn: ${job.method}`;
+        this.log().info(`MLG malzeme geri withdrawn: ${job.method}`, `@${job.x},${job.y},${job.z}`);
         this.emit(true);
       } else if (job.tries >= (job.method === "water" ? 16 : 10) || now > job.deadline) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
-        this.state.lastAction = `geri-al vazgeçildi: ${job.method}`;
-        this.log().warn(`MLG geri-al başarısız: ${job.method}`, `${job.tries} deneme`);
+        this.state.lastAction = `reclaim aborted: ${job.method}`;
+        this.log().warn(`MLG reclaim failed: ${job.method}`, `${job.tries} deneme`);
         this.emit(true);
       } else {
-        this.state.lastAction = `geri-al deniyor: ${job.method} (#${job.tries})`;
+        this.state.lastAction = `reclaim deniyor: ${job.method} (#${job.tries})`;
       }
     } catch (e) {
-      this.log().debug("MLG geri-al hata", e instanceof Error ? e.message : String(e));
+      this.log().debug("MLG reclaim hata", e instanceof Error ? e.message : String(e));
     } finally {
       this.reclaimBusy = false;
     }
@@ -1117,7 +1117,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
 
   /**
    * Su / powder snow kovaya geri al.
-   * Başarı = envanter dolu kova sayısı hedefe ulaştı (çoklu kova güvenli).
+   * Başarı = inventory dolu kova sayısı targete ulaştı (çoklu kova safe).
    * Dünya taraması: ayak + job + geniş — ot/yaprak üstüne akmış suyu bulur.
    */
   private async reclaimWater(bot: Bot, job: MlgRecoverJob): Promise<boolean> {
@@ -1126,9 +1126,9 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     const filledNow = countItemName(bot, filledName);
     const want = job.wantFilledCount ?? filledNow + (job.usedBuckets ?? 1);
 
-    // hedef dolu kova sayısına ulaşıldı
+    // target dolu kova sayısına ulaşıldı
     if (filledNow >= want) {
-      this.log().info("MLG su geri-al OK (envanter)", `${filledName}=${filledNow} ≥ ${want}`);
+      this.log().info("MLG su reclaim OK (inventory)", `${filledName}=${filledNow} ≥ ${want}`);
       return true;
     }
 
@@ -1137,7 +1137,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
       (bot.heldItem?.name === "bucket" ? bot.heldItem : null);
 
     if (!emptyItem) {
-      // boş kova yok ama hedefe ulaşmadık — belki başka yoldan doldu
+      // boş kova yok ama targete ulaşmadık — belki başka yoldan doldu
       return filledNow >= want || job.tries > 5;
     }
 
@@ -1162,7 +1162,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     }
 
     if (!ordered.length) {
-      // su yok — hedefe ulaştıysak OK, değilse birkaç deneme sonra bırak
+      // su yok — targete ulaştıysak OK, değilse birkaç deneme sonra drop
       return filledNow >= want || job.tries > 8;
     }
 
@@ -1180,11 +1180,11 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
         job.x = c.x;
         job.y = c.y;
         job.z = c.z;
-        this.log().info("MLG su geri-al OK", `${filledName} ${before}→${after} (hedef ${want})`);
+        this.log().info("MLG su reclaim OK", `${filledName} ${before}→${after} (target ${want})`);
         return after >= want || after > before;
       }
       const s = this.isSafeToReclaim(bot, job);
-      if (!s.ok && s.reason !== "hâlâ düşüyor") return false;
+      if (!s.ok && s.reason !== "still falling") return false;
     }
     return countItemName(bot, filledName) >= want;
   }
@@ -1273,7 +1273,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
         boat = e as { id: number; position: { x: number; y: number; z: number } };
       }
     }
-    // kayıt noktasına yakın
+    // entries noktasına yakın
     if (!boat) {
       for (const id in bot.entities) {
         const e = bot.entities[id];
@@ -1288,7 +1288,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
       }
     }
     if (!boat) {
-      // tekne yok — belki kırıldı / despawn; envanterde varsa OK
+      // tekne yok — belki kırıldı / despawn; inventoryde varsa OK
       return (
         job.tries > 4 ||
         bot.inventory.items().some((i) => i.name.endsWith("_boat") || i.name.endsWith("_raft") || BOAT_NAMES.includes(i.name))
@@ -1364,7 +1364,7 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     }
 
     if (!target) {
-      // blok yok — alındı veya yok oldu
+      // blok yok — withdrawn veya yok oldu
       return job.tries > 3;
     }
 
@@ -1424,11 +1424,11 @@ export function fallDamageHp(
 }
 
 /**
- * MLG pencereleri (blok):
+ * MLG pencereleri (blocks):
  * - prepareFrom: bu yükseklikten ele al
- * - placeMax/Min: su/tekne yerleştirme bandı (reach içi)
+ * - placeMax/Min: su/tekne place bandı (reach içi)
  *
- * Hız arttıkça placeMax biraz yükselir (paket gecikmesi için lead).
+ * Hız arttıkça placeMax biraz yükselir (paket gecikmesi for lead).
  */
 function getBotPingMs(bot: Bot): number {
   try {
@@ -1450,7 +1450,7 @@ function mlgWindows(
   cfgBase: number,
   pingMs = 0
 ): { prepareFrom: number; placeMax: number; placeMin: number } {
-  // Hız ve ping yalnızca hazırlığı öne çeker; gerçek tıklama blok menzili içinde kalır.
+  // Hız ve ping yalnızca hazırlığı öne çeker; gerçek tıklama blok menzili forde kalır.
   const motionLead = Math.min(1.9, speed * 0.62);
   const pingLead = Math.min(0.9, (pingMs / 50) * speed * 0.12);
   const lead = motionLead + pingLead;
@@ -1546,7 +1546,7 @@ function isInLiquid(bot: Bot): boolean {
 
 /**
  * onGround bayrağı gecikebilir / kenarda false kalabilir.
- * Ayak altı blok + kalan mesafe + hız ile "yere değiyor" say.
+ * Ayak altı blok + remaining distance + hız ile "yere değiyor" say.
  */
 function isEffectivelyGrounded(bot: Bot): boolean {
   if (!bot.entity) return false;
@@ -1667,7 +1667,7 @@ function findNearestWaterSource(
         const isSnow = n === "powder_snow";
         if (!isWater && !isSnow) continue;
 
-        // göz mesafesi (reach)
+        // göz distancesi (reach)
         const dist = Math.hypot(bx + 0.5 - ex, by + 0.4 - ey, bz + 0.5 - ez);
         // kaynak tercihi: üstünde hava olan su biraz daha iyi
         const above = bot.blockAt(v3(bx, by + 1, bz));
@@ -1752,7 +1752,7 @@ function isAirName(name: string): boolean {
   return n === "air" || n === "cave_air" || n === "void_air" || n === "light";
 }
 
-/** Yer bulunamazsa vy ile kaba kalan mesafe (kör) */
+/** Yer bulunamazsa vy ile kaba remaining distance (kör) */
 function estimateRemainingBlind(bot: Bot): number {
   const vy = Math.abs(bot.entity.velocity?.y ?? 1);
   // bilinmeyen zemin — agresif varsay: birkaç blok
@@ -1819,7 +1819,7 @@ interface LandingInfo {
   standY: number;
   soft: boolean;
   name: string;
-  /** su MLG için uygun tam katı mı */
+  /** su MLG for uygun tam katı mı */
   waterPlaceable: boolean;
   /** katı bloğun y'si */
   solidY: number;
@@ -1896,7 +1896,7 @@ function scanColumn(bot: Bot, x: number, z: number, startY: number): LandingInfo
   return null;
 }
 
-/** Reach içinde su koyulabilir tam katı var mı? */
+/** Reach forde su koyulabilir tam katı var mı? */
 function hasWaterPlaceableNearby(bot: Bot, maxDown: number): boolean {
   return findBestWaterPlaceTarget(bot, maxDown) != null;
 }
@@ -2160,7 +2160,7 @@ function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
 
-/** Envanterde item sayısı (stack’ler toplam) — held çift sayılmaz (items() hotbar içerir) */
+/** Inventory has insufficient item sayısı (stack’ler toplam) — held çift sayılmaz (items() hotbar içerir) */
 export function countItemName(bot: Bot, name: string): number {
   let n = 0;
   try {

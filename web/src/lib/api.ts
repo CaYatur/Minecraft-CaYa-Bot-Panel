@@ -6,7 +6,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error ?? `İstek başarısız (${res.status})`);
+    const serverMsg = (data as { error?: string }).error;
+    if (serverMsg) throw new Error(serverMsg);
+    throw new Error(`Request failed (${res.status})`);
   }
   return data as T;
 }

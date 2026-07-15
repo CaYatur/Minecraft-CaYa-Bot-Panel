@@ -43,7 +43,7 @@ function safeFilename(name: string, ext: string): string {
 /** Örnek 3×1×3 cobble platform (test / demo) */
 function ensureSampleSchematic() {
   const idx = readIndex();
-  if (idx.items.some((i) => i.id === "sample-platform" || i.name === "Örnek Platform")) return;
+  if (idx.items.some((i) => i.id === "sample-platform" || i.name === "Sample Platform")) return;
 
   const blocks: SchematicBlock[] = [];
   for (let dx = 0; dx < 3; dx++) {
@@ -55,8 +55,8 @@ function ensureSampleSchematic() {
   blocks.push({ dx: 0, dy: 2, dz: 0, name: "cobblestone" });
 
   const payload = {
-    name: "Örnek Platform",
-    note: "3×3 cobble + 2 blok kule — test şeması",
+    name: "Sample Platform",
+    note: "3×3 cobble + 2-block tower — test schematic",
     blocks
   };
   const filename = "sample-platform.caya.json";
@@ -67,7 +67,7 @@ function ensureSampleSchematic() {
   const st = fs.statSync(filePath);
   const meta: SchematicMeta = {
     id: "sample-platform",
-    name: "Örnek Platform",
+    name: "Sample Platform",
     filename,
     format: "caya-json",
     sizeBytes: st.size,
@@ -101,7 +101,7 @@ export function deleteSchematic(id: string): boolean {
   const item = idx.items.find((i) => i.id === safe);
   if (!item) return false;
   if (item.id === "sample-platform") {
-    throw new Error("Örnek şema silinemez — kopya oluşturun veya kendi şemanızı yükleyin");
+    throw new Error("Sample schematic cannot be deleted — make a copy or upload your own");
   }
   idx.items = idx.items.filter((i) => i.id !== safe);
   writeIndex(idx);
@@ -150,15 +150,15 @@ export async function addSchematicFromBase64(opts: {
   dataBase64: string;
   note?: string;
 }): Promise<SchematicMeta> {
-  const name = opts.name.trim() || "Şema";
+  const name = opts.name.trim() || "Schematic";
   let buf: Buffer;
   try {
     buf = Buffer.from(opts.dataBase64, "base64");
   } catch {
-    throw new Error("Base64 çözülemedi");
+    throw new Error("Could not decode base64");
   }
-  if (buf.length < 4) throw new Error("Dosya çok küçük veya base64 geçersiz");
-  if (buf.length > MAX_FILE_BYTES) throw new Error("Şema en fazla 25 MB olabilir");
+  if (buf.length < 4) throw new Error("File too small or invalid base64");
+  if (buf.length > MAX_FILE_BYTES) throw new Error("Schematic max size is 25 MB");
 
   const lower = (opts.filename ?? name).toLowerCase();
   let { format, ext } = detectFormat(buf, opts.filename);
@@ -171,7 +171,7 @@ export async function addSchematicFromBase64(opts: {
     try {
       JSON.parse(buf.toString("utf8"));
     } catch {
-      throw new Error("Geçersiz JSON şema");
+      throw new Error("Invalid JSON schematic");
     }
   }
 
@@ -202,7 +202,7 @@ export async function addSchematicFromBase64(opts: {
     meta.height = parsed.height;
     meta.length = parsed.length;
     meta.blockCount = parsed.blocks.length;
-    if (parsed.meta.name && name === "Şema") meta.name = parsed.meta.name;
+    if (parsed.meta.name && name === "Schematic") meta.name = parsed.meta.name;
     // update index entry
     const idx2 = readIndex();
     const m = idx2.items.find((i) => i.id === id);
@@ -217,7 +217,7 @@ export async function addSchematicFromBase64(opts: {
     const idx = readIndex();
     idx.items = idx.items.filter((i) => i.id !== id);
     writeIndex(idx);
-    throw new Error(`Şema okunamadı: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`Could not read schematic: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   return meta;
@@ -228,11 +228,11 @@ export function addCayaJsonSchematic(opts: {
   blocks: SchematicBlock[];
   note?: string;
 }): SchematicMeta {
-  if (!opts.blocks?.length) throw new Error("En az bir blok gerekli");
+  if (!opts.blocks?.length) throw new Error("En az bir blok required");
   if (opts.blocks.length > MAX_BLOCKS) throw new Error(`En fazla ${MAX_BLOCKS} blok`);
   const body = JSON.stringify({ name: opts.name, note: opts.note, blocks: opts.blocks }, null, 2);
   // sync path for simple json
-  const name = opts.name.trim() || "Şema";
+  const name = opts.name.trim() || "Schematic";
   const filename = safeFilename(name, ".caya.json");
   const filePath = resolveSchematicFile(filename);
   const buf = Buffer.from(body, "utf8");
@@ -282,10 +282,10 @@ export function materialCounts(blocks: SchematicBlock[]): Record<string, number>
 
 function parseCayaJson(meta: SchematicMeta): ParsedSchematic {
   const filePath = resolveSchematicFile(meta.filename);
-  if (!fs.existsSync(filePath)) throw new Error(`Şema dosyası yok: ${meta.filename}`);
+  if (!fs.existsSync(filePath)) throw new Error(`Schematic file missing: ${meta.filename}`);
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { blocks?: SchematicBlock[] };
   const blocks = (raw.blocks ?? []).filter((b) => b && b.name && b.name !== "air");
-  if (blocks.length > MAX_BLOCKS) throw new Error(`Blok limiti aşıldı (${MAX_BLOCKS})`);
+  if (blocks.length > MAX_BLOCKS) throw new Error(`Block limit exceeded (${MAX_BLOCKS})`);
   let minX = 0,
     minY = 0,
     minZ = 0,
@@ -322,7 +322,7 @@ export async function loadParsedSchematic(
   transform?: BuildTransform
 ): Promise<ParsedSchematic> {
   const meta = getSchematicMeta(id);
-  if (!meta) throw new Error("Şema bulunamadı");
+  if (!meta) throw new Error("Schematic not found");
 
   let base: ParsedSchematic;
 
@@ -448,7 +448,7 @@ async function loadSchemBuffer(meta: SchematicMeta, buf: Buffer, versionHint: st
       dz: pos.z - start.z,
       name
     });
-    if (blocks.length > MAX_BLOCKS) throw new Error(`Blok limiti aşıldı (${MAX_BLOCKS})`);
+    if (blocks.length > MAX_BLOCKS) throw new Error(`Block limit exceeded (${MAX_BLOCKS})`);
   });
   return { meta: { ...meta, width, height, length, blockCount: blocks.length }, blocks, width, height, length };
 }

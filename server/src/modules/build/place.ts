@@ -17,9 +17,9 @@ const FACES: [number, number, number][] = [
   [0, 0, -1]
 ];
 
-/** Yerleştirme menzili — bu içinde pathfinder ÇAĞIRMA */
+/** Placeme menzili — bu forde pathfinder ÇAĞIRMA */
 export const PLACE_REACH = 4.5;
-/** Path hedefe yaklaşma yarıçapı */
+/** Path targete yaklaşma yarıçapı */
 const PATH_RANGE = 2.8;
 /** Path zaman aşımı (ms) */
 const PATH_TIMEOUT_MS = 8_000;
@@ -27,8 +27,8 @@ const PATH_TIMEOUT_MS = 8_000;
 function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
 /**
- * soft=true: pathfinder/hedefi BOZMA (yürürken menzilde koy).
- * soft=false: dur, kontrol temizle, bak-koy için sabitle.
+ * soft=true: pathfinder/targeti BOZMA (yürürken menzilde koy).
+ * soft=false: dur, kontrol temizle, bak-koy for sabitle.
  */
 async function settleForPlacement(bot: Bot, soft = false) {
   if (!soft) {
@@ -70,8 +70,8 @@ function dist3(bot: Bot, x: number, y: number, z: number): number {
 
 /**
  * Sadece gerekirse pathfinder. Zaten yakındaysa no-op.
- * clearGoal=false: hedefi bırakma — yürürken yerleştirme için.
- * onTick: yürürken menzildeki blokları koymak için.
+ * clearGoal=false: targeti dropma — yürürken place for.
+ * onTick: yürürken menzildeki blokları koymak for.
  */
 export async function pathNear(
   instance: BotInstance,
@@ -126,7 +126,7 @@ export async function pathNear(
       }
     }
   }
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 }
 
 export function distToBlock(instance: BotInstance, x: number, y: number, z: number): number {
@@ -135,7 +135,7 @@ export function distToBlock(instance: BotInstance, x: number, y: number, z: numb
   return dist3(bot, x + 0.5, y + 0.5, z + 0.5);
 }
 
-/** Şema blok adı → envanter item adı (sıvı / özel) */
+/** Schematic blok adı → inventory item adı (sıvı / özel) */
 export function itemNameForBlock(blockName: string): string[] {
   const n = blockName.replace(/^minecraft:/, "");
   if (n === "water" || n === "flowing_water") return ["water_bucket"];
@@ -151,8 +151,8 @@ export function itemNameForBlock(blockName: string): string[] {
 }
 
 /**
- * Mutlak (x,y,z) konumuna named block yerleştir.
- * opts.skipPath: yürürken yerleştir — path açma, menzil dışındaysa "outofreach"
+ * Mutlak (x,y,z) konumuna named block place.
+ * opts.skipPath: yürürken place — path açma, menzil dışındaysa "outofreach"
  */
 export async function placeBlockAt(
   instance: BotInstance,
@@ -167,7 +167,7 @@ export async function placeBlockAt(
   const retries = Math.max(1, opts?.retries ?? 1);
   let last: "placed" | "skipped" | "failed" | "outofreach" = "failed";
   for (let attempt = 0; attempt < retries; attempt++) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     last = await placeBlockAtOnce(instance, x, y, z, blockName, token, scaffolds, {
       skipPath: opts?.skipPath,
       softSettle: opts?.softSettle
@@ -190,7 +190,7 @@ async function placeBlockAtOnce(
   opts?: { skipPath?: boolean; softSettle?: boolean }
 ): Promise<"placed" | "skipped" | "failed" | "outofreach"> {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
   const target = v3(Math.floor(x), Math.floor(y), Math.floor(z));
   const name = String(blockName).replace(/^minecraft:/, "");
   const tx = target.x + 0.5;
@@ -356,7 +356,7 @@ async function placeBlockAtOnce(
   }
 }
 
-/** Bot hedef hücreyle nasıl çakışıyor? */
+/** Bot target hücreyle nasıl çakışıyor? */
 function occupancyRelation(bot: Bot, target: Vec3): "none" | "under" | "feet" | "head" {
   if (!bot.entity) return "none";
   const p = bot.entity.position;
@@ -371,7 +371,7 @@ function occupancyRelation(bot: Bot, target: Vec3): "none" | "under" | "feet" | 
 }
 
 /**
- * Kenara çekil — hedef hücrenin dışına (komşu sağlam zemin).
+ * Kenara çekil — target hücrenin dışına (komşu sağlam zemin).
  */
 async function stepAside(
   instance: BotInstance,
@@ -402,7 +402,7 @@ async function stepAside(
     [-1, 1],
     [-1, -1]
   ];
-  // hedeften uzaklaşan yönleri önce dene
+  // targetten uzaklaşan yönleri önce dene
   dirs.sort((a, b) => {
     const da = Math.abs(fx + a[0] - awayFrom.x) + Math.abs(fz + a[1] - awayFrom.z);
     const db = Math.abs(fx + b[0] - awayFrom.x) + Math.abs(fz + b[1] - awayFrom.z);
@@ -410,7 +410,7 @@ async function stepAside(
   });
 
   for (const [dx, dz] of dirs) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     const nx = fx + dx;
     const nz = fz + dz;
     const ground = bot.blockAt(v3(nx, fy - 1, nz));
@@ -470,7 +470,7 @@ async function jumpPlaceOnBelow(
   const bot = instance.bot;
   if (!bot?.entity) return false;
 
-  // Yerleştirilecek yüzey: target'ın altındaki dolu blok (under için target-1 yok, target zaten under)
+  // Placeilecek yüzey: target'ın altındaki dolu blok (under for target-1 yok, target zaten under)
   // under: stand on block at target; place replaces under → dig first usually
   // tower: place at feet y while jumping on block at feet-1
   const p = bot.entity.position;
@@ -501,7 +501,7 @@ async function jumpPlaceOnBelow(
     return false;
   }
 
-  // hedef dolu ve yanlışsa kır (ayak altı — zıplarken zor; önce kenar dene değilse false)
+  // target dolu ve yanlışsa kır (ayak altı — zıplarken zor; önce kenar dene değilse false)
   const existing = bot.blockAt(placeTarget);
   if (existing && !isReplaceableBlock(existing.name) && !namesMatch(existing.name, wantName)) {
     return false;
@@ -650,7 +650,7 @@ async function clearBlockAt(
     if (opts?.skipPath) return false;
     await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
   }
-  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
   const live = bot.blockAt(target);
   if (!live || isReplaceableBlock(live.name)) return true;

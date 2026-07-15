@@ -21,7 +21,7 @@ const PROTECT_TICK_MS = 600;
 /** boşta öz savunma tarama aralığı */
 const SELF_GUARD_TICK_MS = 700;
 
-// caya-combat-mlg-stability-v2: erişilemeyen/ışınlanan hedef bekçisi.
+// caya-combat-mlg-stability-v2: erişilemeyen/ışınlmainn target bekçisi.
 const caya_combat_mlg_stability_v2_combat = true;
 const UNREACHABLE_TARGET_TTL_MS = 15_000;
 const TARGET_TELEPORT_DELTA = 10;
@@ -72,7 +72,7 @@ export class CombatService {
 
   constructor(private readonly instance: BotInstance) {}
 
-  /** Bot kendi kullanıcı adı mı? (takip/saldırı/koruma hedefi olamaz) */
+  /** Bot kendi kullanıcı adı mı? (takip/saldırı/koruma targeti olamaz) */
   private isSelfName(name: string): boolean {
     const n = name.trim().toLowerCase();
     if (!n) return false;
@@ -139,8 +139,8 @@ export class CombatService {
     this.unreachableTargets.set(entity.id, Math.max(previous, until));
     if (previous <= now) {
       this.log().warn(
-        "Hedefe ulaşılamıyor — geçici olarak atlandı",
-        labelEntity(entity) + " · " + reason + " · " + Math.ceil(ttlMs / 1000) + " sn"
+        "Target unreachable — temporarily skipped",
+        labelEntity(entity) + " · " + reason + " · " + Math.ceil(ttlMs / 1000) + "s"
       );
     }
   }
@@ -256,10 +256,10 @@ getRuntime(): CombatRuntime {
           const main = this.companion.followPlayer ?? this.companion.protectPlayers[0];
           if (main) this.ensureFollowTask(main, this.companion.followDistance, true);
           this.setMode("protecting", this.primaryProtectLabel());
-          this.log().info("Koruma/takip yeniden başlatıldı", reason);
+          this.log().info("Protect/follow resumed", reason);
         } else if (this.companion.followPlayer) {
           this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance, true);
-          this.log().info("Takip yeniden başlatıldı", reason);
+          this.log().info("Follow resumed", reason);
         }
         if (this.companion.attackPlayer) this.ensureAttackTask(this.companion.attackPlayer);
       } catch (e) {
@@ -293,7 +293,7 @@ getRuntime(): CombatRuntime {
     this.setMode("idle", null);
   }
 
-  stopCombat(reason = "dövüş durduruldu") {
+  stopCombat(reason = "combat durduruldu") {
     this.companion.attackPlayer = null;
     this.attackTaskId = null;
     this.cancelTasksOfType("attack");
@@ -305,7 +305,7 @@ getRuntime(): CombatRuntime {
     } else {
       this.setMode("idle", null);
     }
-    this.log().info("Dövüş bırakıldı", reason);
+    this.log().info("Combat left", reason);
     this.emitCombat();
   }
 
@@ -321,11 +321,11 @@ getRuntime(): CombatRuntime {
     this.cancelTasksOfType("defend");
     this.clearPathfinder();
     this.setMode("idle", null);
-    this.log().info("Takip/saldırı/koruma kapatıldı", reason);
+    this.log().info("Follow/attack/protect turned off", reason);
     this.emitCombat();
   }
 
-  /** Sadece koruma ayarları (dövüş paneli) — listeyi bozmadan */
+  /** Sadece koruma ayarları (combat paneli) — listeyi bozmadan */
   updateProtectSettings(opts: Partial<CompanionState["protectSettings"]> & { followDistance?: number }) {
     if (opts.followDistance != null) {
       this.companion.followDistance = Math.max(1, Math.min(16, Math.floor(opts.followDistance)));
@@ -339,13 +339,13 @@ getRuntime(): CombatRuntime {
     if (opts.whitelist) {
       this.companion.protectSettings.whitelist = opts.whitelist.map((w) => w.trim()).filter(Boolean);
     }
-    // aktif takip mesafesini yenile
+    // aktif takip distancesini yenile
     if (this.companion.followPlayer && !this.deadPaused) {
       this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance, true);
     }
     this.log().info(
-      "Koruma ayarları güncellendi",
-      `mod=${this.companion.protectSettings.protectAggro} r=${this.companion.protectSettings.range} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers}`
+      "Protect settings updated",
+      `mode=${this.companion.protectSettings.protectAggro} r=${this.companion.protectSettings.range} mob=${this.companion.protectSettings.retaliateMobs} player=${this.companion.protectSettings.retaliatePlayers}`
     );
     this.emitCombat();
     return this.getRuntime();
@@ -383,15 +383,15 @@ getRuntime(): CombatRuntime {
   // ---- companion toggles (yakındaki oyuncular) --------------------------------
 
   /**
-   * Takip aç/kapa. distance = durma mesafesi (blok).
-   * Koruma listesi doluyken takip tamamen kapanmaz: ana kişi değiştirilebilir.
+   * Takip aç/kapa. distance = durma distancesi (blocks).
+   * Koruma listesi doluyken takip tamamen kapanmaz: main kişi değiştirilebilir.
    */
   setFollow(player: string, enabled: boolean, distance?: number) {
     const name = player.trim();
-    if (!name) throw new Error("Oyuncu adı boş");
+    if (!name) throw new Error("Player name is empty");
     // Bot asla kendisini takip etmez (panel / otomasyon / sohbet echo)
     if (enabled && this.isSelfName(name)) {
-      this.log().warn(`Takip reddedildi: bot kendisini takip edemez (${name})`);
+      this.log().warn(`Follow rejected: bot can't follow itself (${name})`);
       return this.getRuntime();
     }
     if (distance != null && Number.isFinite(distance)) {
@@ -400,7 +400,7 @@ getRuntime(): CombatRuntime {
     if (!enabled) {
       if (this.companion.followPlayer?.toLowerCase() === name.toLowerCase()) {
         if (this.hasProtect()) {
-          // koruma açık: takip ana kişiyi listeden tut (aynı kişi veya ilk korunan)
+          // koruma açık: takip main kişiyi listeden tut (aynı kişi veya ilk korunan)
           const fallback =
             this.companion.protectPlayers.find((p) => p.toLowerCase() !== name.toLowerCase()) ??
             this.companion.protectPlayers[0] ??
@@ -410,8 +410,8 @@ getRuntime(): CombatRuntime {
             this.ensureFollowTask(fallback, this.companion.followDistance, true);
             this.log().info(
               fallback.toLowerCase() === name.toLowerCase()
-                ? "Koruma açık — takip kapatılamaz; önce tüm korumaları kapat"
-                : `Takip ana kişi değişti (koruma): ${fallback}`
+                ? "Protect is on — follow can't be turned off; turn off all protects first"
+                : `Follow main player changed (protect): ${fallback}`
             );
             if (this.hasProtect()) this.setMode("protecting", this.primaryProtectLabel());
             this.emitCombat();
@@ -431,7 +431,7 @@ getRuntime(): CombatRuntime {
     }
     this.companion.followPlayer = name;
     this.ensureFollowTask(name, this.companion.followDistance, true);
-    this.log().info(`Takip açıldı: ${name} (mesafe ${this.companion.followDistance})`);
+    this.log().info(`Follow enabled: ${name} (distance ${this.companion.followDistance})`);
     if (this.hasProtect()) this.setMode("protecting", this.primaryProtectLabel());
     this.emitCombat();
     return this.getRuntime();
@@ -439,9 +439,9 @@ getRuntime(): CombatRuntime {
 
   setAttack(player: string, enabled: boolean) {
     const name = player.trim();
-    if (!name) throw new Error("Oyuncu adı boş");
+    if (!name) throw new Error("Player name is empty");
     if (enabled && this.isSelfName(name)) {
-      this.log().warn(`Saldırı reddedildi: bot kendisine saldıramaz (${name})`);
+      this.log().warn(`Attack rejected: bot can't attack itself (${name})`);
       return this.getRuntime();
     }
     if (!enabled) {
@@ -457,23 +457,23 @@ getRuntime(): CombatRuntime {
       return this.getRuntime();
     }
     if (this.isProtectedName(name)) {
-      throw new Error("Korunan oyuncuya saldırı açılamaz");
+      throw new Error("Cannot attack a protected player");
     }
     this.companion.attackPlayer = name;
-    // koruma yoksa saldırı takibi kapatır; koruma varsa ana kişi takibi kalır
+    // koruma yoksa saldırı takibi kapatır; koruma varsa main kişi takibi kalır
     if (!this.hasProtect()) {
       this.companion.followPlayer = null;
       this.cancelTasksOfType("follow");
     }
     this.ensureAttackTask(name);
-    this.log().info(`Saldırı açıldı: ${name}`);
+    this.log().info(`Attack enabled: ${name}`);
     this.emitCombat();
     return this.getRuntime();
   }
 
   /**
    * Koruma aç/kapa (çoklu). enabled=true → listeye ekle;
-   * ilk korunan için takip yoksa otomatik takip; ek korunanlar takip değiştirmez.
+   * ilk korunan for takip yoksa otomatik takip; ek korunanlar takip değiştirmez.
    */
   setProtect(
     player: string,
@@ -481,9 +481,9 @@ getRuntime(): CombatRuntime {
     opts?: Partial<CompanionState["protectSettings"]> & { followDistance?: number; setAsMain?: boolean }
   ) {
     const name = player.trim();
-    if (!name) throw new Error("Oyuncu adı boş");
+    if (!name) throw new Error("Player name is empty");
     if (enabled && this.isSelfName(name)) {
-      this.log().warn(`Koruma reddedildi: bot kendisini koruma hedefi yapamaz (${name})`);
+      this.log().warn(`Protect rejected: bot can't set itself as protect target (${name})`);
       return this.getRuntime();
     }
     if (opts?.followDistance != null) {
@@ -508,7 +508,7 @@ getRuntime(): CombatRuntime {
         this.emitCombat();
         return this.getRuntime();
       }
-      this.log().info(`Koruma listesinden çıkarıldı: ${name}`, `kalan: ${this.companion.protectPlayers.join(", ") || "—"}`);
+      this.log().info(`Removed from protect list: ${name}`, `remaining: ${this.companion.protectPlayers.join(", ") || "—"}`);
 
       if (!this.hasProtect()) {
         this.stopProtectLoop();
@@ -517,7 +517,7 @@ getRuntime(): CombatRuntime {
         this.cancelTasksOfType("follow");
         this.setMode("idle", null);
       } else {
-        // ana takip bu kişiyse başka korunana kaydır
+        // main takip bu kişiyse başka protected kaydır
         if (this.companion.followPlayer?.toLowerCase() === name.toLowerCase()) {
           const next = this.companion.protectPlayers[0]!;
           this.companion.followPlayer = next;
@@ -541,21 +541,21 @@ getRuntime(): CombatRuntime {
       this.cancelTasksOfType("attack");
     }
 
-    // ilk korunan veya setAsMain → ana takip
+    // ilk korunan veya setAsMain → main takip
     const becomeMain = opts?.setAsMain === true || !this.companion.followPlayer;
     if (becomeMain) {
       this.companion.followPlayer = name;
       this.ensureFollowTask(name, this.companion.followDistance, true);
     } else if (this.companion.followPlayer) {
-      // ana kişi sabit; takip görevini canlı tut
+      // main kişi sabit; takip görevini canlı tut
       this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance);
     }
 
     this.startProtectLoop();
     this.setMode("protecting", this.primaryProtectLabel());
     this.log().info(
-      `Koruma: ${this.companion.protectPlayers.join(", ")}`,
-      `mod=${this.companion.protectSettings.protectAggro} ana=${this.companion.followPlayer ?? "—"} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
+      `Protect: ${this.companion.protectPlayers.join(", ")}`,
+      `mode=${this.companion.protectSettings.protectAggro} main=${this.companion.followPlayer ?? "—"} mob=${this.companion.protectSettings.retaliateMobs} player=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
     );
     this.emitCombat();
     return this.getRuntime();
@@ -563,7 +563,7 @@ getRuntime(): CombatRuntime {
 
   private ensureFollowTask(player: string, distance: number, force = false) {
     if (this.deadPaused) return;
-    const wantLabel = `takip: ${player} (≤${distance})`;
+    const wantLabel = `follow: ${player} (≤${distance})`;
     const cur = this.instance.tasks.currentSummary;
     const q = this.instance.tasks.queueSummaries;
     const already =
@@ -625,9 +625,9 @@ getRuntime(): CombatRuntime {
 
   private cancelTasksOfType(type: string) {
     const cur = this.instance.tasks.currentSummary;
-    if (cur?.type === type) this.instance.tasks.cancel(cur.id, `${type} kapatıldı`);
+    if (cur?.type === type) this.instance.tasks.cancel(cur.id, `${type} kapdropped`);
     for (const t of this.instance.tasks.queueSummaries) {
-      if (t.type === type) this.instance.tasks.cancel(t.id, `${type} kapatıldı`);
+      if (t.type === type) this.instance.tasks.cancel(t.id, `${type} kapdropped`);
     }
   }
 
@@ -670,7 +670,7 @@ getRuntime(): CombatRuntime {
     if (!bot?.entity) return;
     if ((bot.health ?? 0) <= 0) return;
 
-    // zaten dövüş/kaçış görevi var veya kuyrukta — spam görev açma
+    // zaten combat/fleeing görevi var veya kuyrukta — spam görev açma
     if (this.hasActiveCombatTask()) return;
     if (this.mode === "fleeing" || this.mode === "attacking" || this.mode === "defending") return;
 
@@ -683,17 +683,17 @@ getRuntime(): CombatRuntime {
     const fleeAt = this.cfg().fleeAtHealth ?? 6;
 
     if (hp <= fleeAt) {
-      this.log().warn(`Öz savunma → kaçış (can ${hp} ≤ ${fleeAt})`, label);
+      this.log().warn(`Self-defense → flee (health ${hp} ≤ ${fleeAt})`, label);
       this.enqueueFlee(label);
       return;
     }
 
     const dist = bot.entity.position.distanceTo(target.position);
-    this.log().info(`Öz savunma: ${label}`, `mod=${mode} r=${range} d=${dist.toFixed(1)} id=${target.id}`);
+    this.log().info(`Self-defense: ${label}`, `mode=${mode} r=${range} d=${dist.toFixed(1)} id=${target.id}`);
     this.instance.tasks.enqueue(
       {
         type: "defend",
-        label: `öz-savun: ${label}`,
+        label: `self-defense: ${label}`,
         priority: PRIORITY.DEFENSE,
         params: { target: label, selfGuard: true, entityId: target.id },
         requeueOnPreempt: false
@@ -710,7 +710,7 @@ getRuntime(): CombatRuntime {
     return this.instance.tasks.queueSummaries.some((t) => types.has(t.type));
   }
 
-  /** Proaktif hedef: hostile mob her zaman; oyuncu yalnız recentThreat */
+  /** Proaktif target: hostile mob her zaman; oyuncu yalnız recentThreat */
   private pickSelfGuardTarget(mode: CombatConfig["defendMode"], range: number): Entity | null {
     const bot = this.bot ?? this.instance.bot;
     if (!bot?.entity || mode === "off") return null;
@@ -752,9 +752,9 @@ getRuntime(): CombatRuntime {
   }
 
   /**
-   * Tüm korunanların yanındaki hedefleri tara → DEFENSE.
+   * Tüm korunanların yanındaki targetleri tara → DEFENSE.
    * protectAggro:
-   *  - threats: saldırgan tehdit (hostile mob + yakın düşman oyuncu)
+   *  - threats: saldırgan tehdit (hostile mob + near enemy oyuncu)
    *  - non_whitelist: beyaz listede olmayan her oyuncu (+ mob opsiyonel)
    */
   private protectTick() {
@@ -767,7 +767,7 @@ getRuntime(): CombatRuntime {
 
     this.pruneThreats();
 
-    // ana takip: followPlayer veya ilk korunan
+    // main follow: followPlayer veya ilk korunan
     const main = this.companion.followPlayer ?? this.companion.protectPlayers[0]!;
     if (!this.companion.followPlayer) this.companion.followPlayer = main;
     this.ensureFollowTask(main, this.companion.followDistance);
@@ -810,7 +810,7 @@ getRuntime(): CombatRuntime {
           if (aggro === "non_whitelist") {
             // beyaz liste dışı her oyuncu
           } else {
-            // threats: yalnızca botu vurmuş / kayıtlı saldırgan oyuncu
+            // threats: yalnızca botu vurmuş / entrieslı saldırgan oyuncu
             if (!this.isRecentThreat(elabel) && !(uname && this.isRecentThreat(uname))) continue;
           }
         } else if (hostile) {
@@ -845,14 +845,14 @@ getRuntime(): CombatRuntime {
   /** Enqueue user attack-on-player task */
   enqueueAttackPlayer(playerName: string) {
     const name = playerName.trim();
-    if (!name) throw new Error("Oyuncu adı boş olamaz");
+    if (!name) throw new Error("Player name cannot be empty");
     if (this.isSelfName(name)) {
-      throw new Error("Bot kendisine saldıramaz");
+      throw new Error("Bot cannot attack itself");
     }
     return this.instance.tasks.enqueue(
       {
         type: "attack",
-        label: `saldır: ${name}`,
+        label: `attack: ${name}`,
         priority: PRIORITY.USER,
         params: { player: name },
         requeueOnPreempt: true
@@ -879,7 +879,7 @@ getRuntime(): CombatRuntime {
     return this.instance.tasks.enqueue(
       {
         type: "flee",
-        label: "kaçış (can kritik)",
+        label: "fleeing (can kritik)",
         priority: PRIORITY.SURVIVAL,
         params: { from: fromLabel ?? null },
         requeueOnPreempt: false
@@ -890,12 +890,12 @@ getRuntime(): CombatRuntime {
 
   enqueueLootDeath() {
     const d = this.lastDeath;
-    if (!d) throw new Error("Kayıtlı ölüm konumu yok");
-    if (Date.now() > d.lootUntil) throw new Error("Ölüm eşyaları despawn olmuş olabilir (~5 dk geçti)");
+    if (!d) throw new Error("No recorded death location");
+    if (Date.now() > d.lootUntil) throw new Error("Death items may have despawned (~5 min passed)");
     return this.instance.tasks.enqueue(
       {
         type: "loot-death",
-        label: "ölüm yerinden loot",
+        label: "loot at death site",
         priority: PRIORITY.USER,
         params: { ...d },
         requeueOnPreempt: true
@@ -913,7 +913,7 @@ getRuntime(): CombatRuntime {
     try {
       // D6 reaction once at start
       await sleep(randomReactionMs(this.cfg()));
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
       await this.equipBestWeapon(true);
 
@@ -923,14 +923,14 @@ getRuntime(): CombatRuntime {
 
       while (!token.cancelled && Date.now() - started < maxMs) {
         if ((bot.health ?? 20) <= (this.cfg().fleeAtHealth ?? 6)) {
-          this.log().warn("Can kritik — saldırı bırakılıp kaçışa geçiliyor");
+          this.log().warn("Health critical — abandoning attack, switching to flee");
           this.enqueueFlee(playerName);
-          throw new Error("Can kritik, kaçış tetiklendi");
+          throw new Error("Health critical, flee triggered");
         }
 
         const entity = bot.players[playerName]?.entity;
         if (entity && this.isTargetTemporarilyUnreachable(entity)) {
-          report({ done: 0, total: 1, label: playerName + " geçici olarak ulaşılamıyor" });
+          report({ done: 0, total: 1, label: playerName + " temporarily unreachable" });
           await sleep(500);
           continue;
         }
@@ -939,10 +939,10 @@ getRuntime(): CombatRuntime {
           report({
             done: 0,
             total: 1,
-            label: inTab ? `${playerName} menzil dışında — aranıyor` : `${playerName} görünmüyor`
+            label: inTab ? `${playerName} out of range — searching` : `${playerName} not visible`
           });
           if (!inTab) {
-            this.log().info(`Saldırı hedefi bulunamadı: ${playerName} (tab listesinde yok)`, "İ1 — sohbete yazılmadı");
+            this.log().info(`Attack target not found: ${playerName} (not in tab list)`, "I1 — not written to chat");
             // toggle açık kalsın; kısa bekleyip yeniden dene (görev biter, requeue)
             break;
           }
@@ -951,10 +951,10 @@ getRuntime(): CombatRuntime {
         }
 
         const dist = distanceEyeToEntity(bot, entity);
-        report({ done: 0, total: Math.max(1, Math.round(dist)), label: `${playerName} · ${dist.toFixed(1)} blok` });
+        report({ done: 0, total: Math.max(1, Math.round(dist)), label: `${playerName} · ${dist.toFixed(1)} blocks` });
 
         if (dist > chase) {
-          this.log().info(`Hedef ${chase} bloktan uzak — kovalama bırakıldı`);
+          this.log().info(`Target beyond ${chase} blocks — chase abandoned`);
           break;
         }
 
@@ -963,12 +963,12 @@ getRuntime(): CombatRuntime {
         const primaryInRange = inMeleeRange(bot, entity, reach);
         const swingInRange = inMeleeRange(bot, swingAt, reach);
 
-        // Ana hedef menzilde değilse ve ara hedef de yoksa yaklaş (ana hedefe kenetlenme)
+        // Ana target menzilde değilse ve ara target de yoksa yaklaş (main targete kenetlenme)
         if (!primaryInRange && !swingInRange) {
           await this.approachEntity(entity, Math.max(1, reach - 0.5), token);
           continue;
         }
-        // Ara hedef menzilde ama ana değil — yine de ana hedefe yürümeye devam etmeden önce ara vuruş
+        // Ara target menzilde ama main değil — yine de main targete yürümeye devam etmeden önce cleave
         if (!swingInRange) {
           await this.approachEntity(entity, Math.max(1, reach - 0.5), token);
           continue;
@@ -982,17 +982,17 @@ getRuntime(): CombatRuntime {
             done: 1,
             total: 1,
             label: isCleave
-              ? `ara vuruş: ${labelEntity(swingAt)} · ana: ${playerName}`
-              : `vuruş: ${playerName}`
+              ? `cleave: ${labelEntity(swingAt)} · main: ${playerName}`
+              : `hit: ${playerName}`
           });
           if (isCleave) {
-            this.log().debug(`Cleave: ${labelEntity(swingAt)} (ana ${playerName})`);
+            this.log().debug(`Cleave: ${labelEntity(swingAt)} (main ${playerName})`);
           }
         } else if (res.reason === "los" || res.reason === "range") {
-          // ana hedefe yaklaş — kenetlenme bozulmasın
+          // main targete yaklaş — kenetlenme bozulmasın
           await this.approachEntity(entity, 2, token);
         } else if (res.reason === "cancelled") {
-          throw new Error(res.detail ?? token.reason ?? "iptal");
+          throw new Error(res.detail ?? token.reason ?? "cancelled");
         }
 
         if (entity.health !== undefined && entity.health <= 0) break;
@@ -1000,10 +1000,10 @@ getRuntime(): CombatRuntime {
         await sleep(50);
       }
 
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
-      report({ done: 1, total: 1, label: `saldırı bitti: ${playerName}` });
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      report({ done: 1, total: 1, label: `attack done: ${playerName}` });
     } finally {
-      // basılı toggle: iptal değilse kısa gecikmeyle yeniden kuyruk
+      // basılı toggle: cancelled değilse kısa gecikmeyle yeniden kuyruk
       if (!token.cancelled && this.companion.attackPlayer?.toLowerCase() === playerName.toLowerCase()) {
         setTimeout(() => {
           if (this.companion.attackPlayer?.toLowerCase() === playerName.toLowerCase()) {
@@ -1029,7 +1029,7 @@ getRuntime(): CombatRuntime {
     while (!token.cancelled && Date.now() - started < 10 * 60_000) {
       if ((bot.health ?? 20) <= (this.cfg().fleeAtHealth ?? 6)) {
         this.enqueueFlee("mob");
-        throw new Error("Can kritik, kaçış tetiklendi");
+        throw new Error("Can kritik, fleeing tetiklendi");
       }
 
       const target = this.nearestHostile(radius);
@@ -1041,7 +1041,7 @@ getRuntime(): CombatRuntime {
       const name = labelEntity(target);
       this.activeTargetLabel = name;
       this.emitCombat();
-      report({ done: killed, total: killed + 1, label: `hedef: ${name}` });
+      report({ done: killed, total: killed + 1, label: `target: ${name}` });
 
       // creeper standoff
       const ename = (target.name ?? target.displayName ?? "").toString().replace(/^minecraft:/, "");
@@ -1071,14 +1071,14 @@ getRuntime(): CombatRuntime {
     }
 
     this.setMode("idle", null);
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
-    this.log().success(`Mob temizliği bitti (${killed} hedef işlendi)`);
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+    this.log().success(`Mob clear finished (${killed} target(s) handled)`);
   }
 
   private async runFlee(fromLabel: string | undefined, token: TaskToken, report: ProgressFn) {
     const bot = this.requireBot();
     this.setMode("fleeing", fromLabel ?? null);
-    report({ done: 0, total: 1, label: "kaçılıyor…" });
+    report({ done: 0, total: 1, label: "fleeing…" });
 
     let fromPos = bot.entity.position.clone();
     if (fromLabel) {
@@ -1094,26 +1094,26 @@ getRuntime(): CombatRuntime {
     const t0 = Date.now();
     while (!token.cancelled && Date.now() - t0 < 30_000) {
       if ((bot.health ?? 0) > (this.cfg().fleeAtHealth ?? 6) + 4) break;
-      report({ done: 0, total: 1, label: `kaçış · can ${bot.health?.toFixed?.(0) ?? "?"}` });
+      report({ done: 0, total: 1, label: `fleeing · can ${bot.health?.toFixed?.(0) ?? "?"}` });
       await sleep(500);
     }
 
     this.setMode("idle", null);
-    report({ done: 1, total: 1, label: "kaçış tamam" });
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    report({ done: 1, total: 1, label: "fleeing tamam" });
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   }
 
   private async runLootDeath(d: DeathRecord, token: TaskToken, report: ProgressFn) {
     const bot = this.requireBot();
     if (this.instance.runtime.dimension !== d.dimension) {
-      throw new Error(`Ölüm ${d.dimension} boyutunda, bot ${this.instance.runtime.dimension} — önce boyut değiştir`);
+      throw new Error(`Death is in ${d.dimension} dimension, bot is in ${this.instance.runtime.dimension} — change dimension first`);
     }
-    report({ done: 0, total: 1, label: "ölüm noktasına gidiliyor" });
+    report({ done: 0, total: 1, label: "going to death point" });
     await runGoto(this.instance, d.x, d.y, d.z, 2, token, report);
-    this.log().info("Ölüm noktasına varıldı — yerdeki eşyalar için yakında kalın (otomatik pickup sunucuya bağlı)");
+    this.log().info("Arrived at death point — stay nearby for dropped items (auto-pickup depends on the server)");
     // brief wait for vanilla pickup
     await sleep(3000);
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     report({ done: 1, total: 1, label: "loot denemesi bitti" });
   }
 
@@ -1145,7 +1145,7 @@ getRuntime(): CombatRuntime {
     if (attackerForRules) {
       const label0 = labelEntity(attackerForRules);
       const isPlayer = Boolean(attackerForRules.username) || attackerForRules.type === "player";
-      // koruma "threats" modu için saldırganı kaydet
+      // koruma "threats" modu for saldırganı kaydet
       this.markThreat(label0);
       if (attackerForRules.username) this.markThreat(attackerForRules.username);
       this.instance.emit("attacked", {
@@ -1166,7 +1166,7 @@ getRuntime(): CombatRuntime {
 
     if (hp <= (this.cfg().fleeAtHealth ?? 6)) {
       if (this.mode !== "fleeing") {
-        this.log().warn(`Can ${hp} ≤ kaçış eşiği — savunma yerine kaçış`);
+        this.log().warn(`Health ${hp} ≤ flee threshold — fleeing instead of defending`);
         this.enqueueFlee();
       }
       return;
@@ -1180,7 +1180,7 @@ getRuntime(): CombatRuntime {
     if (this.hasActiveCombatTask()) return;
     if (this.mode === "defending" && this.activeTargetLabel === label) return;
 
-    this.log().info(`Savunma: ${label} (mod=${mode})`);
+    this.log().info(`Defense: ${label} (mode=${mode})`);
     this.instance.tasks.enqueue(
       {
         type: "defend",
@@ -1197,12 +1197,12 @@ getRuntime(): CombatRuntime {
     // kısa tepki — 300ms+ beklerken zombi vuruyor; öz savunmada hızlı ol
     const react = Math.min(120, randomReactionMs(this.cfg()));
     await sleep(react);
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
     this.setMode("defending", label);
     await this.equipBestWeapon(true);
 
-    // chaseDistance 0/bozuksa yine de dövüşü terk etme
+    // chaseDistance 0/bozuksa yine de combatü terk etme
     const chase = Math.max(12, Number(this.cfg().chaseDistance) || 24);
     const t0 = Date.now();
     let targetId: number | null = typeof initial?.id === "number" ? initial.id : null;
@@ -1236,22 +1236,22 @@ getRuntime(): CombatRuntime {
           if (lostSince == null) lostSince = Date.now();
           // kısa grace — entity paket gecikmesi
           if (Date.now() - lostSince > 2000) {
-            this.log().info("Saldırgan kayboldu — savunma bitti", label);
+            this.log().info("Attacker disappeared — defense ended", label);
             break;
           }
-          report({ done: 0, total: 1, label: `savun ${label} · aranıyor` });
+          report({ done: 0, total: 1, label: `savun ${label} · searching` });
           await sleep(150);
           continue;
         }
         lostSince = null;
         if (typeof entity.id === "number") targetId = entity.id;
 
-        // gövde mesafesi (göz-aim bazen 1.21'de şişebilir; kovalama için feet)
+        // gövde distancesi (göz-aim bazen 1.21'de şişebilir; kovalama for feet)
         const dist = bot.entity.position.distanceTo(entity.position);
         report({
           done: hits,
           total: Math.max(hits + 1, 1),
-          label: `savun ${labelEntity(entity)} · ${dist.toFixed(1)}m${hits ? ` · ${hits} vuruş` : ""}`
+          label: `savun ${labelEntity(entity)} · ${dist.toFixed(1)}m${hits ? ` · ${hits} hit` : ""}`
         });
 
         if (dist > chase) {
@@ -1260,7 +1260,7 @@ getRuntime(): CombatRuntime {
             this.findNearestByLabel(label, chase) ??
             this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "mob" : this.cfg().defendMode, chase);
           if (!nearer) {
-            this.log().info("Saldırgan menzilden çıktı — kovalama bırakıldı", `${dist.toFixed(1)}>${chase}`);
+            this.log().info("Attacker left range — chase abandoned", `${dist.toFixed(1)}>${chase}`);
             break;
           }
           entity = nearer;
@@ -1268,7 +1268,7 @@ getRuntime(): CombatRuntime {
         }
 
         if (entity.health !== undefined && entity.health <= 0) {
-          this.log().info(`Hedef öldü: ${labelEntity(entity)}`);
+          this.log().info(`Target died: ${labelEntity(entity)}`);
           break;
         }
 
@@ -1295,22 +1295,22 @@ getRuntime(): CombatRuntime {
             report({
               done: hits,
               total: hits + 1,
-              label: `ara vuruş ${labelEntity(swingAt)} · ana ${labelEntity(entity)} · ${hits} vuruş`
+              label: `cleave ${labelEntity(swingAt)} · main ${labelEntity(entity)} · ${hits} hit`
             });
           }
-          // ana hedef öldüyse bitir (cleave hedefi değil)
+          // main target öldüyse bitir (cleave targeti değil)
           if (entity.health !== undefined && entity.health <= 0) break;
         } else if (res.reason === "range" || res.reason === "los") {
           await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
         } else if (res.reason === "cancelled") {
-          throw new Error(res.detail ?? token.reason ?? "iptal");
+          throw new Error(res.detail ?? token.reason ?? "cancelled");
         }
 
         await sleep(50);
       }
 
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
-      if (hits > 0) this.log().info(`Savunma bitti: ${label}`, `${hits} vuruş`);
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      if (hits > 0) this.log().info(`Defense ended: ${label}`, `${hits} hits`);
     } finally {
       this.clearPathfinder();
       this.restoreCompanionMode();
@@ -1318,7 +1318,7 @@ getRuntime(): CombatRuntime {
   }
 
   private onDeath() {
-    // çift tetik (health=0 + death event) güvenli
+    // çift tetik (health=0 + death event) safe
     if (this.deadPaused && this.lastDeath && Date.now() - this.lastDeath.ts < 2000) {
       this.clearPathfinder();
       return;
@@ -1349,17 +1349,17 @@ getRuntime(): CombatRuntime {
       cur &&
       ["follow", "attack", "defend", "clear-mobs", "flee", "goto", "goto-player", "move"].includes(cur.type)
     ) {
-      this.instance.tasks.cancel(cur.id, "ölüm — hareket durdu");
+      this.instance.tasks.cancel(cur.id, "death — movement stopped");
     }
     this.clearPathfinder();
-    // pathfinder async bırakmasın diye bir kez daha
+    // pathfinder async dropmasın diye bir kez daha
     setTimeout(() => this.clearPathfinder(), 50);
     setTimeout(() => this.clearPathfinder(), 250);
     this.setMode("idle", null);
 
     this.log().warn(
-      "Bot öldü — ölüm konumu kaydedildi",
-      `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)} (${dimension}) · loot ~5 dk · koruma/takip respawn'a kadar durdu`
+      "Bot died — death position saved",
+      `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)} (${dimension}) · loot ~5 min · protect/follow paused until respawn`
     );
     this.instance.emit("deathAt", {
       botId: this.instance.config.id,
@@ -1378,7 +1378,7 @@ getRuntime(): CombatRuntime {
   // ---- helpers --------------------------------------------------------------
 
   /**
-   * Ana hedef dışındaki, menzildeki tehdit (cleave).
+   * Ana target dışındaki, menzildeki tehdit (cleave).
    * Mob: hostile · Oyuncu: bize hasar vermiş (recentThreat) ve korunan/WL değil.
    */
   private pickCleaveCandidate(primary: Entity | null): Entity | null {
@@ -1446,7 +1446,7 @@ getRuntime(): CombatRuntime {
   }
 
   /**
-   * Ana hedefe kenetlenme korunur; çok yakın hasar veren / mob varsa ara vuruş seçilir.
+   * Ana targete kenetlenme korunur; çok yakın hasar veren / mob varsa cleave seçilir.
    */
   private chooseSwingTarget(primary: Entity): Entity {
     const cleave = this.pickCleaveCandidate(primary);
@@ -1458,7 +1458,7 @@ getRuntime(): CombatRuntime {
     const pIn = inMeleeRange(bot, primary, reach);
     const cIn = inMeleeRange(bot, cleave, reach);
     if (!cIn) return primary;
-    if (!pIn) return cleave; // ana uzakta, yakın tehdit vur (yaklaşırken)
+    if (!pIn) return cleave; // main far, hit nearby threat (while approaching)
 
     let pd: number;
     let cd: number;
@@ -1468,12 +1468,12 @@ getRuntime(): CombatRuntime {
     } catch {
       return primary;
     }
-    // çok yakın ve ana kadar yakın / daha yakın → ara vuruş
+    // çok yakın ve main kadar yakın / daha yakın → cleave
     if (cd <= 2.35 && cd <= pd + 0.2) return cleave;
     return primary;
   }
 
-  /** Hasar alınca saldırgan adayı (reaktif) — en yakın uygun hedef */
+  /** Hasar alınca saldırgan adayı (reaktif) — en yakın uygun target */
   private pickDefenseTarget(mode: CombatConfig["defendMode"]): Entity | null {
     if (mode === "off") return null;
     const bot = this.bot;
@@ -1651,8 +1651,8 @@ getRuntime(): CombatRuntime {
     };
 
     try {
-      // Savaş hedefi kapalı/yer altında olabilir: pathfinder kontrollü biçimde kazabilir.
-      // Blok yerleştirme kapalı tutulur; rastgele scaffold ile harita bozulmaz.
+      // Savaş targeti kapalı/yer altında olabilir: pathfinder kontrollü biçimde kazabilir.
+      // Blok place kapalı tutulur; rastgele scaffold ile harita bozulmaz.
       ensureMovement(this.instance, {
         mode: "goto",
         allowSprintNow: true,
@@ -1680,13 +1680,13 @@ getRuntime(): CombatRuntime {
         const dist = bot.entity.position.distanceTo(live.position);
         const targetJump = live.position.distanceTo(lastTargetPos);
 
-        // Admin TP / anlık uzak taşıma: eski hedef konumuna sonsuza kadar rota çizme.
+        // Admin TP / anlık uzak taşıma: eski target konumuna sonsuza kadar rota çizme.
         if (targetJump >= TARGET_TELEPORT_DELTA && dist > chaseLimit + 4) {
-          this.markTargetUnreachable(live, "hedef ışınlandı (" + targetJump.toFixed(1) + " blok)", 8_000);
+          this.markTargetUnreachable(live, "target teleported (" + targetJump.toFixed(1) + " blocks)", 8_000);
           break;
         }
         if (dist > chaseLimit + 8) {
-          this.markTargetUnreachable(live, "kovalama sınırı dışında (" + dist.toFixed(1) + ">" + (chaseLimit + 8) + ")", 8_000);
+          this.markTargetUnreachable(live, "outside chase limit (" + dist.toFixed(1) + ">" + (chaseLimit + 8) + ")", 8_000);
           break;
         }
 
@@ -1721,11 +1721,11 @@ getRuntime(): CombatRuntime {
             allowPlace: false
           });
           setFollowGoal(live);
-          this.log().debug("Savaş rotası yeniden hesaplandı", labelEntity(live));
+          this.log().debug("Combat path recalculated", labelEntity(live));
         } else if (stalledFor >= APPROACH_STALL_ABORT_MS || noPathFor >= 4_000) {
           this.markTargetUnreachable(
             live,
-            noPathFor >= 4_000 ? "güvenli rota bulunamadı" : "ilerleme yok / blok kırılamıyor"
+            noPathFor >= 4_000 ? "safe path not found" : "no progress / cannot break block"
           );
           break;
         }
@@ -1746,8 +1746,8 @@ getRuntime(): CombatRuntime {
         await sleep(100);
       }
     } catch (error) {
-      this.log().debug("Yaklaşma başarısız", error instanceof Error ? error.message : String(error));
-      if (tracked?.isValid !== false) this.markTargetUnreachable(tracked, "pathfinder hatası", 6_000);
+      this.log().debug("Approach failed", error instanceof Error ? error.message : String(error));
+      if (tracked?.isValid !== false) this.markTargetUnreachable(tracked, "pathfinder error", 6_000);
     } finally {
       try {
         bot.removeListener("path_update", onPathUpdate);
@@ -1759,7 +1759,7 @@ getRuntime(): CombatRuntime {
       } catch {
         /* */
       }
-      // Eski pathfinder kontrol paketleri boşalsın; sonraki vuruş bakışıyla çakışmasın.
+      // Eski pathfinder kontrol paketleri boşalsın; sonraki hit bakışıyla çakışmasın.
       await sleep(60);
     }
   }
@@ -1799,11 +1799,11 @@ private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, 
 
     // elde silah var ve en iyisi yoksa (veya sadece alet) — silah tercih
     if (!best) {
-      // silah/alet yok — en azından blok bırak (yumruk)
+      // silah/alet yok — en azından blok drop (yumruk)
       if (held && isBadCombatHeld(held) && !isMeleeWeapon(held)) {
         try {
           await bot.unequip("hand");
-          this.log().info("Dövüş: el boşaltıldı (silah yok, blok/toprak bırakıldı)");
+          this.log().info("Combat: hand emptied (no weapon, dropped block/dirt)");
         } catch {
           /* */
         }
@@ -1812,7 +1812,7 @@ private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, 
     }
 
     if (banned.includes(best)) {
-      this.log().warn(`En iyi silah yasaklı listede: ${best}`);
+      this.log().warn(`Best weapon is on the banned list: ${best}`);
       return;
     }
 
@@ -1828,16 +1828,16 @@ private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, 
         await sleep(30);
         if (bot.heldItem?.name === best) {
           if (tryN > 0 || force || isBadCombatHeld(held)) {
-            this.log().info(`Dövüş silahı: ${best}`, held && held !== best ? `önceki: ${held}` : undefined);
+            this.log().info(`Combat weapon: ${best}`, held && held !== best ? `previous: ${held}` : undefined);
           }
           return;
         }
       } catch (e) {
-        this.log().debug("Silah kuşanma denemesi", e instanceof Error ? e.message : String(e));
+        this.log().debug("Weapon equip attempt", e instanceof Error ? e.message : String(e));
         await sleep(40);
       }
     }
-    this.log().warn("Silah kuşanılamadı", `${best} · elde: ${bot.heldItem?.name ?? "boş"}`);
+    this.log().warn("Could not equip weapon", `${best} · held: ${bot.heldItem?.name ?? "empty"}`);
   }
 
   /** Saldırı öncesi: kötü elde silah yoksa zorla kuşan */
@@ -1851,13 +1851,13 @@ private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, 
 
   private requireBot(): Bot {
     const bot = this.bot ?? this.instance.bot;
-    if (!bot || this.instance.status !== "online") throw new Error("Bot çevrimdışı — dövüş yapılamaz");
+    if (!bot || this.instance.status !== "online") throw new Error("Bot offline — combat unavailable");
     this.bot = bot;
     return bot;
   }
 }
 
-// caya-rubberband-fix-v1: pathfinder durduktan sonra bakış sistemine güvenli devir.
+// caya-rubberband-fix-v1: pathfinder durduktan sonra bakış sistemine safe devir.
 const caya_rubberband_fix_v1_combat = true;
 async function waitForPathfinderIdle(bot: Bot, token: TaskToken, maxMs = 180): Promise<void> {
   const until = Date.now() + Math.max(40, maxMs);

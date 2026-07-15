@@ -101,7 +101,7 @@ export async function smoothLookAt(
   const deadline = Date.now() + 2500;
 
   while (Date.now() < deadline) {
-    if (token?.cancelled) throw new Error(token.reason ?? "Bakış iptal");
+    if (token?.cancelled) throw new Error(token.reason ?? "Look cancelled");
 
     const from = eyePos(bot);
     const dx = point.x - from.x;
@@ -175,7 +175,7 @@ export async function tryRealisticAttack(
 
   // D3
   if (!hasLineOfSight(bot, entity)) {
-    return { ok: false, reason: "los", detail: "Görüş hattı engelli (duvar/blok)" };
+    return { ok: false, reason: "los", detail: "Line of sight blocked (wall/blocks)" };
   }
 
   // D1 + D5

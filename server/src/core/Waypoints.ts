@@ -5,7 +5,7 @@ import { PanelError } from "./BotManager";
 
 const FILE = "waypoints.json";
 
-/** Sunucu profili bazlı isimli konumlar (ortak dünya hafızasının ilk parçası). */
+/** Sunucu profili bazlı isimli konumlar (ortak world hafızasının ilk parçası). */
 export class WaypointStore {
   private byServer: Record<string, Waypoint[]> = {};
 
@@ -19,10 +19,10 @@ export class WaypointStore {
 
   create(serverId: string, input: { name: string; x: number; y: number; z: number; dimension?: string; note?: string }): Waypoint {
     const name = String(input.name || "").trim();
-    if (!name) throw new PanelError("Waypoint adı boş olamaz.");
+    if (!name) throw new PanelError("Waypoint name cannot be empty.");
     const list = this.byServer[serverId] ?? (this.byServer[serverId] = []);
     if (list.some((w) => w.name.toLowerCase() === name.toLowerCase())) {
-      throw new PanelError(`"${name}" adlı waypoint bu sunucuda zaten var.`, 409);
+      throw new PanelError(`Waypoint "${name}" already exists on this server.`, 409);
     }
     const wp: Waypoint = {
       id: newId(),
@@ -34,7 +34,7 @@ export class WaypointStore {
       dimension: input.dimension ?? "overworld",
       note: input.note
     };
-    if (![wp.x, wp.y, wp.z].every(Number.isFinite)) throw new PanelError("Geçersiz koordinat.");
+    if (![wp.x, wp.y, wp.z].every(Number.isFinite)) throw new PanelError("Invalid coordinates.");
     list.push(wp);
     void saveJson(FILE, this.byServer);
     return wp;
@@ -50,7 +50,7 @@ export class WaypointStore {
         return;
       }
     }
-    throw new PanelError("Waypoint bulunamadı.", 404);
+    throw new PanelError("Waypoint not found.", 404);
   }
 
   get(id: string): Waypoint {
@@ -58,6 +58,6 @@ export class WaypointStore {
       const wp = list.find((w) => w.id === id);
       if (wp) return wp;
     }
-    throw new PanelError("Waypoint bulunamadı.", 404);
+    throw new PanelError("Waypoint not found.", 404);
   }
 }

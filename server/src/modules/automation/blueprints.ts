@@ -1,6 +1,6 @@
 import type { AutomationRule } from "./RuleEngine";
 
-/** Kullanıcı blueprint’i (ileride kalıcı özel şablon için iskelet) */
+/** Kullanıcı blueprint’i (ileride kalıcı özel şablon for iskelet) */
 export interface RuleBlueprint {
   id: string;
   name: string;

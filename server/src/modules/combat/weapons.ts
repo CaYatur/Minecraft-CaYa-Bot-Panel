@@ -78,11 +78,11 @@ export function isMeleeWeapon(itemName: string): boolean {
   return weaponScore(itemName) > 0;
 }
 
-/** Elde dövüş için uygunsuz (blok/yemek/kova) — silaha geçilmeli */
+/** Elde combat for uygunsuz (blok/yemek/kova) — silaha geçilmeli */
 export function isBadCombatHeld(itemName: string | undefined | null): boolean {
   if (!itemName) return false; // yumruk OK
   if (isMeleeWeapon(itemName)) return false;
-  // silah değilse dövüşte kötü say (toprak, kova, yemek, alet…)
+  // silah değilse combatte kötü say (toprak, kova, yemek, alet…)
   // kazma/kürek zayıf yedek olabilir ama kılıç/balta varken kullanılmaz
   return true;
 }

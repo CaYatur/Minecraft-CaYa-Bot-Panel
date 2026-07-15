@@ -1,5 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  Axe,
+  Backpack,
+  Construction,
+  Drumstick,
+  Heart,
+  ListChecks,
+  MapPin,
+  MessageSquare,
+  RotateCcw,
+  ScrollText,
+  Star,
+  Swords
+} from "lucide-react";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
 import { CombatPanel } from "../components/CombatPanel";
@@ -26,21 +41,21 @@ export function BotDetail() {
   const servers = useAppStore((s) => s.servers);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const toast = useAppStore((s) => s.toast);
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [tab, setTab] = useState<Tab>("chat");
   /** yetkili oyuncular — virgülle ayrılmış metin */
   const [authText, setAuthText] = useState("");
   const [authSaving, setAuthSaving] = useState(false);
 
-  const TABS: { id: Tab; label: string }[] = [
-    { id: "chat", label: t("botDetail.tabs.chat") },
-    { id: "logs", label: t("botDetail.tabs.logs") },
-    { id: "inventory", label: t("botDetail.tabs.inventory") },
-    { id: "tasks", label: t("botDetail.tabs.tasks") },
-    { id: "combat", label: t("botDetail.tabs.combat") },
-    { id: "survival", label: t("botDetail.tabs.survival") },
-    { id: "work", label: t("botDetail.tabs.work") },
-    { id: "build", label: t("botDetail.tabs.build") }
+  const TABS: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
+    { id: "chat", label: t("botDetail.tabs.chat"), icon: MessageSquare },
+    { id: "logs", label: t("botDetail.tabs.logs"), icon: ScrollText },
+    { id: "inventory", label: t("botDetail.tabs.inventory"), icon: Backpack },
+    { id: "tasks", label: t("botDetail.tabs.tasks"), icon: ListChecks },
+    { id: "combat", label: t("botDetail.tabs.combat"), icon: Swords },
+    { id: "survival", label: t("botDetail.tabs.survival"), icon: Drumstick },
+    { id: "work", label: t("botDetail.tabs.work"), icon: Axe },
+    { id: "build", label: t("botDetail.tabs.build"), icon: Construction }
   ];
 
   // bot değişince yetkili listesini senkronla
@@ -127,7 +142,7 @@ export function BotDetail() {
     <div className="flex h-full flex-col gap-4 p-6">
       <div className="flex flex-wrap items-center gap-3">
         <Link to="/" className="text-zinc-500 hover:text-zinc-300">
-          ←
+          <ArrowLeft className="h-4 w-4" />
         </Link>
         <h1 className="text-xl font-bold text-zinc-100">{bot.config.username}</h1>
         <StatusBadge status={bot.status} />
@@ -145,9 +160,9 @@ export function BotDetail() {
             type="button"
             onClick={() => void resetWork()}
             title={t("botDetail.resetWorkTitle")}
-            className="rounded-lg border border-amber-800/70 bg-amber-950/50 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-900/50"
+            className="flex items-center gap-1.5 rounded-lg border border-amber-800/70 bg-amber-950/50 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-900/50"
           >
-            {t("botDetail.resetWork")}
+            <RotateCcw className="h-3.5 w-3.5" /> {t("botDetail.resetWork")}
           </button>
           <button
             onClick={toggle}
@@ -171,16 +186,30 @@ export function BotDetail() {
       )}
 
       <div className="grid grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:grid-cols-4">
-        <StatBar value={bot.runtime.health} max={20} color="bg-red-500" label={t("botDetail.health")} icon="❤️" />
-        <StatBar value={bot.runtime.food} max={20} color="bg-amber-500" label={t("botDetail.food")} icon="🍗" />
+        <StatBar
+          value={bot.runtime.health}
+          max={20}
+          color="bg-red-500"
+          label={t("botDetail.health")}
+          icon={<Heart className="h-3.5 w-3.5 text-red-400" />}
+        />
+        <StatBar
+          value={bot.runtime.food}
+          max={20}
+          color="bg-amber-500"
+          label={t("botDetail.food")}
+          icon={<Drumstick className="h-3.5 w-3.5 text-amber-400" />}
+        />
         <div className="mono flex items-center gap-2 text-xs text-zinc-400">
-          <span>⭐ {t("botDetail.level", { n: bot.runtime.xpLevel })}</span>
+          <span className="flex items-center gap-1">
+            <Star className="h-3.5 w-3.5" /> {t("botDetail.level", { n: bot.runtime.xpLevel })}
+          </span>
           <span className="text-zinc-600">·</span>
           <span>{bot.runtime.ping} ms</span>
         </div>
-        <div className="mono text-xs text-zinc-400">
-          📍 {fmtPos(bot.runtime.position)}{" "}
-          <span className="text-zinc-600">({dimensionLabel(bot.runtime.dimension)})</span>
+        <div className="mono flex items-center gap-1 text-xs text-zinc-400">
+          <MapPin className="h-3.5 w-3.5 shrink-0" /> {fmtPos(bot.runtime.position)}{" "}
+          <span className="text-zinc-600">({dimensionLabel(bot.runtime.dimension, locale)})</span>
         </div>
       </div>
 
@@ -235,13 +264,13 @@ export function BotDetail() {
           <button
             key={item.id}
             onClick={() => setTab(item.id)}
-            className={`rounded-t-lg px-4 py-2 text-sm transition-colors ${
+            className={`flex items-center gap-1.5 rounded-t-lg px-4 py-2 text-sm transition-colors ${
               tab === item.id
                 ? "border border-b-0 border-zinc-800 bg-zinc-900 text-zinc-100"
                 : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            {item.label}
+            <item.icon className="h-3.5 w-3.5" /> {item.label}
           </button>
         ))}
       </div>
