@@ -931,3 +931,14 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 2. `placeBucketMlg`: katı tepeye lookAt, activateItem + activateBlock + use_item, 16 deneme, kova/su doğrulama.
 3. Çoklu xz zemin taraması; yatay kontrol kes; başarısızda hızlı retry.
 4. Varsayılan mlgTriggerBlocks 5.5 (hazırlık); asıl döküm reach bandında.
+
+### 2026-07-15 — Grok 4.5 — MLG malzeme geri alma (su öncelikli)
+
+**İstek:** MLG sonrası eşyayı geri al; suyu neredeyse kesin; zor durumda değilse diğerleri de.
+
+**Yapılanlar:**
+1. `MlgRecoverJob` kuyruğu — water/boat/blok; su priority 100, ~20s TTL, çoklu deneme.
+2. `isSafeToReclaim`: düşüş/yanma/lav/kaçış/yakın düşman geciktirir; su daha agresif.
+3. `reclaimWater` / `reclaimBoat` / `reclaimBlock`.
+4. SurvivalPanel: autoReclaim + reclaimWater/Boat/Blocks.
+5. Log: `MLG malzeme geri alındı: water`.
