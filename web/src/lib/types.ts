@@ -58,6 +58,14 @@ export interface BotConfig {
       seekWater: boolean;
       useWaterBucket: boolean;
     };
+    /** boş kova doldur (MLG reclaim'den bağımsız) */
+    bucketScoop?: {
+      enabled: boolean;
+      scoopWater: boolean;
+      scoopLava: boolean;
+      radius: number;
+      cooldownMs: number;
+    };
   };
   chat: { minMessageIntervalMs: number };
   movement: {

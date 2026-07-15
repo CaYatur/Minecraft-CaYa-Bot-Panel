@@ -3,6 +3,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { ensureMovement, runGoto } from "../movement";
 import { tryRealisticAttack, inMeleeRange, distanceEyeToEntity } from "../combat/realism";
+import { BucketScoopService } from "./bucketScoop";
 import { FallGuardService, type FallGuardState } from "./fallGuard";
 import { foodScore, isFood, isRawMeat, HUNTABLE, RAW_TO_COOKED, FUEL_PRIORITY } from "./foods";
 import { HazardGuardService, type HazardGuardState } from "./hazardGuard";
@@ -10,7 +11,7 @@ import { WaterGuardService, type WaterGuardState } from "./waterGuard";
 
 /**
  * Survival brain (Faz 7): auto-eat, hunt nearby animals, simple furnace cook.
- * FallGuard: düşüş MLG · WaterGuard: boğulmama · HazardGuard: ateş/lav.
+ * FallGuard: düşüş MLG · WaterGuard: boğulmama · HazardGuard: ateş/lav · BucketScoop: boş kova doldur.
  */
 export class SurvivalService {
   private bot: Bot | null = null;
@@ -21,11 +22,13 @@ export class SurvivalService {
   readonly fallGuard: FallGuardService;
   readonly waterGuard: WaterGuardService;
   readonly hazardGuard: HazardGuardService;
+  readonly bucketScoop: BucketScoopService;
 
   constructor(private readonly instance: BotInstance) {
     this.fallGuard = new FallGuardService(instance);
     this.waterGuard = new WaterGuardService(instance);
     this.hazardGuard = new HazardGuardService(instance);
+    this.bucketScoop = new BucketScoopService(instance);
   }
 
   attach(bot: Bot) {
@@ -36,9 +39,11 @@ export class SurvivalService {
     this.fallGuard.attach(bot);
     this.waterGuard.attach(bot);
     this.hazardGuard.attach(bot);
+    this.bucketScoop.attach(bot);
   }
 
   detach() {
+    this.bucketScoop.detach();
     this.hazardGuard.detach();
     this.waterGuard.detach();
     this.fallGuard.detach();

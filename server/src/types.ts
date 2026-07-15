@@ -150,6 +150,17 @@ export interface BotConfig {
       seekWater: boolean;
       useWaterBucket: boolean;
     };
+    /**
+     * Boş kova ile yakındaki su/lav doldurma (opsiyonel).
+     * MLG su geri almadan bağımsız — kapalı olsa bile MLG reclaim çalışır.
+     */
+    bucketScoop?: {
+      enabled: boolean;
+      scoopWater: boolean;
+      scoopLava: boolean;
+      radius: number;
+      cooldownMs: number;
+    };
   };
   chat: {
     minMessageIntervalMs: number;
@@ -364,6 +375,13 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         escapeRadius: 12,
         seekWater: true,
         useWaterBucket: true
+      },
+      bucketScoop: {
+        enabled: false,
+        scoopWater: true,
+        scoopLava: false,
+        radius: 3,
+        cooldownMs: 2500
       }
     },
     chat: { minMessageIntervalMs: 1500 },

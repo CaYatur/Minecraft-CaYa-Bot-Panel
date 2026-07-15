@@ -43,6 +43,14 @@ const defaultHg = {
   useWaterBucket: true
 };
 
+const defaultScoop = {
+  enabled: false,
+  scoopWater: true,
+  scoopLava: false,
+  radius: 3,
+  cooldownMs: 2500
+};
+
 /** Faz 7 — Hayatta kalma + düşüş kurtarma (MLG). */
 export function SurvivalPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
@@ -66,6 +74,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
   const fg = { ...defaultFg, ...(s.fallGuard ?? {}) };
   const wg = { ...defaultWg, ...(s.waterGuard ?? {}) };
   const hg = { ...defaultHg, ...(s.hazardGuard ?? {}) };
+  const scoop = { ...defaultScoop, ...(s.bucketScoop ?? {}) };
   const online = bot.status === "online";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
@@ -441,6 +450,61 @@ export function SurvivalPanel({ botId }: { botId: string }) {
         <p className="text-[11px] leading-relaxed text-zinc-500">
           Lavdaysa zıplayıp çıkar; yanıyorsa suya veya güvenli bloğa pathfinder ile kaçar. Magma/ateş
           bloğu üzerinde de devreye girer. Envanterde water_bucket varsa ayak altına döküp söndürmeyi dener.
+        </p>
+      </div>
+
+      {/* Boş kova doldurma — MLG geri almadan bağımsız */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          Boş kova doldur (opsiyonel)
+        </div>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={scoop.enabled}
+            onChange={(e) => void patch({ bucketScoop: { ...scoop, enabled: e.target.checked } })}
+          />
+          Yakındaki kaynaklardan boş kovayı doldur
+        </label>
+        <div className="mb-2 flex flex-wrap gap-4 text-xs text-zinc-400">
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={scoop.scoopWater}
+              disabled={!scoop.enabled}
+              onChange={(e) => void patch({ bucketScoop: { ...scoop, scoopWater: e.target.checked } })}
+            />
+            Su
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={scoop.scoopLava}
+              disabled={!scoop.enabled}
+              onChange={(e) => void patch({ bucketScoop: { ...scoop, scoopLava: e.target.checked } })}
+            />
+            Lav
+          </label>
+        </div>
+        <label className="mb-2 flex flex-col gap-1 text-[10px] text-zinc-500 max-w-[8rem]">
+          Tarama yarıçapı
+          <input
+            type="number"
+            min={1}
+            max={6}
+            defaultValue={scoop.radius}
+            disabled={!scoop.enabled}
+            onBlur={(e) =>
+              void patch({
+                bucketScoop: { ...scoop, radius: Math.max(1, Math.min(6, Number(e.target.value) || 3)) }
+              })
+            }
+            className="mono w-16 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500 disabled:opacity-40"
+          />
+        </label>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          <b className="font-medium text-zinc-400">MLG su geri alma bundan ayrıdır</b> — bu kapalı olsa bile düşüşte
+          dökülen MLG suyu (Yaşam → MLG malzeme geri al) alınır. Bu seçenek sadece boş gezerken kaynak doldurmak içindir.
         </p>
       </div>
     </div>
