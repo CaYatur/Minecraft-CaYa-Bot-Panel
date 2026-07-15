@@ -246,7 +246,7 @@ export function Automations() {
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Cooldownğlama (ms)</span>
+              <span className="text-zinc-400">Soğuma (ms)</span>
               <input
                 type="number"
                 value={form.cooldownMs}
