@@ -563,8 +563,9 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           ))}
         </div>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          Goto yolu yoksa 2–4 blok gap jump dener. Merdiven: yavaş tırman + güvenli çıkış (acele zıplama yok). Görev:{" "}
-          <span className="mono text-zinc-400">parkour-goto</span>. 4 blok sunucuya göre kaçabilir.
+          Goto yolu yoksa 2–4 blok gap jump dener. Merdiven: emin adımlar (yapış → seyrek tırman → tepede bekle →
+          solid iniş); acele zıplama yok. Görev: <span className="mono text-zinc-400">parkour-goto</span>. 4 blok
+          sunucuya göre kaçabilir.
         </p>
 
         <div className="mt-3 border-t border-zinc-800 pt-2">
@@ -577,11 +578,11 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               checked={mov.edgeSafety === true}
               onChange={(e) => void patchMove({ edgeSafety: e.target.checked })}
             />
-            Kenar tarama (takibi bozabilir — kapalı önerilir)
+            Kenar tarama (sadece gerçek uçurum)
           </label>
           <p className="text-[10px] leading-relaxed text-zinc-600">
-            Kapalıyken pathfinder + parkour + MLG kullanılır. Açıkken yanlış pozitifle geri itme yapabiliyordu;
-            şu an takip/goto döngüsünden çıkarıldı.
+            Düz / güvenli yollarda kenar güvenliği gerekmez ve devreye girmez. Açıkken bile 1-up / düz basamak
+            normal pathfinder işi. Takip döngüsünden çıkarıldı (yanlış geri itme); kapalı önerilir.
           </p>
         </div>
       </div>
