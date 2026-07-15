@@ -43,12 +43,26 @@ export interface DeathRecord {
   lootUntil: number;
 }
 
+export interface CompanionState {
+  followPlayer: string | null;
+  followDistance: number;
+  attackPlayer: string | null;
+  protectPlayer: string | null;
+  protectSettings: {
+    range: number;
+    retaliateMobs: boolean;
+    retaliatePlayers: boolean;
+    whitelist: string[];
+  };
+}
+
 export interface CombatRuntime {
   defendMode: "off" | "mob" | "player" | "all";
   fighting: boolean;
-  mode: "idle" | "attacking" | "defending" | "fleeing";
+  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting";
   activeTarget: string | null;
   lastDeath: DeathRecord | null;
+  companion: CompanionState;
 }
 
 export interface BotRuntimeState {

@@ -253,26 +253,68 @@ export class BotInstance extends EventEmitter {
         );
       }
       case "follow": {
+        // toggle-aware: enabled false → companion follow kapat
+        if (action.enabled === false) {
+          this.combat.setFollow(str(action.player, "player"), false);
+          return null;
+        }
         const player = str(action.player, "player");
         const distance = clampRange(action.distance ?? 3);
-        return this.tasks.enqueue(
-          { type, label: `takip: ${player} (iptale dek)`, priority: PRIORITY.USER, params: { player, distance } },
-          () => (token, report) => runFollow(this, player, distance, token, report)
-        );
+        this.combat.setFollow(player, true, distance);
+        return this.tasks.currentSummary?.type === "follow" ? this.tasks.currentSummary : null;
       }
       case "stop":
         stopMovement(this);
-        this.combat.stopCombat("kullanıcı stop");
+        this.combat.clearCompanion("kullanıcı stop");
         this.log.info("Hareket ve görev kuyruğu durduruldu (kullanıcı)");
         return null;
+      // yakındaki oyuncular — toggle companion
+      case "social-follow": {
+        const enabled = action.enabled !== false && action.enabled !== "false";
+        this.combat.setFollow(str(action.player, "player"), enabled, action.distance != null ? Number(action.distance) : undefined);
+        return null;
+      }
+      case "social-attack": {
+        const enabled = action.enabled !== false && action.enabled !== "false";
+        this.combat.setAttack(str(action.player, "player"), enabled);
+        return null;
+      }
+      case "social-protect": {
+        const enabled = action.enabled !== false && action.enabled !== "false";
+        const wl = Array.isArray(action.whitelist)
+          ? (action.whitelist as unknown[]).map(String)
+          : typeof action.whitelist === "string"
+            ? String(action.whitelist)
+                .split(/[,;\s]+/)
+                .filter(Boolean)
+            : undefined;
+        this.combat.setProtect(str(action.player, "player"), enabled, {
+          followDistance: action.followDistance != null ? Number(action.followDistance) : undefined,
+          range: action.range != null ? Number(action.range) : undefined,
+          retaliateMobs: action.retaliateMobs != null ? Boolean(action.retaliateMobs) : undefined,
+          retaliatePlayers: action.retaliatePlayers != null ? Boolean(action.retaliatePlayers) : undefined,
+          whitelist: wl
+        });
+        return null;
+      }
       case "chat": {
         const text = str(action.text, "text");
         this.sendChat(text);
         return null;
       }
       // ---- Faz 6 dövüş --------------------------------------------------------
-      case "attack":
+      case "attack": {
+        // enabled false → saldırı toggle kapat; true/yok → başlat (toggle panel)
+        if (action.enabled === false || action.enabled === "false") {
+          this.combat.setAttack(str(action.player, "player"), false);
+          return null;
+        }
+        if (action.toggle === true || action.enabled === true) {
+          this.combat.setAttack(str(action.player, "player"), true);
+          return null;
+        }
         return this.combat.enqueueAttackPlayer(str(action.player, "player"));
+      }
       case "clear-mobs":
         return this.combat.enqueueClearMobs(Number(action.radius ?? 16));
       case "flee":
@@ -281,7 +323,6 @@ export class BotInstance extends EventEmitter {
         return this.combat.enqueueLootDeath();
       case "stop-combat":
         this.combat.stopCombat("panel");
-        this.tasks.cancelAll("dövüş bırakıldı");
         return null;
       // ---- Faz 7 survival ------------------------------------------------------
       case "eat":

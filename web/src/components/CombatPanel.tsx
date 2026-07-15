@@ -15,7 +15,8 @@ const MODE_TR: Record<CombatRuntime["mode"], string> = {
   idle: "Boşta",
   attacking: "Saldırıyor",
   defending: "Savunuyor",
-  fleeing: "Kaçıyor"
+  fleeing: "Kaçıyor",
+  protecting: "Koruyor"
 };
 
 /**
@@ -43,7 +44,14 @@ export function CombatPanel({ botId }: { botId: string }) {
     fighting: false,
     mode: "idle" as const,
     activeTarget: null,
-    lastDeath: null
+    lastDeath: null,
+    companion: {
+      followPlayer: null,
+      followDistance: 3,
+      attackPlayer: null,
+      protectPlayer: null,
+      protectSettings: { range: 10, retaliateMobs: true, retaliatePlayers: true, whitelist: [] }
+    }
   };
   const cfg = bot.config.combat;
   const online = bot.status === "online";

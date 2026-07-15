@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { socket } from "../lib/socket";
 import { EV } from "../lib/events";
+import { socket } from "../lib/socket";
+import type { CompanionState } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
 interface NearbyPlayer {
@@ -13,12 +14,50 @@ interface NearbyPlayer {
   z?: number;
 }
 
-/** Bot detay — menzildeki oyuncular; tıkla takip / yanına git / saldır / fısılda. */
+const defaultCompanion = (): CompanionState => ({
+  followPlayer: null,
+  followDistance: 3,
+  attackPlayer: null,
+  protectPlayer: null,
+  protectSettings: { range: 10, retaliateMobs: true, retaliatePlayers: true, whitelist: [] }
+});
+
+const btnBase = "rounded-lg px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-40";
+const btnIdle = `${btnBase} bg-zinc-800 text-zinc-300 hover:bg-zinc-700`;
+const btnFollowOn = `${btnBase} bg-emerald-600 text-white ring-1 ring-emerald-400/50`;
+const btnAttackOn = `${btnBase} bg-red-600 text-white ring-1 ring-red-400/50`;
+const btnProtectOn = `${btnBase} bg-indigo-600 text-white ring-1 ring-indigo-400/50`;
+
+/** Bot detay — yakındaki oyuncular + takip/saldırı/koruma toggle (basılı stil). */
 export function NearbyPlayers({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const [players, setPlayers] = useState<NearbyPlayer[]>([]);
   const [radius, setRadius] = useState(48);
+  const [followDist, setFollowDist] = useState(3);
+  const [protectRange, setProtectRange] = useState(10);
+  const [retaliateMobs, setRetaliateMobs] = useState(true);
+  const [retaliatePlayers, setRetaliatePlayers] = useState(true);
+  const [whitelistText, setWhitelistText] = useState("");
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
+
+  const companion = bot?.combat?.companion ?? defaultCompanion();
+
+  useEffect(() => {
+    setFollowDist(companion.followDistance || 3);
+    setProtectRange(companion.protectSettings?.range ?? 10);
+    setRetaliateMobs(companion.protectSettings?.retaliateMobs ?? true);
+    setRetaliatePlayers(companion.protectSettings?.retaliatePlayers ?? true);
+    setWhitelistText((companion.protectSettings?.whitelist ?? []).join(", "));
+  }, [
+    companion.followDistance,
+    companion.protectSettings?.range,
+    companion.protectSettings?.retaliateMobs,
+    companion.protectSettings?.retaliatePlayers,
+    companion.protectPlayer,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (companion.protectSettings?.whitelist ?? []).join(",")
+  ]);
 
   useEffect(() => {
     const onNearby = (p: { botId: string; players: NearbyPlayer[] }) => {
@@ -61,20 +100,103 @@ export function NearbyPlayers({ botId }: { botId: string }) {
     }
   };
 
+  const isFollow = (name: string) => companion.followPlayer?.toLowerCase() === name.toLowerCase();
+  const isAttack = (name: string) => companion.attackPlayer?.toLowerCase() === name.toLowerCase();
+  const isProtect = (name: string) => companion.protectPlayer?.toLowerCase() === name.toLowerCase();
+
+  const toggleFollow = (name: string) => {
+    const on = !isFollow(name);
+    void act(
+      { type: "social-follow", player: name, enabled: on, distance: followDist },
+      on ? `Takip: ${name} (≤${followDist}m)` : `Takip kapatıldı: ${name}`
+    );
+  };
+
+  const toggleAttack = (name: string) => {
+    const on = !isAttack(name);
+    void act({ type: "social-attack", player: name, enabled: on }, on ? `Saldırı: ${name}` : `Saldırı kapatıldı: ${name}`);
+  };
+
+  const toggleProtect = (name: string) => {
+    const on = !isProtect(name);
+    const wl = whitelistText
+      .split(/[,;\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    void act(
+      {
+        type: "social-protect",
+        player: name,
+        enabled: on,
+        followDistance: followDist,
+        range: protectRange,
+        retaliateMobs,
+        retaliatePlayers,
+        whitelist: wl
+      },
+      on ? `Koruma + takip: ${name}` : `Koruma kapatıldı: ${name}`
+    );
+  };
+
+  const applySettings = (name: string) => {
+    const wl = whitelistText
+      .split(/[,;\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (isProtect(name)) {
+      void act(
+        {
+          type: "social-protect",
+          player: name,
+          enabled: true,
+          followDistance: followDist,
+          range: protectRange,
+          retaliateMobs,
+          retaliatePlayers,
+          whitelist: wl
+        },
+        `Koruma ayarları: ${name}`
+      );
+      return;
+    }
+    if (isFollow(name)) {
+      void act(
+        { type: "social-follow", player: name, enabled: true, distance: followDist },
+        `Takip mesafe: ${followDist}m → ${name}`
+      );
+      return;
+    }
+    toast("info", "Önce Takip veya Koru’yu aç, sonra ayarları uygula");
+  };
+
   if (!bot) return null;
   const online = bot.status === "online";
   const inRange = players.filter((p) => p.hasEntity && p.distance != null && p.distance <= radius);
   const tabOnly = players.filter((p) => !p.hasEntity);
+
+  const activeLine =
+    companion.followPlayer || companion.attackPlayer || companion.protectPlayer
+      ? [
+          companion.protectPlayer ? `koru:${companion.protectPlayer}` : null,
+          companion.followPlayer ? `takip:${companion.followPlayer}≤${companion.followDistance}` : null,
+          companion.attackPlayer ? `saldır:${companion.attackPlayer}` : null
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null;
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Yakındaki oyuncular</span>
         <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
-          {inRange.length} menzilde{tabOnly.length ? ` · ${tabOnly.length} tab (konum yok)` : ""}
+          {inRange.length} menzilde{tabOnly.length ? ` · ${tabOnly.length} tab` : ""}
         </span>
+        {activeLine && (
+          <span className="rounded-full bg-indigo-950/50 px-2 py-0.5 text-[10px] text-indigo-300">{activeLine}</span>
+        )}
         <label className="ml-auto flex items-center gap-1.5 text-[10px] text-zinc-500">
-          Menzil
+          Liste menzili
           <input
             type="number"
             min={4}
@@ -84,57 +206,127 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             className="mono w-14 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200 outline-none focus:border-indigo-500"
           />
         </label>
+        <label className="flex items-center gap-1.5 text-[10px] text-zinc-500">
+          Takip mesafe
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={followDist}
+            onChange={(e) => setFollowDist(Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
+            className="mono w-12 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200 outline-none focus:border-indigo-500"
+            title="Takipte durma mesafesi (blok)"
+          />
+        </label>
       </div>
 
-      {!online && (
-        <p className="text-xs text-zinc-600 italic">Bot online olunca yakındaki oyuncular burada listelenir.</p>
-      )}
+      {!online && <p className="text-xs text-zinc-600 italic">Bot online olunca yakındaki oyuncular burada listelenir.</p>}
 
       {online && inRange.length === 0 && tabOnly.length === 0 && (
         <p className="text-xs text-zinc-600 italic">
-          Menzilde oyuncu yok (veya sunucu entity yayınlamıyor — flying-squid / uzak mesafe).
+          Menzilde oyuncu yok (veya sunucu entity yayınlamıyor — Paper&apos;da tam mesafe).
         </p>
       )}
 
-      <div className="max-h-40 space-y-1 overflow-y-auto">
-        {inRange.map((p) => (
-          <div
-            key={p.username}
-            className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1.5"
-          >
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">{p.username}</span>
-            <span className="mono text-[10px] text-zinc-500">{p.distance?.toFixed(1)} m</span>
-            <button
-              type="button"
-              onClick={() => act({ type: "follow", player: p.username, distance: 3 }, `Takip: ${p.username}`)}
-              className="rounded-lg bg-zinc-800 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-zinc-700"
-            >
-              Takip
-            </button>
-            <button
-              type="button"
-              onClick={() => act({ type: "goto-player", player: p.username }, `Yanına: ${p.username}`)}
-              className="rounded-lg bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
-            >
-              Yanına
-            </button>
-            <button
-              type="button"
-              onClick={() => act({ type: "attack", player: p.username }, `Saldır: ${p.username}`)}
-              className="rounded-lg bg-red-900/60 px-2 py-0.5 text-[11px] text-red-200 hover:bg-red-800/60"
-            >
-              Saldır
-            </button>
-            <button
-              type="button"
-              onClick={() => act({ type: "chat", text: `/msg ${p.username} ` }, `Fısıltı hazır: ${p.username}`)}
-              className="rounded-lg bg-zinc-800 px-2 py-0.5 text-[11px] text-purple-300 hover:bg-zinc-700"
-              title="Sohbete /msg yazar (rate limiter)"
-            >
-              Msg
-            </button>
-          </div>
-        ))}
+      <div className="max-h-52 space-y-1.5 overflow-y-auto">
+        {inRange.map((p) => {
+          const fOn = isFollow(p.username);
+          const aOn = isAttack(p.username);
+          const pOn = isProtect(p.username);
+          const openSettings = settingsFor === p.username;
+          return (
+            <div key={p.username} className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">{p.username}</span>
+                <span className="mono text-[10px] text-zinc-500">{p.distance?.toFixed(1)} m</span>
+                <button type="button" disabled={!online} onClick={() => toggleFollow(p.username)} className={fOn ? btnFollowOn : btnIdle}>
+                  {fOn ? "● Takip" : "Takip"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!online}
+                  onClick={() => act({ type: "goto-player", player: p.username }, `Yanına: ${p.username}`)}
+                  className={btnIdle}
+                >
+                  Yanına
+                </button>
+                <button type="button" disabled={!online} onClick={() => toggleAttack(p.username)} className={aOn ? btnAttackOn : btnIdle}>
+                  {aOn ? "● Saldır" : "Saldır"}
+                </button>
+                <button type="button" disabled={!online} onClick={() => toggleProtect(p.username)} className={pOn ? btnProtectOn : btnIdle} title="Koruma: otomatik takip + tehditlere karşılık">
+                  {pOn ? "● Koru" : "Koru"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsFor(openSettings ? null : p.username)}
+                  className={btnIdle}
+                  title="Koruma / takip ayarları"
+                >
+                  ⚙
+                </button>
+              </div>
+
+              {openSettings && (
+                <div className="mt-2 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-1 text-zinc-400">
+                      Takip mesafe
+                      <input
+                        type="number"
+                        min={1}
+                        max={16}
+                        value={followDist}
+                        onChange={(e) => setFollowDist(Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
+                        className="mono w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-200"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1 text-zinc-400">
+                      Koruma yarıçap
+                      <input
+                        type="number"
+                        min={4}
+                        max={32}
+                        value={protectRange}
+                        onChange={(e) => setProtectRange(Math.max(4, Math.min(32, Number(e.target.value) || 10)))}
+                        className="mono w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-200"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5 text-zinc-300">
+                      <input type="checkbox" checked={retaliateMobs} onChange={(e) => setRetaliateMobs(e.target.checked)} />
+                      Yaratıklara saldır
+                    </label>
+                    <label className="flex items-center gap-1.5 text-zinc-300">
+                      <input type="checkbox" checked={retaliatePlayers} onChange={(e) => setRetaliatePlayers(e.target.checked)} />
+                      Oyunculara saldır
+                    </label>
+                  </div>
+                  <label className="flex flex-col gap-0.5 text-zinc-400">
+                    Beyaz liste (virgülle — bunlar korunan&apos;a vursa bile bot saldırmasın)
+                    <input
+                      value={whitelistText}
+                      onChange={(e) => setWhitelistText(e.target.value)}
+                      placeholder="dost1, dost2"
+                      className="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-200 outline-none focus:border-indigo-500"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-indigo-500"
+                      onClick={() => applySettings(p.username)}
+                    >
+                      Ayarları uygula
+                    </button>
+                    <span className="text-[10px] leading-relaxed text-zinc-600">
+                      Koru = otomatik takip + tehdit (mob/oyuncu). Beyaz listedekilere saldırılmaz. Aktif butonlar renkli kalır.
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
         {tabOnly.map((p) => (
           <div
             key={`tab-${p.username}`}
@@ -144,10 +336,14 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             <span className="text-[10px] text-zinc-600">tab · konum yok</span>
             <button
               type="button"
-              onClick={() => act({ type: "follow", player: p.username }, `Takip bekle: ${p.username}`)}
-              className="rounded-lg bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-700"
+              disabled={!online}
+              onClick={() => toggleFollow(p.username)}
+              className={isFollow(p.username) ? btnFollowOn : btnIdle}
             >
-              Takip (bekle)
+              {isFollow(p.username) ? "● Takip (bekle)" : "Takip (bekle)"}
+            </button>
+            <button type="button" disabled={!online} onClick={() => toggleProtect(p.username)} className={isProtect(p.username) ? btnProtectOn : btnIdle}>
+              {isProtect(p.username) ? "● Koru" : "Koru"}
             </button>
           </div>
         ))}

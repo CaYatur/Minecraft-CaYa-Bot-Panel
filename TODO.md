@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 13 ✅ tamam — nearby + catalog + zengin otomasyon UI**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 13 ✅ + companion UX (takip/saldırı/koruma basılı + WL)**
 
 ---
 
@@ -417,9 +417,14 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 
 #### 13.A — Bot detay: yakındaki oyuncular
 - [x] Canlı liste: menzilde mesafe; entity yoksa tab-only satır.
-- [x] Tek tık: **Takip** · **Yanına** · **Saldır** · **Msg** (`/msg`).
+- [x] Toggle: **Takip** · **Yanına** · **Saldır** · **Koru** (aktif = basılı renk + ●).
+- [x] Takip durma mesafesi ayarlanabilir (1–16); görev etiketi mesafe ile yenilenir.
+- [x] **Koruma modu:** açılınca otomatik takip; korunan etrafında mob/oyuncu tarama;
+  beyaz liste (saldırılmaz), retaliateMobs / retaliatePlayers / koruma yarıçapı.
+- [x] Companion state: `CombatRuntime.companion` + `bot:combat` socket; actions
+  `social-follow` / `social-attack` / `social-protect`.
 - [x] Socket `bot:nearby` (~1 Hz) + REST `GET /bots/:id/nearby`; `NearbyPlayers.tsx`.
-- [~] **Kabul:** API/UI hazır; entity mesafesi Paper (flying-squid entity yok → tab-only).
+- [x] **Kabul:** basılı stil + mesafe + koruma/WL UI+server typecheck; entity Paper.
 
 #### 13.B — Sürüme göre eşya/maden kataloğu
 - [x] `minecraft-data` + `GET /api/catalog?version=` (items/blocks/ores/foods/tools/weapons, cache).
@@ -691,3 +696,17 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 5. TODO §7/§8/§15 güncellendi; typecheck temiz.
 
 **Sınır:** flying-squid entity yok → mesafe/takip fiziği Paper. Katalog = npm minecraft-data (çevrimiçi scrape değil; paket güncellemesiyle sürümler gelir).
+
+### 2026-07-15 — Grok 4.5 — Companion UX (basılı buton / mesafe / koruma+WL)
+
+**İstek:** Yakındaki oyuncular — Takip/Saldır basılı kalsın; takip mesafesi; Koruma (otomatik takip + tehditlere karşılık, beyaz liste).
+
+**Yapılanlar:**
+1. `CompanionState` (follow/attack/protect + protectSettings range/mobs/players/whitelist).
+2. `CombatService.setFollow/setAttack/setProtect` + protectTick (ward yakını tehdit → DEFENSE).
+3. Actions: `social-follow`, `social-attack`, `social-protect`; stop → clearCompanion.
+4. UI: yeşil/kırmızı/indigo basılı stiller; mesafe + ⚙ koruma paneli; ayarları uygula.
+5. Saldırı toggle: bitince/gecikmeyle requeue; koruma açıkken follow korunur; mode `protecting`.
+6. Typecheck server+web temiz.
+
+**Sınır:** Koruma ≈ ward menzilindeki düşman (gerçek “kim vurdu” entityHurt her sunucuda yok); flying-squid entity sınırlı.

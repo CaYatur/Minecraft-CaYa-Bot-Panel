@@ -42,12 +42,29 @@ export interface DeathRecord {
   lootUntil: number;
 }
 
+/** Yakındaki oyuncular paneli — takip / saldırı / koruma (toggle) */
+export interface CompanionState {
+  followPlayer: string | null;
+  followDistance: number;
+  attackPlayer: string | null;
+  protectPlayer: string | null;
+  protectSettings: {
+    /** korunanın etrafında tehdit tarama yarıçapı */
+    range: number;
+    retaliateMobs: boolean;
+    retaliatePlayers: boolean;
+    /** bu isimler korunan'a vursa bile bot saldırmasın */
+    whitelist: string[];
+  };
+}
+
 export interface CombatRuntime {
   defendMode: CombatConfig["defendMode"];
   fighting: boolean;
-  mode: "idle" | "attacking" | "defending" | "fleeing";
+  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting";
   activeTarget: string | null;
   lastDeath: DeathRecord | null;
+  companion: CompanionState;
 }
 
 export interface MovementConfig {
