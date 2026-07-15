@@ -365,12 +365,9 @@ export async function runGotoPlayer(
 }
 
 /**
- * Sürekli takip. Parkur yapan oyuncuyu da izler: GoalFollow(dynamic=true) hedef
- * hareket ettikçe rotayı KENDİSİ yeniler; allowParkour açıkken atlanabilir
- * boşluklardan atlar, merdivenlere doğal tırmanır. Döngüde goal YENİLENMEZ
- * (path churn zıplama ortasında iptal = boşluğa düşme demekti) — yalnızca entity
- * referansı değişince (menzilden çıkıp girince) bir kez yeniden kurulur.
- * canDig takipte HEP kapalı: bot, birinin parkurunu/haritasını kazarak izlemez.
+ * Sürekli takip. Parkur yapan oyuncuyu da izler: GoalFollow(dynamic=true).
+ * canDig takipte kapalı. Blok koyma varsayılan KAPALI; yalnızca yol yok /
+ * uzun takılmada geçici scaffold (başka şeyi bozmaz).
  */
 export async function runFollow(
   instance: BotInstance,
@@ -408,6 +405,30 @@ export async function runFollow(
     }
   };
 
+  /** Takılınca / noPath: pathfinder'a geçici scaffold ver (config scaffoldBlocks) */
+  const enableScaffoldForStuck = (bot: Bot) => {
+    ensureMovement(instance, {
+      mode: "follow",
+      canDig: false,
+      allowPlace: true,
+      parkour: moveCfg(instance).allowParkour !== false
+    });
+    // sadece sıkışınca: basamak/kule koyabilsin (sürekli açık değil)
+    try {
+      const mov = (bot.pathfinder as unknown as { movements?: Movements }).movements;
+      if (mov) {
+        mov.allow1by1towers = true;
+      }
+    } catch {
+      /* */
+    }
+  };
+
+  const restoreFollowMovement = () => {
+    // normal takip: yerleştirme kapalı (merdivende rastgele blok spam olmasın)
+    ensureMovement(instance, { mode: "follow", allowPlace: false });
+  };
+
   try {
     while (!token.cancelled) {
       const bot = requireBot(instance);
@@ -421,87 +442,126 @@ export async function runFollow(
         continue;
       }
 
-      ensureMovement(instance, { mode: "follow" });
+      restoreFollowMovement();
       try {
         bot.pathfinder.setGoal(new goals.GoalFollow(tracked, holdDist), true);
       } catch {
         /* pathfinder bir tık sonra hazır olabilir */
       }
 
-      // iç döngü: aynı entity referansı geçerli olduğu sürece goal'a DOKUNULMAZ.
-      // Tek istisna TAKILMA BEKÇİSİ: FOLLOW_STUCK_MS boyunca yer değiştirme yoksa rota
-      // oyuncunun GÜNCEL konumuna göre sıfırdan kurulur ("yön değiştirdim, eski yere
-      // gitmeye çalışıyor" hatasının çözümü). Üst üste 2. takılmada, merdivendeyse
-      // merdiven atlayış asisti devreye girer (pathfinder'ın hamle setinde olmayan
-      // merdivenden-merdivene sıçrama).
+      // iç döngü: goal churn yok. Takılınca: 1) rota tazele 2) merdiven hop
+      // 3) hâlâ gidilemiyorsa scaffold ile yeniden path (blok koyarak geç)
       let lastPos = bot.entity.position.clone();
       let lastMoveAt = Date.now();
       let consecutiveStucks = 0;
       let lastHopAt = 0;
+      let scaffoldUntil = 0; // bu zamana kadar scaffold açık kalabilir
+      let lastNoPathAt = 0;
 
-      while (!token.cancelled && instance.status === "online") {
-        if ((bot.health ?? 0) <= 0 || !bot.entity) {
-          clearGoal(bot);
-          throw new Error("Bot öldü — takip durdu.");
+      const onPath = (result: { status: string }) => {
+        if (result.status !== "noPath") return;
+        if (Date.now() - lastNoPathAt < 4000) return;
+        lastNoPathAt = Date.now();
+        const live = bot.players[playerName]?.entity;
+        if (!live || !bot.entity) return;
+        // yol yok → blok koyarak path dene (sadece takip takılınca)
+        throttledReport(`takip: ${playerName} · yol yok — blok ile geçiş…`);
+        enableScaffoldForStuck(bot);
+        scaffoldUntil = Date.now() + 20_000;
+        try {
+          bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
+        } catch {
+          /* */
         }
-        const cur = bot.players[playerName]?.entity ?? null;
-        if (!cur || cur !== tracked) {
-          tracked = cur; // kayboldu ya da referans tazelendi → dış döngü yeniden kurar
-          break;
-        }
+      };
+      bot.on("path_update", onPath);
 
-        // insanî bakış: SADECE dururken (mesafedeyken oyuncuya bakar; yürürken pathfinder sürer)
-        if (!pfIsMoving(bot) && bot.entity.onGround) {
-          try {
-            await stepLookAtEntity(bot, cur, turnSpeed(instance));
-          } catch {
-            /* */
+      try {
+        while (!token.cancelled && instance.status === "online") {
+          if ((bot.health ?? 0) <= 0 || !bot.entity) {
+            clearGoal(bot);
+            throw new Error("Bot öldü — takip durdu.");
           }
-        }
+          const cur = bot.players[playerName]?.entity ?? null;
+          if (!cur || cur !== tracked) {
+            tracked = cur;
+            break;
+          }
 
-        const d = bot.entity.position.distanceTo(cur.position);
-
-        // --- takılma bekçisi ---
-        const pos = bot.entity.position;
-        if (pos.distanceTo(lastPos) > 0.35) {
-          lastPos = pos.clone();
-          lastMoveAt = Date.now();
-          consecutiveStucks = 0;
-        } else if (d > holdDist + 0.6 && Date.now() - lastMoveAt > FOLLOW_STUCK_MS) {
-          lastMoveAt = Date.now();
-          consecutiveStucks++;
-
-          if (
-            consecutiveStucks >= 2 &&
-            Date.now() - lastHopAt > LADDER_HOP_COOLDOWN_MS &&
-            onLadderNow(bot)
-          ) {
-            lastHopAt = Date.now();
-            throttledReport(`takip: ${playerName} · merdiven atlayışı deneniyor…`);
-            clearGoal(bot); // dümen tamamen asiste geçer (altın kural: asla paylaşılmaz)
+          // insanî bakış: SADECE dururken
+          if (!pfIsMoving(bot) && bot.entity.onGround) {
             try {
-              await ladderHopAssist(bot, cur);
-            } catch {
-              /* asist başarısızsa aşağıdaki taze rota devralır */
-            }
-          } else {
-            throttledReport(`takip: ${playerName} · takıldı — rota tazeleniyor`);
-            try {
-              bot.pathfinder.setGoal(null);
+              await stepLookAtEntity(bot, cur, turnSpeed(instance));
             } catch {
               /* */
             }
           }
-          // her durumda taze rota — oyuncunun GÜNCEL konumuna
-          try {
-            bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
-          } catch {
-            /* */
-          }
-        }
 
-        throttledReport(`takip: ${playerName} · ${Math.round(d)}m (hedef ${holdDist}m)`);
-        await sleep(FOLLOW_TICK_MS);
+          const d = bot.entity.position.distanceTo(cur.position);
+          const pos = bot.entity.position;
+
+          // ilerlediyse scaffold penceresi bitsin → normal takip
+          if (pos.distanceTo(lastPos) > 0.35) {
+            lastPos = pos.clone();
+            lastMoveAt = Date.now();
+            consecutiveStucks = 0;
+            if (scaffoldUntil > 0 && Date.now() > scaffoldUntil) {
+              scaffoldUntil = 0;
+              restoreFollowMovement();
+              try {
+                bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+              } catch {
+                /* */
+              }
+            }
+          } else if (d > holdDist + 0.6 && Date.now() - lastMoveAt > FOLLOW_STUCK_MS) {
+            lastMoveAt = Date.now();
+            consecutiveStucks++;
+
+            if (
+              consecutiveStucks >= 2 &&
+              Date.now() - lastHopAt > LADDER_HOP_COOLDOWN_MS &&
+              onLadderNow(bot)
+            ) {
+              lastHopAt = Date.now();
+              throttledReport(`takip: ${playerName} · merdiven atlayışı deneniyor…`);
+              clearGoal(bot);
+              try {
+                await ladderHopAssist(bot, cur);
+              } catch {
+                /* */
+              }
+            } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
+              // 2. takılma + merdiven değil → scaffold ile yol aç
+              throttledReport(`takip: ${playerName} · takıldı — blok koyarak geçiş…`);
+              enableScaffoldForStuck(bot);
+              scaffoldUntil = Date.now() + 25_000;
+              try {
+                bot.pathfinder.setGoal(null);
+              } catch {
+                /* */
+              }
+            } else {
+              throttledReport(`takip: ${playerName} · takıldı — rota tazeleniyor`);
+              try {
+                bot.pathfinder.setGoal(null);
+              } catch {
+                /* */
+              }
+            }
+
+            try {
+              bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+            } catch {
+              /* */
+            }
+          }
+
+          throttledReport(`takip: ${playerName} · ${Math.round(d)}m (hedef ${holdDist}m)`);
+          await sleep(FOLLOW_TICK_MS);
+        }
+      } finally {
+        bot.removeListener("path_update", onPath);
       }
 
       clearGoal(bot);
