@@ -366,19 +366,33 @@ async function yieldFallToMlg(
   await sleep(60);
 }
 
-/** Pathfinder ile merdiven üstüne çıkmayı dene (en stabil yol) */
+export type ClimbAbortFn = () => boolean;
+
+function isAborted(token: TaskToken, shouldAbort?: ClimbAbortFn): boolean {
+  if (token.cancelled) return true;
+  try {
+    if (shouldAbort?.()) return true;
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+/** Pathfinder ile merdiven üstüne çıkmayı dene — takılınca / abort'ta hemen bırak */
 async function climbViaPathfinder(
   instance: BotInstance,
   bot: Bot,
   top: { x: number; y: number; z: number },
   token: TaskToken,
-  timeoutMs: number
+  timeoutMs: number,
+  shouldAbort?: ClimbAbortFn
 ): Promise<boolean> {
   ensureParkourBot(instance);
-  // GoalNear floor eder — blok koordinatı ver
   const goal = new goals.GoalNear(top.x, top.y, top.z, 1.5);
   return new Promise((resolve) => {
     let settled = false;
+    let lastY = bot.entity?.position.y ?? 0;
+    let lastProgressAt = Date.now();
     const stop = () => {
       try {
         bot.pathfinder.setGoal(null);
@@ -406,7 +420,8 @@ async function climbViaPathfinder(
     };
     const watch = setInterval(() => {
       if (settled) return;
-      if (token.cancelled) {
+      if (isAborted(token, shouldAbort)) {
+        instance.getLogger().info("Merdiven path iptal", "hedef değişti / iptal — bırakıldı");
         done(false);
         return;
       }
@@ -414,11 +429,20 @@ async function climbViaPathfinder(
         done(false);
         return;
       }
-      // yeterince yükseğe çıktıysa OK (goal_reached gecikebilir)
-      if (bot.entity.position.y >= top.y - 0.7) {
+      const y = bot.entity.position.y;
+      if (y >= top.y - 0.7) {
         done(true);
+        return;
       }
-    }, 200);
+      // Y ilerlemesi yok → takıldı, 14s bekleme
+      if (y > lastY + 0.12) {
+        lastY = y;
+        lastProgressAt = Date.now();
+      } else if (Date.now() - lastProgressAt > 2800) {
+        instance.getLogger().info("Merdiven path stuck", `${(Date.now() - lastProgressAt) / 1000}s ilerleme yok — bırak`);
+        done(false);
+      }
+    }, 150);
     const deadline = setTimeout(() => {
       const y = bot.entity?.position.y ?? 0;
       done(y >= top.y - 0.85);
@@ -443,16 +467,18 @@ async function climbManualHold(
   ladder: LadderPos,
   targetY: number,
   token: TaskToken,
-  report?: ProgressFn
-): Promise<"ok" | "fell" | "stuck"> {
+  report?: ProgressFn,
+  shouldAbort?: ClimbAbortFn,
+  maxMs = 12_000
+): Promise<"ok" | "fell" | "stuck" | "abort"> {
   const wall = ladderIntoWall(bot, ladder.x, ladder.y, ladder.z);
   const startY = bot.entity!.position.y;
   let peakY = startY;
   let lastProgressY = startY;
   let lastProgressAt = Date.now();
+  let reattachOnce = false;
   const t0 = Date.now();
 
-  // merdiven önüne hizala (facing yönü)
   try {
     await bot.look(wall.yaw, 0, true);
   } catch {
@@ -466,11 +492,10 @@ async function climbManualHold(
   bot.setControlState("sprint", false);
   bot.setControlState("sneak", false);
   bot.setControlState("forward", true);
-  await sleep(180); // yapış
-  // tırmanma: jump sürekli basılı (merdivende yukarı tırmatır)
+  await sleep(160);
   bot.setControlState("jump", true);
 
-  while (!token.cancelled && Date.now() - t0 < 40_000) {
+  while (!isAborted(token, shouldAbort) && Date.now() - t0 < maxMs) {
     if (!bot.entity) return "stuck";
     const p = bot.entity.position;
     if (p.y > peakY) peakY = p.y;
@@ -479,10 +504,16 @@ async function climbManualHold(
       return "ok";
     }
 
+    // hedef artık bu yüksekliği istemiyorsa (oyuncu indi / hedef değişti)
+    if (shouldAbort?.()) {
+      clearControls(bot);
+      instance.getLogger().info("Merdiven manuel iptal", "hedef artık merdiven gerektirmiyor");
+      return "abort";
+    }
+
     const vy = bot.entity.velocity?.y ?? 0;
     const drop = peakY - p.y;
 
-    // düşme / kopma
     if ((vy < -0.35 && !stillOnLadder(bot)) || (drop >= 1.4 && !stillOnLadder(bot)) || (drop >= 1.8 && vy < -0.4)) {
       clearControls(bot);
       instance.getLogger().info("Merdiven düştü", `peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)} — MLG`);
@@ -494,7 +525,6 @@ async function climbManualHold(
       return "fell";
     }
 
-    // bakış: duvara / merdivene sabit (pathfinder look yok — biz kontrol ediyoruz)
     try {
       await bot.look(wall.yaw, 0.05, true);
     } catch {
@@ -504,31 +534,32 @@ async function climbManualHold(
     bot.setControlState("forward", true);
     bot.setControlState("jump", true);
 
-    // ilerleme
     if (p.y > lastProgressY + 0.12) {
       lastProgressY = p.y;
       lastProgressAt = Date.now();
-    } else if (Date.now() - lastProgressAt > 2500) {
-      // takıldı: kısa bırak-yeniden bas (merdivene yeniden yapış)
-      const stalledY = p.y;
-      clearControls(bot);
-      await sleep(120);
-      if (!bot.entity) return "stuck";
-      if (!stillOnLadder(bot) && bot.entity.onGround) {
-        bot.setControlState("forward", true);
-        await sleep(200);
-      }
-      try {
-        await bot.look(wall.yaw, 0, true);
-      } catch {
-        /* */
-      }
-      bot.setControlState("forward", true);
-      bot.setControlState("jump", true);
-      lastProgressAt = Date.now();
-      // 2.5s daha ilerleme yoksa stuck
-      if (Math.abs(bot.entity.position.y - stalledY) < 0.1 && Date.now() - t0 > 8_000) {
+      reattachOnce = false;
+    } else if (Date.now() - lastProgressAt > 2200) {
+      // bir kez yeniden yapış; olmazsa hemen bırak (takılı kalma yok)
+      if (!reattachOnce) {
+        reattachOnce = true;
         clearControls(bot);
+        await sleep(100);
+        if (!bot.entity) return "stuck";
+        if (!stillOnLadder(bot) && bot.entity.onGround) {
+          bot.setControlState("forward", true);
+          await sleep(150);
+        }
+        try {
+          await bot.look(wall.yaw, 0, true);
+        } catch {
+          /* */
+        }
+        bot.setControlState("forward", true);
+        bot.setControlState("jump", true);
+        lastProgressAt = Date.now();
+      } else {
+        clearControls(bot);
+        instance.getLogger().info("Merdiven stuck", "ilerleme yok — bırakıldı (hedefe kilit yok)");
         return "stuck";
       }
     }
@@ -542,6 +573,7 @@ async function climbManualHold(
   }
 
   clearControls(bot);
+  if (isAborted(token, shouldAbort)) return "abort";
   if (bot.entity && bot.entity.position.y >= targetY - 0.5) return "ok";
   return "stuck";
 }
@@ -593,25 +625,44 @@ async function exitLadderTop(bot: Bot): Promise<void> {
   await sleep(100);
 }
 
+export interface ClimbLadderOpts {
+  /** true → merdiveni bırak (hedef değişti / oyuncu indi / iptal) */
+  shouldAbort?: ClimbAbortFn;
+  /** pathfinder tırmanış üst süre (ms) */
+  pathMs?: number;
+  /** manuel tırmanış üst süre (ms) */
+  manualMs?: number;
+}
+
 /**
- * Merdiven tırman — kapsamlı:
- * 1) pathfinder GoalNear(sütun tepesi)  2) olmazsa continuous hold climb
- * 3) düşüş → MLG yield  4) başarı yalnız targetY
+ * Merdiven tırman:
+ * 1) pathfinder  2) manuel hold  3) düşüş→MLG  4) takılınca/abort'ta hemen bırak
+ * shouldAbort: hedef oyuncu indiyse / merdiven gerekmiyorsa true dön
  */
 export async function climbLadderParkour(
   instance: BotInstance,
   targetY: number,
   token: TaskToken,
-  report?: ProgressFn
+  report?: ProgressFn,
+  opts?: ClimbLadderOpts
 ): Promise<boolean> {
   const bot = instance.bot;
   if (!bot?.entity) return false;
+  const shouldAbort = opts?.shouldAbort;
+  const pathMs = opts?.pathMs ?? 7_000;
+  const manualMs = opts?.manualMs ?? 10_000;
+
   ensureParkourBot(instance);
   clearControls(bot);
   try {
     bot.pathfinder.setGoal(null);
   } catch {
     /* */
+  }
+
+  if (isAborted(token, shouldAbort)) {
+    report?.({ done: 1, total: 1, label: "merdiven iptal" });
+    return false;
   }
 
   const p0 = bot.entity.position;
@@ -622,20 +673,34 @@ export async function climbLadderParkour(
   }
 
   const colTopY = ladderColumnTopY(bot, ladder0.x, ladder0.y, ladder0.z);
-  const wantY = Math.min(targetY, colTopY);
-  report?.({ done: 0, total: 1, label: `merdiven → y=${Math.floor(wantY)} (path+manuel)` });
+  let wantY = Math.min(targetY, colTopY);
+  // hedef zaten bu yükseklikte / altındaysa tırmanma
+  if (wantY <= p0.y + 0.8) {
+    report?.({ done: 1, total: 1, label: "merdiven gerekmiyor" });
+    return false;
+  }
+
+  report?.({ done: 0, total: 1, label: `merdiven → y=${Math.floor(wantY)}` });
   instance.getLogger().info("Merdiven tırmanış", `sütun üst≈${colTopY} hedef=${wantY.toFixed(1)}`);
 
-  // --- A) Pathfinder (en stabil) ---
+  const abortClimb = () => {
+    if (isAborted(token, shouldAbort)) return true;
+    // canlı hedef Y düştüyse (shouldAbort içinde de olabilir) — ekstra güvenlik yok
+    return false;
+  };
+
+  // --- A) Pathfinder ---
   const pfOk = await climbViaPathfinder(
     instance,
     bot,
     { x: ladder0.x, y: wantY, z: ladder0.z },
     token,
-    14_000
+    pathMs,
+    abortClimb
   );
-  if (token.cancelled) {
+  if (isAborted(token, shouldAbort)) {
     clearControls(bot);
+    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
     return false;
   }
   if (pfOk && bot.entity.position.y >= wantY - 0.8) {
@@ -646,23 +711,42 @@ export async function climbLadderParkour(
     return ok;
   }
 
-  // pathfinder yarıya çıktıysa peak koru
   clearControls(bot);
-  await sleep(100);
+  await sleep(80);
+  if (isAborted(token, shouldAbort)) {
+    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
+    return false;
+  }
 
-  // --- B) Manuel continuous climb ---
-  const ladder = findNearbyLadder(
-    bot,
-    Math.floor(bot.entity.position.x),
-    Math.floor(bot.entity.position.y),
-    Math.floor(bot.entity.position.z)
-  ) ?? ladder0;
+  // --- B) Manuel ---
+  const ladder =
+    findNearbyLadder(
+      bot,
+      Math.floor(bot.entity.position.x),
+      Math.floor(bot.entity.position.y),
+      Math.floor(bot.entity.position.z)
+    ) ?? ladder0;
 
   report?.({ done: 0, total: 1, label: `merdiven manuel → ${Math.floor(wantY)}` });
-  const result = await climbManualHold(instance, bot, ladder, wantY, token, report);
+  const result = await climbManualHold(
+    instance,
+    bot,
+    ladder,
+    wantY,
+    token,
+    report,
+    abortClimb,
+    manualMs
+  );
 
-  if (result === "fell") {
-    report?.({ done: 1, total: 1, label: "merdiven düştü — path devam" });
+  if (result === "abort" || isAborted(token, shouldAbort)) {
+    clearControls(bot);
+    report?.({ done: 1, total: 1, label: "merdiven iptal (hedef)" });
+    return false;
+  }
+  if (result === "fell" || result === "stuck") {
+    clearControls(bot);
+    report?.({ done: 1, total: 1, label: result === "fell" ? "merdiven düştü" : "merdiven stuck — bırakıldı" });
     return false;
   }
   if (result !== "ok" || bot.entity.position.y < wantY - 1.0) {
@@ -671,7 +755,7 @@ export async function climbLadderParkour(
     return false;
   }
 
-  await sleep(200);
+  await sleep(120);
   await exitLadderTop(bot);
   const ok = bot.entity.position.y >= wantY - 1.0;
   report?.({ done: 1, total: 1, label: ok ? "merdiven OK" : "merdiven kısmi" });
@@ -679,8 +763,17 @@ export async function climbLadderParkour(
   return ok;
 }
 
+export interface ParkourGotoOpts {
+  /**
+   * Canlı hedef (oyuncu takip/goto). Her turda yenilenir.
+   * null = hedef kayboldu → çık.
+   */
+  liveTarget?: () => { x: number; y: number; z: number } | null;
+}
+
 /**
- * Parkour destekli goto: pathfinder parkour + noPath'te gap jump + merdiven.
+ * Parkour destekli goto: pathfinder + gap jump + merdiven.
+ * liveTarget varsa hedef hareket edince merdiven bırakılır / path yenilenir.
  */
 export async function runParkourGoto(
   instance: BotInstance,
@@ -689,32 +782,50 @@ export async function runParkourGoto(
   z: number,
   range: number,
   token: TaskToken,
-  report: ProgressFn
+  report: ProgressFn,
+  opts?: ParkourGotoOpts
 ): Promise<void> {
   const bot = instance.bot;
   if (!bot?.entity) throw new Error("Bot çevrimdışı");
   const cfg = parkourFromMovement(instance.config.movement);
 
   ensureParkourBot(instance);
-  report({ done: 0, total: 1, label: `parkur git → ${x},${y},${z}` });
+  report({ done: 0, total: 1, label: `parkur git → ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` });
 
-  const goal = new goals.GoalNear(x, y, z, Math.max(1, range));
+  let gx = x;
+  let gy = y;
+  let gz = z;
   let attempts = 0;
   const maxAttempts = 8;
-  /** Düşüş/fail sonrası aynı merdivene hemen kilitlenmesin (stuck look) */
   let ladderCooldownUntil = 0;
+
+  const refreshTarget = (): boolean => {
+    if (!opts?.liveTarget) return true;
+    const t = opts.liveTarget();
+    if (!t) return false;
+    gx = t.x;
+    gy = t.y;
+    gz = t.z;
+    return true;
+  };
 
   while (!token.cancelled && attempts < maxAttempts) {
     attempts++;
-    const dist = bot.entity.position.distanceTo(v3(x, y, z) as never);
+    if (!refreshTarget()) {
+      report({ done: 1, total: 1, label: "parkur hedef kayboldu" });
+      return;
+    }
+
+    const dist = bot.entity.position.distanceTo(v3(gx, gy, gz) as never);
     if (dist <= range + 0.8) {
       report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
       return;
     }
 
-    // merdiven: hedef yukarıdaysa; düşüş cooldown yoksa dene
     const yNow = bot.entity.position.y;
-    if (cfg.ladderParkour && y > yNow + 2 && Date.now() >= ladderCooldownUntil) {
+    // merdiven sadece hedef hâlâ anlamlı şekilde yukarıdaysa
+    const needClimb = cfg.ladderParkour && gy > yNow + 2.2 && Date.now() >= ladderCooldownUntil;
+    if (needClimb) {
       const fy = Math.floor(yNow);
       const fx = Math.floor(bot.entity.position.x);
       const fz = Math.floor(bot.entity.position.z);
@@ -727,39 +838,57 @@ export async function runParkourGoto(
       }
       if (hasLadder) {
         const beforeY = yNow;
-        const climbed = await climbLadderParkour(
-          instance,
-          Math.min(y, beforeY + 6),
-          token,
-          report
-        );
+        const climbTo = Math.min(gy, beforeY + 6);
+        const climbed = await climbLadderParkour(instance, climbTo, token, report, {
+          shouldAbort: () => {
+            if (token.cancelled) return true;
+            if (!refreshTarget()) return true;
+            // oyuncu indiyse / merdiven artık gereksiz
+            if (gy <= (bot.entity?.position.y ?? 0) + 1.5) return true;
+            // hedef yatayda uzaklaştı ve yükseklik farkı azaldı
+            const horiz = Math.hypot(
+              gx - (bot.entity?.position.x ?? 0),
+              gz - (bot.entity?.position.z ?? 0)
+            );
+            if (horiz > 14 && gy < (bot.entity?.position.y ?? 0) + 3) return true;
+            return false;
+          },
+          pathMs: 6_000,
+          manualMs: 8_000
+        });
         if (!climbed) {
-          // düştü veya yarıda — pathfinder'a bırak; kısa süre merdiven retry yok
-          ladderCooldownUntil = Date.now() + 3500;
-          instance.getLogger().info("Parkur", "merdiven fail — 3.5s pathfinder (stuck look yok)");
+          ladderCooldownUntil = Date.now() + 4000;
+          instance.getLogger().info("Parkur", "merdiven bırakıldı — pathfinder / yeni hedef");
           clearControls(bot);
-          await sleep(200);
-        } else if (bot.entity.position.y > beforeY + 0.8) {
+          await sleep(150);
+        } else if ((bot.entity?.position.y ?? 0) > beforeY + 0.8) {
           continue;
         }
       }
     }
 
+    if (!refreshTarget()) {
+      report({ done: 1, total: 1, label: "parkur hedef kayboldu" });
+      return;
+    }
+
+    const goal = new goals.GoalNear(gx, gy, gz, Math.max(1, range));
     try {
-      await runPathOnce(instance, goal, token, 45_000);
-      if (bot.entity.position.distanceTo(v3(x, y, z) as never) <= range + 1) {
+      await runPathOnce(instance, goal, token, 20_000);
+      if (!refreshTarget()) return;
+      if (bot.entity.position.distanceTo(v3(gx, gy, gz) as never) <= range + 1) {
         report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
         return;
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // noPath → gap jump dene
       if (!cfg.enabled || (!msg.includes("noPath") && !msg.includes("yol"))) {
         if (attempts >= maxAttempts) throw e;
       }
 
+      if (!refreshTarget()) return;
       if (cfg.enabled) {
-        const land = findGapLanding(bot, { x, y, z }, cfg.maxGap);
+        const land = findGapLanding(bot, { x: gx, y: gy, z: gz }, cfg.maxGap);
         if (land && land.gap <= cfg.maxGap) {
           instance.getLogger().info("Parkur gap jump", `${land.gap} blok → ${land.x},${land.y},${land.z}`);
           const ok = await executeGapJump(instance, land, land.gap, token, report);
@@ -767,14 +896,14 @@ export async function runParkourGoto(
         }
       }
 
-      // son çare: biraz bekle ve path tekrarla
-      await sleep(300);
+      await sleep(250);
       if (attempts >= maxAttempts) throw e instanceof Error ? e : new Error(msg);
     }
   }
 
   if (token.cancelled) throw new Error(token.reason ?? "iptal");
-  if (bot.entity.position.distanceTo(v3(x, y, z) as never) > range + 1.5) {
+  refreshTarget();
+  if (bot.entity.position.distanceTo(v3(gx, gy, gz) as never) > range + 1.5) {
     throw new Error("Parkur ile hedefe ulaşılamadı");
   }
   report({ done: 1, total: 1, label: "parkur hedefe ulaşıldı" });
