@@ -19,8 +19,14 @@ export type BotStatus =
   | "error";
 
 export interface CombatConfig {
-  /** self-defense target selection */
+  /**
+   * Öz savunma (boşta / görevdeyken):
+   * off = kapalı · mob = hostile · player = saldırgan oyuncu · all = ikisi
+   * Proaktif tarama: menzilde zombie vb. gelince savunun veya can düşükse kaç.
+   */
   defendMode: "off" | "mob" | "player" | "all";
+  /** öz savunma tarama yarıçapı (blok) */
+  defendRange: number;
   reach: number;
   cpsCap: number; // 1.8-style cap; 1.9+ uses weapon charge instead
   reactionMsMin: number;
@@ -315,7 +321,9 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     authorizedPlayers: [],
     inventory: { autoBestGear: true, bannedItems: [], keepItems: [] },
     combat: {
-      defendMode: "off",
+      // varsayılan: mob — boşta zombie gelince savunsun (panelden kapatılabilir)
+      defendMode: "mob",
+      defendRange: 12,
       reach: 3.0,
       cpsCap: 8,
       reactionMsMin: 150,

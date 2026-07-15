@@ -18,6 +18,8 @@ import { pickBestWeaponName } from "./weapons";
 const DEATH_LOOT_MS = 5 * 60 * 1000;
 const HOSTILE_SCAN_MS = 400;
 const PROTECT_TICK_MS = 600;
+/** boşta öz savunma tarama aralığı */
+const SELF_GUARD_TICK_MS = 700;
 
 const defaultCompanion = (): CompanionState => ({
   followPlayer: null,
@@ -51,6 +53,7 @@ export class CombatService {
   private entityGoneHook: ((e: Entity) => void) | null = null;
   private companion: CompanionState = defaultCompanion();
   private protectTimer: NodeJS.Timeout | null = null;
+  private selfGuardTimer: NodeJS.Timeout | null = null;
   private followTaskId: string | null = null;
   private attackTaskId: string | null = null;
   /** ölüm → respawn arası hareket/koruma dondur (pathfinder kilitlenmesi) */
@@ -159,6 +162,8 @@ export class CombatService {
     bot.on("entityGone", this.entityGoneHook);
 
     this.deadPaused = false;
+    // boşta öz savunma (defendMode) — zombie yaklaşınca savunsun / kaçsın
+    this.startSelfGuardLoop();
     // reconnect / ilk spawn: companion görevlerini yeniden başlat
     this.resumeCompanionAfterAlive("attach");
 
@@ -206,10 +211,8 @@ export class CombatService {
 
   /** detach bot listeners but keep companion settings for reconnect */
   private detachKeepCompanion() {
-    if (this.protectTimer) {
-      clearInterval(this.protectTimer);
-      this.protectTimer = null;
-    }
+    this.stopProtectLoop();
+    this.stopSelfGuardLoop();
     const bot = this.bot;
     if (bot) {
       if (this.healthHook) bot.removeListener("health", this.healthHook);
@@ -565,6 +568,106 @@ export class CombatService {
       clearInterval(this.protectTimer);
       this.protectTimer = null;
     }
+  }
+
+  private startSelfGuardLoop() {
+    this.stopSelfGuardLoop();
+    this.selfGuardTimer = setInterval(() => this.selfGuardTick(), SELF_GUARD_TICK_MS);
+  }
+
+  private stopSelfGuardLoop() {
+    if (this.selfGuardTimer) {
+      clearInterval(this.selfGuardTimer);
+      this.selfGuardTimer = null;
+    }
+  }
+
+  /**
+   * Boşta / takipte öz savunma: defendMode açıkken menzildeki hostile (veya
+   * bilinen saldırgan oyuncu) → savunun; can düşükse kaç.
+   * Eşlik koruması (protectTick) ayrı — ward etrafı; bu botun kendi etrafı.
+   */
+  private selfGuardTick() {
+    if (this.deadPaused) return;
+    if (this.instance.status !== "online") return;
+    const mode = this.cfg().defendMode;
+    if (mode === "off") return;
+
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity) return;
+    if ((bot.health ?? 0) <= 0) return;
+
+    const cur = this.instance.tasks.currentSummary;
+    if (cur?.type === "defend" || cur?.type === "attack" || cur?.type === "flee" || cur?.type === "clear-mobs") {
+      return;
+    }
+    if (this.mode === "fleeing" || this.mode === "attacking" || this.mode === "defending") return;
+
+    const range = Math.max(4, Math.min(32, Math.floor(this.cfg().defendRange ?? 12)));
+    const target = this.pickSelfGuardTarget(mode, range);
+    if (!target) return;
+
+    const label = labelEntity(target);
+    const hp = bot.health ?? 20;
+    const fleeAt = this.cfg().fleeAtHealth ?? 6;
+
+    if (hp <= fleeAt) {
+      this.log().warn(`Öz savunma → kaçış (can ${hp} ≤ ${fleeAt})`, label);
+      this.enqueueFlee(label);
+      return;
+    }
+
+    this.log().info(`Öz savunma: ${label}`, `mod=${mode} r=${range}`);
+    this.instance.tasks.enqueue(
+      {
+        type: "defend",
+        label: `öz-savun: ${label}`,
+        priority: PRIORITY.DEFENSE,
+        params: { target: label, selfGuard: true },
+        requeueOnPreempt: false
+      },
+      () => (token, report) => this.runDefend(target, label, token, report)
+    );
+  }
+
+  /** Proaktif hedef: hostile mob her zaman; oyuncu yalnız recentThreat */
+  private pickSelfGuardTarget(mode: CombatConfig["defendMode"], range: number): Entity | null {
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity || mode === "off") return null;
+    this.pruneThreats();
+
+    let best: Entity | null = null;
+    let bestD = range + 0.01;
+
+    for (const id in bot.entities) {
+      const e = bot.entities[id];
+      if (!e || e === bot.entity) continue;
+      const d = bot.entity.position.distanceTo(e.position);
+      if (d > range) continue;
+
+      const player = isPlayerEntity(e);
+      const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
+      const elabel = labelEntity(e);
+
+      if (player) {
+        if (mode !== "player" && mode !== "all") continue;
+        if (e.username && e.username === bot.username) continue;
+        // korunan / takip edilene asla
+        if (e.username && this.isProtectedName(e.username)) continue;
+        if (this.companion.followPlayer && e.username?.toLowerCase() === this.companion.followPlayer.toLowerCase()) {
+          continue;
+        }
+        if (!this.isRecentThreat(elabel) && !(e.username && this.isRecentThreat(e.username))) continue;
+      } else if (hostile) {
+        if (mode !== "mob" && mode !== "all") continue;
+      } else continue;
+
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
   }
 
   /**
@@ -1044,6 +1147,7 @@ export class CombatService {
     // koruma/takip pathfinder'ı öldükten sonra kilitliyor — dondur, ayarları sakla
     this.deadPaused = true;
     this.stopProtectLoop();
+    // selfGuardTimer tick deadPaused ile no-op; pathfinder yine temizle
     for (const t of ["follow", "attack", "defend", "clear-mobs", "flee"] as const) {
       this.cancelTasksOfType(t);
     }
@@ -1081,22 +1185,31 @@ export class CombatService {
 
   // ---- helpers --------------------------------------------------------------
 
+  /** Hasar alınca saldırgan adayı (reaktif) — en yakın uygun hedef */
   private pickDefenseTarget(mode: CombatConfig["defendMode"]): Entity | null {
+    if (mode === "off") return null;
     const bot = this.bot;
-    if (!bot) return null;
+    if (!bot?.entity) return null;
+    const range = Math.max(4, Math.min(32, Math.floor(this.cfg().defendRange ?? 12)));
     const candidates: Entity[] = [];
     for (const id in bot.entities) {
       const e = bot.entities[id];
       if (!e || e === bot.entity) continue;
       const dist = bot.entity.position.distanceTo(e.position);
-      if (dist > 8) continue;
+      if (dist > range) continue;
+      if (e.username && this.isProtectedName(e.username)) continue;
+      if (this.companion.followPlayer && e.username?.toLowerCase() === this.companion.followPlayer.toLowerCase()) {
+        continue;
+      }
       const player = isPlayerEntity(e);
       const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
       if (mode === "player" && player) candidates.push(e);
       else if (mode === "mob" && hostile) candidates.push(e);
       else if (mode === "all" && (player || hostile)) candidates.push(e);
     }
-    candidates.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
+    candidates.sort(
+      (a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position)
+    );
     return candidates[0] ?? null;
   }
 

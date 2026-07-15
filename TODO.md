@@ -353,13 +353,15 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 
 - [x] `combat/RealismLayer` (`modules/combat/realism.ts`): D1 bakış (smoothLookAt), D2 menzil, D3 raycast LOS, D4 tempo (1.9+ charge / 1.8 CPS), D5 yumuşak dönüş, D6 tepki gecikmesi, D7 opsiyonel jump-crit. Tüm vuruşlar `tryRealisticAttack` — pvp eklentisi yok.
 - [x] Savunma modu (`off|mob|player|all`): health düşüşünde aday hedef → DEFENSE `defend` görevi; `chaseDistance` aşınca bırak. *(Entity fiziği Paper.)*
+- [x] **Öz savunma (proaktif):** `selfGuardTick` — boşta/takipte menzilde hostile → savunun; can ≤ `fleeAtHealth` → kaç.
+  `defendRange` (varsayılan 12); yeni bot varsayılan `defendMode: mob`. Oyuncu yalnız recentThreat (proaktif).
 - [x] Hedefli saldırı: `attack` / `saldir <oyuncu>` — entity varsa yaklaş+vur; tab'de yoksa Log INFO (İ1). *(Entity Paper.)*
 - [x] Mob temizleme: `clear-mobs` yarıçap; hostile listesi; creeper standoff. *(Entity Paper.)*
 - [x] Kaçış: `fleeAtHealth` altında SURVIVAL `flee`; panel/komut `kac`.
 - [x] Ölüm: `lastDeath` + loot geri sayım (~5 dk); otomatik waypoint `ölüm-<bot>`; `loot-death` → goto.
 - [x] Silah seçimi: `weapons.ts` skor + `bannedItems`; saldırı/savunma öncesi `equipBestWeapon`.
-- [x] Panel: ⚔ Dövüş sekmesi (`CombatPanel`); TasksPanel komutları; `bot:combat` socket.
-- [~] **Kabul (Paper):** vurulunca bakarak karşılık; duvar arkasına vuramaz; tempo insanî; can düşünce kaçar. API/mantık ✓ (`combat-test.mjs`).
+- [x] Panel: ⚔ Dövüş — **Öz savunma** + **Eşlik koruması** ayrı kartlar; ayarlar **anlık** (Kaydet yok).
+- [~] **Kabul (Paper):** vurulunca bakarak karşılık; boşta zombie → savunun/kaç; duvar arkasına vuramaz; tempo insanî. API/mantık ✓.
 
 ### Faz 7 — Hayatta Kalma: Yeme, Avlanma, Pişirme ✅*
 
@@ -636,6 +638,8 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Eşlik koruma ayarları yalnız **Dövüş paneli**nde; NearbyPlayers sadece toggle — çift UI/kafa karışıklığı önlendi.
 - 2026-07-15 — Koruma açıkken ölüm → pathfinder kilitlenmesi: `deadPaused` + task cancel + `pathfinder.stop`/setGoal null + control clear; respawn’da resume (liste silinmez).
 - 2026-07-15 — protectAggro `threats`: oyuncuya sadece recentThreat (bot hasar + pickDefenseTarget); mob’lar retaliateMobs ile. `non_whitelist` = PvP eşlik.
+- 2026-07-15 — Öz savunma proaktif `selfGuardTick` (defendMode+defendRange); eşlik korumasından ayrı. CombatPanel ayarları anlık (Kaydet butonu kaldırıldı).
+- 2026-07-15 — Yeni bot `defendMode` varsayılan `mob` (boşta zombie savunsun); mevcut bot config’i bots.json’da kalır.
 
 ---
 
@@ -884,3 +888,16 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 8. TODO §13.A / §14 / §15; typecheck server+web temiz.
 
 **Saha:** Paper’da öl→respawn→takip/koruma; pathfinder kilitli kalmamalı.
+
+### 2026-07-15 — Grok 4.5 — Öz savunma (boşta) + anlık dövüş ayarları
+
+**İstek:** Boşta da koruma (zombie → savunun veya kaç); dövüş ayarları anlık olsun, Kaydet kafa karıştırıyor; panel düzenli.
+
+**Yapılanlar:**
+1. `selfGuardTick` (~700ms): defendMode≠off iken bot etrafı tara; hostile → DEFENSE; can≤fleeAtHealth → flee.
+2. `combat.defendRange` (4–32, varsayılan 12); yeni bot `defendMode: mob`.
+3. Proaktif oyuncu hedefi yalnız recentThreat (masum oyuncuya saldırmasın).
+4. CombatPanel: **Öz savunma · boşta** (yeşil) + **Eşlik koruması** (indigo); Kaydet yok; patch/protect-settings anlık; WL debounce.
+5. TODO §6/§14/§15; typecheck temiz.
+
+**Kullanım:** Dövüş → Öz savunma → **Mob** (veya Hepsi). Eşlik için Yakındaki oyuncular → Koru.

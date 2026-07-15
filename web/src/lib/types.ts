@@ -20,6 +20,8 @@ export interface BotConfig {
   inventory: { autoBestGear: boolean; bannedItems: string[]; keepItems: string[] };
   combat: {
     defendMode: "off" | "mob" | "player" | "all";
+    /** öz savunma tarama yarıçapı */
+    defendRange?: number;
     reach: number;
     cpsCap: number;
     reactionMsMin: number;
