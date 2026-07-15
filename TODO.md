@@ -942,3 +942,13 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 3. `reclaimWater` / `reclaimBoat` / `reclaimBlock`.
 4. SurvivalPanel: autoReclaim + reclaimWater/Boat/Blocks.
 5. Log: `MLG malzeme geri alındı: water`.
+
+### 2026-07-15 — Grok 4.5 — MLG bakış hızı + yaprak/ot yüzey + akıllı su geri al
+
+**İstek:** Düşerken yere çok hızlı bak; yaprak/ot üstüne su koyma; suyu en yakından geri al; güvensizse vakit kaybetme.
+
+**Yapılanlar:**
+1. `snapLookDown` force pitch −90; hazırlık/MLG boyunca.
+2. `isBadWaterSurface` / `isWaterPlaceableBlock` — leaves, ot, çit, slab…; `findBestWaterPlaceTarget` 3×3.
+3. Kötü yüzeyde water → boat/hay alternatifi.
+4. Geri al: `findNearestWaterSource` ayak+job+geniş tarama; `unsafeStreak` ile tehditte iptal.
