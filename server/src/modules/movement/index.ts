@@ -382,10 +382,17 @@ export async function runFollow(
             }
           }
 
-          // Pathfinder aktifken oyuncuya bakış = zıplama bozulur (geri-at-tekrar).
-          // Sadece yakın mesafe / path sakin iken bak.
+          // Pathfinder aktifken / zıplarken bakış = 1-up geri-at.
+          // Sadece yerde + path hareket etmiyorken + yakınken bak.
+          const moving = (() => {
+            try {
+              return Boolean((bot.pathfinder as { isMoving?: () => boolean }).isMoving?.());
+            } catch {
+              return isPathfinderBusy(bot);
+            }
+          })();
           const close = d <= holdDist + 1.8;
-          if (close || !isPathfinderBusy(bot)) {
+          if (close && bot.entity.onGround && !moving && (bot.entity.velocity?.y ?? 0) <= 0.05) {
             try {
               await stepLookAtEntity(bot, ent, Math.min(12, turnSpeed(instance)));
             } catch {
