@@ -5,6 +5,7 @@ import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue"
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
 import { goals } from "mineflayer-pathfinder";
 import { ensureMovement, runFollow, runGoto, stopMovement } from "../movement";
+import { stepLookAtEntity } from "../movement/look";
 import { CREEPER_SAFE_RANGE, isHostileMob, isPlayerEntity } from "./mobs";
 import {
   distanceEyeToEntity,
@@ -973,7 +974,6 @@ export class CombatService {
       ensureMovement(this.instance);
       bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
       const t0 = Date.now();
-      const { stepLookAtEntity } = await import("../movement/look");
       while (!token.cancelled && Date.now() - t0 < 15_000) {
         if (inMeleeRange(bot, entity, this.cfg().reach) && distanceEyeToEntity(bot, entity) <= range + 0.5) break;
         if (!entity.isValid) break;
