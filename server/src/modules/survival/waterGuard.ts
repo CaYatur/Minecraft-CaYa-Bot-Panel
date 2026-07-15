@@ -102,11 +102,12 @@ export class WaterGuardService {
       return;
     }
 
-    // fall/build kritik anlarında zorlama — sadece oksijen kritikse devam
     const oxygen = readOxygen(bot);
     const inWater = isInWater(bot);
     const submerged = isHeadSubmerged(bot);
     const onSurface = inWater && !submerged;
+    const combatBusy = this.isCombatBusy();
+    const fallBusy = this.instance.survival?.getFallGuardState?.()?.active === true;
 
     this.state.inWater = inWater;
     this.state.submerged = submerged;
@@ -124,11 +125,26 @@ export class WaterGuardService {
 
     this.state.active = true;
     const needAir = submerged || oxygen < cfg.surfaceOxygenBelow;
+    // dövüş/MLG sırasında sadece boğulma engelle; karaya path + jump spam yok
+    const yieldToCombat = combatBusy && oxygen >= 8 && !submerged;
+
+    if (yieldToCombat) {
+      if (this.holdingSwimUp) this.releaseSwimControls();
+      this.state.action = "dövüş öncelikli (su beklemede)";
+      // devam eden kara path'i kes
+      if (this.busyLand) {
+        try {
+          bot.pathfinder?.setGoal(null);
+        } catch {
+          /* */
+        }
+      }
+      return;
+    }
 
     // 1) Yukarı yüz — boğulmamak için
     if (needAir) {
       try {
-        // gökyüzüne doğru bak (pitch negatif = yukarı)
         await bot.look(bot.entity.yaw, -0.6, false);
       } catch {
         /* */
@@ -145,7 +161,6 @@ export class WaterGuardService {
         this.log().info("Su koruması", `oksijen=${oxygen} · ${this.state.action}`);
       }
     } else if (onSurface) {
-      // yüzeyde nefes alıyor — jump bırak (boğulmaz), suda kalabilir
       if (this.holdingSwimUp) {
         try {
           bot.setControlState("jump", false);
@@ -157,11 +172,16 @@ export class WaterGuardService {
       this.state.action = "yüzeyde (güvenli)";
     }
 
-    // 2) Karaya çık (spawn okyanus / derin su) — lav/ateş kaçışı yokken
+    // 2) Karaya çık — dövüş/MLG yokken ve oksijen/derinlik gerekince
     if (cfg.seekLand && !this.busyLand && Date.now() - this.lastLandSeek > 2500) {
+      if (combatBusy || fallBusy) return;
       const hazardBusy = this.instance.survival?.hazardGuard?.getState?.()?.active;
       if (hazardBusy) return;
       const depth = waterDepthBelow(bot);
+      // sığ suda (depth&lt;2) ve oksijen iyi + yüzeyde → karaya zorlama (drowned dövüşünü bozma)
+      if (onSurface && oxygen >= cfg.surfaceOxygenBelow && depth < 2 && !submerged) {
+        return;
+      }
       if (depth >= 2 || oxygen < cfg.surfaceOxygenBelow || submerged) {
         this.lastLandSeek = Date.now();
         void this.trySeekLand(bot, cfg);
@@ -169,8 +189,25 @@ export class WaterGuardService {
     }
   }
 
+  /** Dövüş / savunma / kaçış aktif mi? */
+  private isCombatBusy(): boolean {
+    try {
+      const r = this.instance.combat.getRuntime();
+      if (r.fighting || r.mode === "defending" || r.mode === "attacking" || r.mode === "fleeing") return true;
+    } catch {
+      /* */
+    }
+    const cur = this.instance.tasks.currentSummary;
+    if (cur && ["defend", "attack", "flee", "clear-mobs"].includes(cur.type)) return true;
+    const q = this.instance.tasks.queueSummaries ?? [];
+    if (q.some((t) => ["defend", "attack", "flee"].includes(t.type))) return true;
+    return false;
+  }
+
   private async trySeekLand(bot: Bot, cfg: WaterGuardConfig) {
     if (this.busyLand) return;
+    if (this.isCombatBusy()) return;
+
     const land = findNearbyLand(bot, cfg.landSearchRadius);
     if (!land) {
       this.state.action = this.state.action || "kara yok — yüzmeye devam";
@@ -182,12 +219,14 @@ export class WaterGuardService {
     this.log().info("Su koruması: karaya çıkılıyor", `${land.x} ${land.y} ${land.z}`);
 
     try {
-      // takip/build SURVIVAL'dan düşük öncelikli path — USER path'i bozmamak için
-      // sadece başka takip yoksa veya oksijen kritikse
       const cur = this.instance.tasks.currentSummary;
       const oxygen = readOxygen(bot);
-      if (cur && cur.type !== "water-escape" && oxygen > 6) {
-        // başka görev var ve oksijen idare eder — sadece yüzeye çık, path açma
+      // dövüş görevi / herhangi USER+ görev varken ve oksijen idare ederse path açma
+      if (this.isCombatBusy()) {
+        this.busyLand = false;
+        return;
+      }
+      if (cur && !["water-escape", "flee"].includes(cur.type) && oxygen > 8) {
         this.busyLand = false;
         return;
       }
@@ -197,8 +236,12 @@ export class WaterGuardService {
 
       const t0 = Date.now();
       while (Date.now() - t0 < 20_000 && this.instance.status === "online" && this.bot === bot) {
+        // dövüş başladı → path bırak, silaha alan aç
+        if (this.isCombatBusy() && readOxygen(bot) >= 8) {
+          this.state.action = "karaya iptal — dövüş";
+          break;
+        }
         if (!isInWater(bot) && bot.entity.onGround) break;
-        // path sırasında su altındaysa yüzmeye devam
         if (isHeadSubmerged(bot) || readOxygen(bot) < cfg.surfaceOxygenBelow) {
           bot.setControlState("jump", true);
           this.holdingSwimUp = true;

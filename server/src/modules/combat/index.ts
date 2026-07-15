@@ -13,7 +13,7 @@ import {
   randomReactionMs,
   tryRealisticAttack
 } from "./realism";
-import { pickBestWeaponName } from "./weapons";
+import { isBadCombatHeld, isMeleeWeapon, pickBestWeaponName } from "./weapons";
 
 const DEATH_LOOT_MS = 5 * 60 * 1000;
 const HOSTILE_SCAN_MS = 400;
@@ -837,7 +837,7 @@ export class CombatService {
       await sleep(randomReactionMs(this.cfg()));
       if (token.cancelled) throw new Error(token.reason ?? "iptal");
 
-      await this.equipBestWeapon();
+      await this.equipBestWeapon(true);
 
       const chase = this.cfg().chaseDistance ?? 24;
       const started = Date.now();
@@ -880,6 +880,7 @@ export class CombatService {
           continue;
         }
 
+        await this.ensureCombatWeapon();
         const res = await tryRealisticAttack(bot, entity, this.cfg(), this.lastSwing, token);
         if (res.ok) {
           report({ done: 1, total: 1, label: `vuruş: ${playerName}` });
@@ -915,7 +916,7 @@ export class CombatService {
     const bot = this.requireBot();
     this.setMode("attacking", "moblar");
     await sleep(randomReactionMs(this.cfg()));
-    await this.equipBestWeapon();
+    await this.equipBestWeapon(true);
 
     let killed = 0;
     const started = Date.now();
@@ -1094,7 +1095,7 @@ export class CombatService {
     if (token.cancelled) throw new Error(token.reason ?? "iptal");
 
     this.setMode("defending", label);
-    await this.equipBestWeapon();
+    await this.equipBestWeapon(true);
 
     // chaseDistance 0/bozuksa yine de dövüşü terk etme
     const chase = Math.max(12, Number(this.cfg().chaseDistance) || 24);
@@ -1102,6 +1103,7 @@ export class CombatService {
     let targetId: number | null = typeof initial?.id === "number" ? initial.id : null;
     let lostSince: number | null = null;
     let hits = 0;
+    let lastWeaponCheck = 0;
 
     try {
       while (!token.cancelled && Date.now() - t0 < 120_000) {
@@ -1112,6 +1114,12 @@ export class CombatService {
 
         const bot = this.requireBot();
         if (!bot.entity) break;
+
+        // su/build koruması el değiştirebilir — periyodik silah
+        if (Date.now() - lastWeaponCheck > 400) {
+          lastWeaponCheck = Date.now();
+          await this.ensureCombatWeapon();
+        }
 
         // 1) entity id  2) en yakın aynı etiket  3) en yakın uygun tehdit
         let entity =
@@ -1165,6 +1173,7 @@ export class CombatService {
           continue;
         }
 
+        await this.ensureCombatWeapon();
         const res = await tryRealisticAttack(bot, entity, this.cfg(), this.lastSwing, token);
         if (res.ok) {
           hits += 1;
@@ -1462,27 +1471,73 @@ export class CombatService {
     }
   }
 
-  async equipBestWeapon(): Promise<void> {
-    const bot = this.bot;
+  /**
+   * Dövüşte mutlaka silah/balta (veya en iyi yedek).
+   * Toprak/kova/yemek elde kalmasın — su/build koruması el değiştirebilir.
+   */
+  async equipBestWeapon(force = false): Promise<void> {
+    const bot = this.bot ?? this.instance.bot;
     if (!bot) return;
+    this.bot = bot;
     const banned = this.instance.config.inventory.bannedItems;
     const items = bot.inventory.items();
     const names = items.map((i) => i.name);
     const best = pickBestWeaponName(names, banned);
-    if (!best) return;
-    if (bot.heldItem?.name === best) return;
-    if (banned.includes(best)) {
-      this.log().warn(`En iyi silah yasaklı listede, kullanılmayacak: ${best}`);
+    const held = bot.heldItem?.name;
+
+    // zaten en iyi silah
+    if (best && held === best && !force) return;
+
+    // elde silah var ve en iyisi yoksa (veya sadece alet) — silah tercih
+    if (!best) {
+      // silah/alet yok — en azından blok bırak (yumruk)
+      if (held && isBadCombatHeld(held) && !isMeleeWeapon(held)) {
+        try {
+          await bot.unequip("hand");
+          this.log().info("Dövüş: el boşaltıldı (silah yok, blok/toprak bırakıldı)");
+        } catch {
+          /* */
+        }
+      }
       return;
     }
+
+    if (banned.includes(best)) {
+      this.log().warn(`En iyi silah yasaklı listede: ${best}`);
+      return;
+    }
+
+    // elde zaten silah ve best alet yedekse — kılıç tercih et (best zaten en yüksek skor)
+    if (held === best) return;
+
     const item = items.find((i) => i.name === best);
     if (!item) return;
-    try {
-      await bot.equip(item, "hand");
-      this.log().debug(`Silah seçildi: ${best}`);
-    } catch (e) {
-      this.log().debug("Silah kuşanılamadı", e instanceof Error ? e.message : String(e));
+
+    for (let tryN = 0; tryN < 3; tryN++) {
+      try {
+        await bot.equip(item, "hand");
+        await sleep(30);
+        if (bot.heldItem?.name === best) {
+          if (tryN > 0 || force || isBadCombatHeld(held)) {
+            this.log().info(`Dövüş silahı: ${best}`, held && held !== best ? `önceki: ${held}` : undefined);
+          }
+          return;
+        }
+      } catch (e) {
+        this.log().debug("Silah kuşanma denemesi", e instanceof Error ? e.message : String(e));
+        await sleep(40);
+      }
     }
+    this.log().warn("Silah kuşanılamadı", `${best} · elde: ${bot.heldItem?.name ?? "boş"}`);
+  }
+
+  /** Saldırı öncesi: kötü elde silah yoksa zorla kuşan */
+  private async ensureCombatWeapon(): Promise<void> {
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot) return;
+    const held = bot.heldItem?.name;
+    if (held && isMeleeWeapon(held)) return;
+    await this.equipBestWeapon(true);
   }
 
   private requireBot(): Bot {

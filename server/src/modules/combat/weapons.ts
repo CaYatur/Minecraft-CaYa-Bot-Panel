@@ -78,9 +78,19 @@ export function isMeleeWeapon(itemName: string): boolean {
   return weaponScore(itemName) > 0;
 }
 
+/** Elde dövüş için uygunsuz (blok/yemek/kova) — silaha geçilmeli */
+export function isBadCombatHeld(itemName: string | undefined | null): boolean {
+  if (!itemName) return false; // yumruk OK
+  if (isMeleeWeapon(itemName)) return false;
+  // silah değilse dövüşte kötü say (toprak, kova, yemek, alet…)
+  // kazma/kürek zayıf yedek olabilir ama kılıç/balta varken kullanılmaz
+  return true;
+}
+
 /**
  * Pick best held melee from inventory item names (slot order irrelevant).
- * Returns null → bare hand.
+ * Returns null → bare hand (silah yok).
+ * Öncelik: kılıç > balta > trident; yoksa en iyi alet (kazma) toprak yerine.
  */
 export function pickBestWeaponName(itemNames: string[], banned: string[]): string | null {
   let best: string | null = null;
@@ -88,6 +98,22 @@ export function pickBestWeaponName(itemNames: string[], banned: string[]): strin
   for (const name of itemNames) {
     if (banned.includes(name)) continue;
     const s = weaponScore(name);
+    if (s > bestScore) {
+      bestScore = s;
+      best = name;
+    }
+  }
+  if (best) return best;
+  // silah yok: kazma/kürek en azından topraktan iyi (zayıf yedek)
+  const toolFallback = (n: string) => {
+    if (n.endsWith("_pickaxe")) return 15;
+    if (n.endsWith("_shovel")) return 8;
+    if (n.endsWith("_hoe")) return 5;
+    return 0;
+  };
+  for (const name of itemNames) {
+    if (banned.includes(name)) continue;
+    const s = toolFallback(name);
     if (s > bestScore) {
       bestScore = s;
       best = name;
