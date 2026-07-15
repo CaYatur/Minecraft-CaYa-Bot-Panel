@@ -27,8 +27,9 @@ function turnSpeed(instance: BotInstance): number {
 /**
  * pathfinder Movements:
  * - sprint: config.allowSprint
- * - parkour: 2+ blok boşluk (allowParkour); opts.parkour → gelişmiş (maxDrop↑, sprint)
- * - humanize: bakış + kule kısıtı
+ * - parkour: 2+ blok boşluk (allowParkour)
+ * - ÖNEMLİ: pathfinder her fizik tick'inde bot.look(yaw) yapar.
+ *   Üzerine bakış/lookAt basmak 1-up zıplamayı bozar → geri çekilip tekrar dener.
  */
 export function ensureMovement(
   instance: BotInstance,
@@ -40,10 +41,14 @@ export function ensureMovement(
 
   const cfg = moveCfg(instance);
   const mode = opts?.mode ?? (opts?.parkour ? "parkour" : "goto");
-  // parkour-goto hariç humanize: 1-up kule kapalı ama normal jump-up pathfinder'da var
-  const human = cfg.humanize !== false && mode !== "parkour";
+  // goto/follow: parkour sadece config açıksa (2 blok gap). 1-up jump parkour'suz çalışır.
+  // parkour mode: her zaman parkour açık.
   const parkourOn =
-    opts?.parkour === true || (mode !== "goto" && cfg.allowParkour !== false) || cfg.allowParkour !== false;
+    mode === "parkour"
+      ? true
+      : opts?.parkour === true
+        ? true
+        : cfg.allowParkour !== false;
   const movements = new Movements(bot);
 
   movements.canDig = Boolean(cfg.canDig);
@@ -55,8 +60,8 @@ export function ensureMovement(
         : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
   movements.allowParkour = parkourOn;
-  // 1x1 kule: humanize ile kapalı (eski); jump-up (1 blok basamak) pathfinder getMoveJumpUp ile kalır
-  movements.allow1by1towers = human ? Boolean(cfg.allowTower) : Boolean(cfg.allowTower ?? true);
+  // 1x1 kule: config; jump-up (1 basamak) pathfinder getMoveJumpUp ile her zaman var
+  movements.allow1by1towers = Boolean(cfg.allowTower);
 
   try {
     (movements as { maxDrop?: number }).maxDrop = safeMaxDropForPath(cfg, mode);
@@ -64,7 +69,6 @@ export function ensureMovement(
     /* eski pathfinder */
   }
 
-  // liquidCost'u yükseltme — suda/çıkışta eski gibi davran
   try {
     if (mode === "parkour") {
       (movements as { liquidCost?: number }).liquidCost = 1;
@@ -81,6 +85,30 @@ export function ensureMovement(
 
   bot.pathfinder.setMovements(movements);
   return bot;
+}
+
+/** Pathfinder aktifken bakışa karışma — zıplama/geri çekme bozulmasın */
+function isPathfinderBusy(bot: Bot): boolean {
+  try {
+    const pf = bot.pathfinder as {
+      isMoving?: () => boolean;
+      isMining?: () => boolean;
+      isBuilding?: () => boolean;
+    };
+    if (pf.isMoving?.()) return true;
+    if (pf.isMining?.()) return true;
+    if (pf.isBuilding?.()) return true;
+  } catch {
+    /* */
+  }
+  // zıplama / havada — bakış pathfinder'ın
+  try {
+    if (bot.entity && !bot.entity.onGround) return true;
+    if ((bot.entity?.velocity?.y ?? 0) > 0.05) return true;
+  } catch {
+    /* */
+  }
+  return false;
 }
 
 function pathfinderGoal(
@@ -152,17 +180,20 @@ function pathfinderGoal(
         reject(new Error("Bağlantı koptu — hareket görevi sonlandı."));
         return;
       }
-      // sadece bakış — kenar güvenliği path'i bozuyordu, kaldırıldı (pathfinder maxDrop yeterli)
+      // Pathfinder her tick bot.look(hedef-yaw) yapar.
+      // Üzerine lookAt basmak 1-up zıplamada "ileri→geri→tekrar zıpla" yapar — KARŞMA.
+      // Bakış sadece path sakin / yerdeyken ve humanize açıksa.
+      if (moveCfg(instance).humanize === false) return;
+      if (isPathfinderBusy(bot)) return;
       void (async () => {
         try {
           const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
-          if (lt) await stepLookAlongMotion(bot, lt, turnSpeed(instance));
-          else await stepLookAlongMotion(bot, null, turnSpeed(instance));
+          if (lt) await stepLookAlongMotion(bot, lt, Math.min(10, turnSpeed(instance)));
         } catch {
           /* look fail ignore */
         }
       })();
-    }, 120);
+    }, 250);
 
     const deadline = setTimeout(() => {
       cleanup();
@@ -343,7 +374,6 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(ent.position);
 
-          // kenar "geri çek" takibi bozuyordu — pathfinder maxDrop + parkour yeterli
           if (Math.random() < 0.05) {
             ensureMovement(instance, {
               allowSprintNow: canSprint(),
@@ -359,10 +389,15 @@ export async function runFollow(
             }
           }
 
-          try {
-            await stepLookAtEntity(bot, ent, turnSpeed(instance));
-          } catch {
-            /* */
+          // Pathfinder aktifken oyuncuya bakış = zıplama bozulur (geri-at-tekrar).
+          // Sadece yakın mesafe / path sakin iken bak.
+          const close = d <= holdDist + 1.8;
+          if (close || !isPathfinderBusy(bot)) {
+            try {
+              await stepLookAtEntity(bot, ent, Math.min(12, turnSpeed(instance)));
+            } catch {
+              /* */
+            }
           }
 
           report({
@@ -371,7 +406,7 @@ export async function runFollow(
             label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}`
           });
 
-          await sleep(90 + Math.floor(Math.random() * 50));
+          await sleep(100 + Math.floor(Math.random() * 40));
         }
 
         clearGoal(followBot);

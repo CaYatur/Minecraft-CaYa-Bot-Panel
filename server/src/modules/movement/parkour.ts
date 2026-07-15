@@ -61,7 +61,7 @@ function ensureParkourBot(instance: BotInstance): Bot {
 }
 
 function clearControls(bot: Bot) {
-  for (const k of ["forward", "back", "left", "right", "jump", "sprint"] as const) {
+  for (const k of ["forward", "back", "left", "right", "jump", "sprint", "sneak"] as const) {
     try {
       bot.setControlState(k, false);
     } catch {
@@ -275,10 +275,9 @@ export async function executeGapJump(
 
 type LadderPos = { x: number; y: number; z: number };
 
-/** Ayak hizasına yakın merdiven — yukarıdaki düşülen merdivene bakmasın */
+/** Ayak hizası merdiven (yatay ±1, dikey ±1) */
 function findNearbyLadder(bot: Bot, fx: number, fy: number, fz: number): LadderPos | null {
-  // önce aynı seviye, sonra ±1, en fazla ±2 (yukarı 3+ = düşme sonrası yanlış hedef)
-  for (const dy of [0, 1, -1, 2, -2]) {
+  for (const dy of [0, 1, -1]) {
     for (const dx of [0, 1, -1]) {
       for (const dz of [0, 1, -1]) {
         if (isLadder(bot, fx + dx, fy + dy, fz + dz)) {
@@ -290,47 +289,48 @@ function findNearbyLadder(bot: Bot, fx: number, fy: number, fz: number): LadderP
   return null;
 }
 
-/** Gerçekten merdiven collider'ında mı (uzak merdiven sayılmaz) */
+/** Sütun: ayaktaki merdivenden yukarı en üst merdiven Y (+1 stand) */
+function ladderColumnTopY(bot: Bot, lx: number, ly: number, lz: number, maxUp = 48): number {
+  let y = ly;
+  for (let i = 0; i < maxUp; i++) {
+    if (isLadder(bot, lx, y + 1, lz)) y++;
+    else break;
+  }
+  // tepedeki merdiven bloğunun üstü stand noktası
+  return y + 1;
+}
+
 function stillOnLadder(bot: Bot): boolean {
   if (!bot.entity) return false;
   const p = bot.entity.position;
   const fx = Math.floor(p.x);
   const fy = Math.floor(p.y);
   const fz = Math.floor(p.z);
-  // sadece ayak / gövde hücresi — ±1 arama yok (düşüşte "hâlâ merdivende" sanmasın)
-  return (
-    isLadder(bot, fx, fy, fz) ||
-    isLadder(bot, fx, fy + 1, fz) ||
-    isLadder(bot, fx, Math.floor(fy - 0.2), fz)
-  );
+  return isLadder(bot, fx, fy, fz) || isLadder(bot, fx, fy + 1, fz) || isLadder(bot, fx, Math.floor(p.y - 0.15), fz);
 }
 
-/** Merdiven duvar yönü (facing) — yapışmak için duvara bak */
-function ladderFacingOffset(bot: Bot, lx: number, ly: number, lz: number): { x: number; z: number } {
+/** facing = merdivenin baktığı yön; duvar = tersi. Duvara doğru birim vektör. */
+function ladderIntoWall(bot: Bot, lx: number, ly: number, lz: number): { x: number; z: number; yaw: number } {
   const b = bot.blockAt(v3(lx, ly, lz));
+  let face = "";
   try {
     const props = (b as { getProperties?: () => Record<string, unknown> })?.getProperties?.();
-    const face = String(props?.facing ?? "").toLowerCase();
-    if (face === "north") return { x: 0, z: 0.35 };
-    if (face === "south") return { x: 0, z: -0.35 };
-    if (face === "west") return { x: 0.35, z: 0 };
-    if (face === "east") return { x: -0.35, z: 0 };
+    face = String(props?.facing ?? "").toLowerCase();
   } catch {
     /* */
   }
-  return { x: 0, z: 0 };
-}
-
-/** Yatay olarak merdivene yakın mı */
-function nearLadderHoriz(bot: Bot, ladder: LadderPos, max = 1.35): boolean {
-  const p = bot.entity?.position;
-  if (!p) return false;
-  return Math.hypot(p.x - (ladder.x + 0.5), p.z - (ladder.z + 0.5)) <= max;
+  // facing north = merdiven güneye bakıyor? MC: ladder facing = direction of the open side (player stands).
+  // Oyuncu facing yönünde merdivene bakarak forward basar.
+  if (face === "north") return { x: 0, z: -1, yaw: Math.PI }; // look north
+  if (face === "south") return { x: 0, z: 1, yaw: 0 };
+  if (face === "west") return { x: -1, z: 0, yaw: Math.PI / 2 };
+  if (face === "east") return { x: 1, z: 0, yaw: -Math.PI / 2 };
+  // bilinmiyor — merdiven merkezine bak
+  return { x: 0, z: 0, yaw: bot.entity?.yaw ?? 0 };
 }
 
 /**
- * Düşüş sırasında parkur/merdiven kontrolü bırakır; MLG (FallGuard) bakış/kovayı kullanabilsin.
- * lookAt YOK — düşülen yere kilitlenmesin.
+ * Düşüş: kontrol bırak, MLG'ye bırak, lookAt yok.
  */
 async function yieldFallToMlg(
   instance: BotInstance,
@@ -350,289 +350,205 @@ async function yieldFallToMlg(
     if (!bot.entity) break;
     const vy = bot.entity.velocity?.y ?? 0;
     clearControls(bot);
-
     const fg = instance.survival?.getFallGuardState?.();
     if (fg?.active || (fg?.falling && fg.method)) {
       sawMlg = true;
-      // MLG aktif — bakış/kontrol çalma
       await sleep(40);
       continue;
     }
-
     if (bot.entity.onGround && Math.abs(vy) < 0.12) {
-      // MLG yeni bittiyse su/yerleşim için kısa bekle
       if (sawMlg) await sleep(120);
       break;
     }
-    // hâlâ havada ama FallGuard henüz busy değil — ona zaman ver (lookAt yok)
     await sleep(40);
   }
   clearControls(bot);
-  await sleep(80);
+  await sleep(60);
 }
 
-/** Merdiven XZ merkezine yavaş yanaş — zıplama yok; uzak/yüksek merdivene kilitlenme yok */
-async function attachToLadder(bot: Bot, ladder: LadderPos): Promise<boolean> {
-  if (!bot.entity) return false;
-  // merdiven botun çok üstünde/altında veya uzaktaysa yapışma (stuck look)
-  if (Math.abs(ladder.y - bot.entity.position.y) > 2.5) return false;
-  if (!nearLadderHoriz(bot, ladder, 1.6)) return false;
-
-  const face = ladderFacingOffset(bot, ladder.x, ladder.y, ladder.z);
-  const cx = ladder.x + 0.5 + face.x * 0.4;
-  const cz = ladder.z + 0.5 + face.z * 0.4;
-  // bakış: bot göz hizası — düşülen yukarı bloğa bakma
-  const lookY = bot.entity.position.y + 0.4;
-  try {
-    await bot.lookAt(v3(ladder.x + 0.5, lookY, ladder.z + 0.5), true);
-  } catch {
-    /* */
-  }
-  bot.setControlState("sprint", false);
-  bot.setControlState("jump", false);
-  bot.setControlState("forward", true);
-  await sleep(200);
-  const p = bot.entity?.position;
-  if (p && Math.hypot(p.x - cx, p.z - cz) < 0.55) {
-    bot.setControlState("forward", false);
-  } else {
-    await sleep(140);
-    bot.setControlState("forward", false);
-  }
-  await sleep(160);
-  return stillOnLadder(bot) || nearLadderHoriz(bot, ladder, 0.9);
+/** Pathfinder ile merdiven üstüne çıkmayı dene (en stabil yol) */
+async function climbViaPathfinder(
+  instance: BotInstance,
+  bot: Bot,
+  top: { x: number; y: number; z: number },
+  token: TaskToken,
+  timeoutMs: number
+): Promise<boolean> {
+  ensureParkourBot(instance);
+  const goal = new goals.GoalNear(top.x + 0.5, top.y, top.z + 0.5, 1);
+  return new Promise((resolve) => {
+    const stop = () => {
+      try {
+        bot.pathfinder.setGoal(null);
+      } catch {
+        /* */
+      }
+    };
+    const cleanup = () => {
+      clearInterval(watch);
+      clearTimeout(deadline);
+      bot.removeListener("goal_reached", onReached);
+      bot.removeListener("path_update", onPath);
+    };
+    const done = (ok: boolean) => {
+      cleanup();
+      stop();
+      clearControls(bot);
+      resolve(ok);
+    };
+    const onReached = () => done(true);
+    const onPath = (r: { status: string }) => {
+      if (r.status === "noPath" || r.status === "timeout") done(false);
+    };
+    const watch = setInterval(() => {
+      if (token.cancelled) {
+        done(false);
+        return;
+      }
+      if (!bot.entity) {
+        done(false);
+        return;
+      }
+      // yeterince yükseğe çıktıysa OK
+      if (bot.entity.position.y >= top.y - 0.6) {
+        done(true);
+        return;
+      }
+    }, 200);
+    const deadline = setTimeout(() => {
+      const y = bot.entity?.position.y ?? 0;
+      done(y >= top.y - 0.8);
+    }, timeoutMs);
+    bot.on("goal_reached", onReached);
+    bot.on("path_update", onPath);
+    try {
+      bot.pathfinder.setGoal(goal);
+    } catch {
+      done(false);
+    }
+  });
 }
 
 /**
- * Merdiven/vine tırman — emin adımlar.
- * Düşerse: kontrolleri bırak → yere in → lookAt döngüsü YOK → false dön (pathfinder devam etsin).
- * Başarı: sadece targetY'ye ulaşıldıysa (yerde olmak yetmez).
+ * Manuel tırmanış (vanilla): duvara bak + forward basılı + jump basılı.
+ * Pulse jump düşürür; sürekli basılı daha stabil.
  */
-export async function climbLadderParkour(
+async function climbManualHold(
   instance: BotInstance,
+  bot: Bot,
+  ladder: LadderPos,
   targetY: number,
   token: TaskToken,
   report?: ProgressFn
-): Promise<boolean> {
-  const bot = instance.bot;
-  if (!bot?.entity) return false;
-  ensureParkourBot(instance);
-
-  report?.({ done: 0, total: 1, label: `merdiven (emin) → y=${Math.floor(targetY)}` });
-  clearControls(bot);
-  try {
-    bot.setControlState("sprint", false);
-  } catch {
-    /* */
-  }
-
-  try {
-    bot.pathfinder.setGoal(null);
-  } catch {
-    /* */
-  }
-
-  const startY = bot.entity.position.y;
+): Promise<"ok" | "fell" | "stuck"> {
+  const wall = ladderIntoWall(bot, ladder.x, ladder.y, ladder.z);
+  const startY = bot.entity!.position.y;
   let peakY = startY;
+  let lastProgressY = startY;
+  let lastProgressAt = Date.now();
   const t0 = Date.now();
-  let stuckTicks = 0;
-  let reattachFails = 0;
-  let lastY = startY;
-  let climbPulses = 0;
-  let fell = false;
 
-  // --- 1) merdivene yavaş yapış ---
-  {
-    const p = bot.entity.position;
-    const ladder = findNearbyLadder(bot, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
-    if (ladder) {
-      await attachToLadder(bot, ladder);
-    } else {
-      bot.setControlState("forward", true);
-      await sleep(200);
-      bot.setControlState("forward", false);
-      await sleep(120);
-    }
-  }
-
-  // --- 2) tırmanma ---
-  while (!token.cancelled && Date.now() - t0 < 45_000) {
-    const p = bot.entity.position;
-    if (p.y > peakY) peakY = p.y;
-    if (p.y >= targetY - 0.4) break;
-
-    const vy = bot.entity.velocity?.y ?? 0;
-    const dropFromPeak = peakY - p.y;
-
-    // --- DÜŞME: hızlı iniş veya peak'ten kayıp — MLG'ye bırak, stuck look yok ---
-    const fallingHard = vy < -0.28 && !stillOnLadder(bot);
-    const slippedDown = dropFromPeak >= 1.2 && !stillOnLadder(bot) && vy < -0.05;
-    // merdiven hücresinde olsa bile hızla aşağı + yükseklik kaybı = koptu
-    const freeFallOnClimbable = dropFromPeak >= 1.5 && vy < -0.4;
-
-    if (fallingHard || slippedDown || freeFallOnClimbable) {
-      clearControls(bot);
-      fell = true;
-      instance.getLogger().info(
-        "Merdiven düştü",
-        `peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)} vy=${vy.toFixed(2)} — MLG'ye bırakıldı`
-      );
-      report?.({ done: 0, total: 1, label: "merdiven düştü — MLG…" });
-      await yieldFallToMlg(instance, bot, token);
-      break;
-    }
-
-    // yere indiyse ve peak'e göre kaybettiyse — tekrar yapışma stuck'ı yok
-    if (bot.entity.onGround && peakY - p.y >= 1.0 && !stillOnLadder(bot)) {
-      fell = true;
-      clearControls(bot);
-      instance.getLogger().info("Merdiven düştü", `yerde peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)}`);
-      break;
-    }
-
-    const fx = Math.floor(p.x);
-    const fy = Math.floor(p.y);
-    const fz = Math.floor(p.z);
-    const ladder = findNearbyLadder(bot, fx, fy, fz);
-
-    if (!ladder || !nearLadderHoriz(bot, ladder, 1.5)) {
-      clearControls(bot);
-      stuckTicks++;
-      // yere indiysek ve merdiven yok/uzak — çık (lookAt spam yok)
-      if (bot.entity.onGround && stuckTicks >= 3) {
-        reattachFails++;
-        if (reattachFails >= 2 || peakY - p.y >= 0.8) {
-          fell = peakY - p.y >= 0.8;
-          break;
-        }
-      }
-      if (stuckTicks > 8) break;
-      await sleep(200);
-      // sadece ayak hizasında yakın merdiven varsa bir kez dene
-      const re = findNearbyLadder(
-        bot,
-        Math.floor(bot.entity.position.x),
-        Math.floor(bot.entity.position.y),
-        Math.floor(bot.entity.position.z)
-      );
-      if (re && nearLadderHoriz(bot, re, 1.4) && Math.abs(re.y - bot.entity.position.y) <= 2) {
-        const ok = await attachToLadder(bot, re);
-        if (!ok) reattachFails++;
-      } else {
-        reattachFails++;
-      }
-      if (reattachFails >= 4) break;
-      continue;
-    }
-
-    stuckTicks = 0;
-
-    // bakış: göz hizası merdiven (yukarı / düşme noktası değil)
+  // merdiven önüne hizala (facing yönü)
+  try {
+    await bot.look(wall.yaw, 0, true);
+  } catch {
     try {
-      const lookY = bot.entity.position.y + 0.35;
-      await bot.lookAt(v3(ladder.x + 0.5, lookY, ladder.z + 0.5), true);
+      await bot.lookAt(v3(ladder.x + 0.5, bot.entity!.position.y + 0.4, ladder.z + 0.5), true);
     } catch {
       /* */
     }
+  }
 
+  bot.setControlState("sprint", false);
+  bot.setControlState("sneak", false);
+  bot.setControlState("forward", true);
+  await sleep(180); // yapış
+  // tırmanma: jump sürekli basılı (merdivende yukarı tırmatır)
+  bot.setControlState("jump", true);
+
+  while (!token.cancelled && Date.now() - t0 < 40_000) {
+    if (!bot.entity) return "stuck";
+    const p = bot.entity.position;
+    if (p.y > peakY) peakY = p.y;
+    if (p.y >= targetY - 0.35) {
+      clearControls(bot);
+      return "ok";
+    }
+
+    const vy = bot.entity.velocity?.y ?? 0;
+    const drop = peakY - p.y;
+
+    // düşme / kopma
+    if ((vy < -0.35 && !stillOnLadder(bot)) || (drop >= 1.4 && !stillOnLadder(bot)) || (drop >= 1.8 && vy < -0.4)) {
+      clearControls(bot);
+      instance.getLogger().info("Merdiven düştü", `peak=${peakY.toFixed(1)} y=${p.y.toFixed(1)} — MLG`);
+      await yieldFallToMlg(instance, bot, token);
+      return "fell";
+    }
+    if (bot.entity.onGround && drop >= 1.0 && !stillOnLadder(bot)) {
+      clearControls(bot);
+      return "fell";
+    }
+
+    // bakış: duvara / merdivene sabit (pathfinder look yok — biz kontrol ediyoruz)
+    try {
+      await bot.look(wall.yaw, 0.05, true);
+    } catch {
+      /* */
+    }
     bot.setControlState("sprint", false);
     bot.setControlState("forward", true);
-    await sleep(90);
-
     bot.setControlState("jump", true);
-    await sleep(65);
-    bot.setControlState("jump", false);
-    await sleep(260);
-    climbPulses++;
 
-    if (climbPulses % 2 === 0) {
-      bot.setControlState("forward", false);
-      await sleep(180);
-    }
-
-    // koptu mu?
-    if (!stillOnLadder(bot)) {
+    // ilerleme
+    if (p.y > lastProgressY + 0.12) {
+      lastProgressY = p.y;
+      lastProgressAt = Date.now();
+    } else if (Date.now() - lastProgressAt > 2800) {
+      // takıldı: kısa bırak-yeniden bas (merdivene yeniden yapış)
       clearControls(bot);
       await sleep(150);
-      // düşüş hızı varsa land bekle
-      const v2 = bot.entity.velocity?.y ?? 0;
-      if (v2 < -0.2) {
-        fell = true;
-        await yieldFallToMlg(instance, bot, token);
-        break;
+      if (!stillOnLadder(bot) && bot.entity.onGround) {
+        bot.setControlState("forward", true);
+        await sleep(200);
       }
-      if (bot.entity.onGround && peakY - bot.entity.position.y >= 1.0) {
-        fell = true;
-        break;
+      try {
+        await bot.look(wall.yaw, 0, true);
+      } catch {
+        /* */
       }
-      // tek nazik reattach
-      if (bot.entity.onGround && reattachFails < 3) {
-        const re = findNearbyLadder(
-          bot,
-          Math.floor(bot.entity.position.x),
-          Math.floor(bot.entity.position.y),
-          Math.floor(bot.entity.position.z)
-        );
-        if (re && nearLadderHoriz(bot, re, 1.4)) {
-          const ok = await attachToLadder(bot, re);
-          if (!ok) reattachFails++;
-        } else {
-          reattachFails++;
+      bot.setControlState("forward", true);
+      bot.setControlState("jump", true);
+      lastProgressAt = Date.now();
+      // 2. stuck turu hâlâ yerindeyse vazgeç
+      if (Math.abs(bot.entity.position.y - lastProgressY) < 0.1 && Date.now() - t0 > 6000) {
+        // bir kez daha dene, sonra stuck
+        if (Date.now() - t0 > 12_000) {
+          clearControls(bot);
+          return "stuck";
         }
       }
-    }
-
-    const ny = bot.entity.position.y;
-    if (Math.abs(ny - lastY) < 0.08) {
-      stuckTicks++;
-      clearControls(bot);
-      await sleep(200);
-      if (stuckTicks > 12) break;
-    } else {
-      stuckTicks = 0;
-      lastY = ny;
-      reattachFails = 0;
     }
 
     report?.({
       done: 0,
       total: 1,
-      label: `merdiven emin y=${bot.entity.position.y.toFixed(1)} → ${targetY.toFixed(0)}`
+      label: `merdiven y=${p.y.toFixed(1)} → ${targetY.toFixed(0)}`
     });
+    await sleep(80);
   }
 
   clearControls(bot);
+  if (bot.entity && bot.entity.position.y >= targetY - 0.5) return "ok";
+  return "stuck";
+}
 
-  // düştüyse: çıkış hop'u yok, lookAt yok — pathfinder devralsın
-  if (fell || token.cancelled) {
-    clearControls(bot);
-    report?.({ done: 1, total: 1, label: "merdiven düştü — path devam" });
-    instance.getLogger().info(
-      "Merdiven parkuru iptal",
-      `düşüş sonrası y=${bot.entity?.position.y.toFixed(1) ?? "?"} (stuck look yok)`
-    );
-    return false;
-  }
-
-  // hedef yüksekliğe ulaşmadıysa çıkış deneme (yanlış "başarı" yok)
-  if (bot.entity.position.y < targetY - 1.0) {
-    clearControls(bot);
-    report?.({ done: 1, total: 1, label: "merdiven yarıda kaldı" });
-    instance.getLogger().info(
-      "Merdiven parkuru kısmi",
-      `y=${bot.entity.position.y.toFixed(1)} hedef=${targetY.toFixed(1)}`
-    );
-    return false;
-  }
-
-  await sleep(280); // tepede otur
-
-  // --- 3) güvenli çıkış ---
-  const p = bot.entity.position;
-  const fx = Math.floor(p.x);
-  const fy = Math.floor(p.y);
-  const fz = Math.floor(p.z);
-
+/** Tepe çıkışı: solid komşu hücreye yürü */
+async function exitLadderTop(bot: Bot): Promise<void> {
+  if (!bot.entity) return;
+  const fx = Math.floor(bot.entity.position.x);
+  const fy = Math.floor(bot.entity.position.y);
+  const fz = Math.floor(bot.entity.position.z);
   type Land = { dx: number; dz: number; score: number };
   const lands: Land[] = [];
   for (const [dx, dz] of [
@@ -648,54 +564,115 @@ export async function climbLadderParkour(
     if (!isSolid(bot, fx + dx, fy - 1, fz + dz)) continue;
     if (!isAirish(bot, fx + dx, fy, fz + dz)) continue;
     if (!isAirish(bot, fx + dx, fy + 1, fz + dz)) continue;
-    let edgeRisk = 0;
-    for (const [ex, ez] of [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1]
-    ] as const) {
-      if (!isSolid(bot, fx + dx + ex, fy - 1, fz + dz + ez) && !isSolid(bot, fx + dx + ex, fy - 2, fz + dz + ez)) {
-        edgeRisk += 0.5;
-      }
-    }
-    lands.push({ dx, dz, score: Math.abs(dx) + Math.abs(dz) + edgeRisk });
+    lands.push({ dx, dz, score: Math.abs(dx) + Math.abs(dz) });
   }
   lands.sort((a, b) => a.score - b.score);
-
-  if (lands.length > 0) {
-    const { dx, dz } = lands[0]!;
-    try {
-      await bot.lookAt(v3(fx + dx + 0.5, fy, fz + dz + 0.5), true);
-    } catch {
-      /* */
-    }
-    await sleep(150);
-    bot.setControlState("sprint", false);
-    bot.setControlState("forward", true);
-    await sleep(180);
-    const needHop = stillOnLadder(bot) && !bot.entity.onGround;
-    if (needHop) {
-      bot.setControlState("jump", true);
-      await sleep(50);
-      bot.setControlState("jump", false);
-    }
-    await sleep(220);
-    bot.setControlState("forward", false);
-    await sleep(150);
-  } else {
-    instance.getLogger().info("Merdiven parkuru", "güvenli çıkış yok — tepede bırakıldı");
-    await sleep(250);
+  if (lands.length === 0) {
+    await sleep(200);
+    return;
   }
-
+  const { dx, dz } = lands[0]!;
   clearControls(bot);
-  await sleep(80);
-
-  const ok = bot.entity.position.y >= targetY - 1.0;
-  report?.({ done: 1, total: 1, label: ok ? "merdiven OK (emin)" : "merdiven kısmi" });
-  if (ok) {
-    instance.getLogger().info("Merdiven parkuru tamam", `y=${bot.entity.position.y.toFixed(1)}`);
+  try {
+    await bot.lookAt(v3(fx + dx + 0.5, fy, fz + dz + 0.5), true);
+  } catch {
+    /* */
   }
+  await sleep(100);
+  bot.setControlState("forward", true);
+  if (stillOnLadder(bot)) {
+    bot.setControlState("jump", true);
+    await sleep(60);
+    bot.setControlState("jump", false);
+  }
+  await sleep(220);
+  clearControls(bot);
+  await sleep(100);
+}
+
+/**
+ * Merdiven tırman — kapsamlı:
+ * 1) pathfinder GoalNear(sütun tepesi)  2) olmazsa continuous hold climb
+ * 3) düşüş → MLG yield  4) başarı yalnız targetY
+ */
+export async function climbLadderParkour(
+  instance: BotInstance,
+  targetY: number,
+  token: TaskToken,
+  report?: ProgressFn
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity) return false;
+  ensureParkourBot(instance);
+  clearControls(bot);
+  try {
+    bot.pathfinder.setGoal(null);
+  } catch {
+    /* */
+  }
+
+  const p0 = bot.entity.position;
+  const ladder0 = findNearbyLadder(bot, Math.floor(p0.x), Math.floor(p0.y), Math.floor(p0.z));
+  if (!ladder0) {
+    report?.({ done: 1, total: 1, label: "merdiven yok" });
+    return false;
+  }
+
+  const colTopY = ladderColumnTopY(bot, ladder0.x, ladder0.y, ladder0.z);
+  const wantY = Math.min(targetY, colTopY);
+  report?.({ done: 0, total: 1, label: `merdiven → y=${Math.floor(wantY)} (path+manuel)` });
+  instance.getLogger().info("Merdiven tırmanış", `sütun üst≈${colTopY} hedef=${wantY.toFixed(1)}`);
+
+  // --- A) Pathfinder (en stabil) ---
+  const pfOk = await climbViaPathfinder(
+    instance,
+    bot,
+    { x: ladder0.x, y: wantY, z: ladder0.z },
+    token,
+    14_000
+  );
+  if (token.cancelled) {
+    clearControls(bot);
+    return false;
+  }
+  if (pfOk && bot.entity.position.y >= wantY - 0.8) {
+    await exitLadderTop(bot);
+    const ok = bot.entity.position.y >= wantY - 1.0;
+    report?.({ done: 1, total: 1, label: ok ? "merdiven OK (path)" : "merdiven kısmi" });
+    if (ok) instance.getLogger().info("Merdiven parkuru tamam", `pathfinder y=${bot.entity.position.y.toFixed(1)}`);
+    return ok;
+  }
+
+  // pathfinder yarıya çıktıysa peak koru
+  clearControls(bot);
+  await sleep(100);
+
+  // --- B) Manuel continuous climb ---
+  const ladder = findNearbyLadder(
+    bot,
+    Math.floor(bot.entity.position.x),
+    Math.floor(bot.entity.position.y),
+    Math.floor(bot.entity.position.z)
+  ) ?? ladder0;
+
+  report?.({ done: 0, total: 1, label: `merdiven manuel → ${Math.floor(wantY)}` });
+  const result = await climbManualHold(instance, bot, ladder, wantY, token, report);
+
+  if (result === "fell") {
+    report?.({ done: 1, total: 1, label: "merdiven düştü — path devam" });
+    return false;
+  }
+  if (result !== "ok" || bot.entity.position.y < wantY - 1.0) {
+    clearControls(bot);
+    report?.({ done: 1, total: 1, label: "merdiven yarıda" });
+    return false;
+  }
+
+  await sleep(200);
+  await exitLadderTop(bot);
+  const ok = bot.entity.position.y >= wantY - 1.0;
+  report?.({ done: 1, total: 1, label: ok ? "merdiven OK" : "merdiven kısmi" });
+  if (ok) instance.getLogger().info("Merdiven parkuru tamam", `manuel y=${bot.entity.position.y.toFixed(1)}`);
   return ok;
 }
 
