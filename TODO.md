@@ -953,6 +953,16 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 3. Kötü yüzeyde water → boat/hay alternatifi.
 4. Geri al: `findNearestWaterSource` ayak+job+geniş tarama; `unsafeStreak` ile tehditte iptal.
 
+### 2026-07-15 — Grok 4.5 — İnşaat hız + UI + kazma ile kır
+
+**İstek:** İnşaat yavaş/takılıyor/UI yanlış; kazması varken elle taş kırıyor.
+
+**Yapılanlar:**
+1. `place.ts`: sadece uzaktaysa path (45s→10s); gereksiz sleep azaltıldı; retries=1.
+2. Build emit throttle 120ms; malzeme her blokta yenilenmez.
+3. BuildAnim sade liste + doğru progress (placed+skipped+failed); origin “here” inşaatta kaymaz.
+4. Scaffold dig: `equipBestToolForBlock` (mineflayer-tool + kazma/kürek yedek).
+
 ### 2026-07-15 — Grok 4.5 — MLG envanter delta + bucketScoop
 
 **Saha:** `MLG kova boşaldı ama su görünmüyor` → fail + geri al yok; su aslında yerleşmiş olabilir.

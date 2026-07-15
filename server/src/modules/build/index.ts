@@ -35,8 +35,23 @@ export class BuildService {
     };
   }
 
-  private emit() {
+  private lastEmitAt = 0;
+  private pendingEmit = false;
+
+  private emit(force = false) {
+    const now = Date.now();
+    // her blokta 2× socket UI'yi donduruyordu — throttle
+    if (!force && now - this.lastEmitAt < 120) {
+      this.pendingEmit = true;
+      return;
+    }
+    this.lastEmitAt = now;
+    this.pendingEmit = false;
     this.instance.emit("build", { botId: this.instance.config.id, build: this.getRuntime() });
+  }
+
+  private flushEmit() {
+    if (this.pendingEmit) this.emit(true);
   }
 
   private log() {
@@ -266,6 +281,9 @@ export class BuildService {
       let placed = 0;
       let skipped = 0;
       let failed = 0;
+      let consecutiveFail = 0;
+      // malzeme özeti her blokta değil — arada bir
+      this.runtime.materials = this.materialsFor(blocks);
 
       for (let i = 0; i < blocks.length; i++) {
         if (token.cancelled) throw new Error(token.reason ?? "iptal");
@@ -274,25 +292,27 @@ export class BuildService {
         const wy = origin.y + b.dy;
         const wz = origin.z + b.dz;
 
-        report({ done: i, total: blocks.length, label: `${b.name} @ ${wx},${wy},${wz}` });
-        this.runtime.placed = placed;
-        this.runtime.skipped = skipped;
-        this.runtime.failed = failed;
-        this.runtime.label = `yerleştir: ${b.name} (${i + 1}/${blocks.length})`;
-        this.runtime.scaffoldsPlaced = this.scaffolds.count;
-        this.runtime.materials = this.materialsFor(blocks.slice(i));
-        this.emit();
-
         const skipReason = shouldSkipBlock(b.name, b.properties);
         let res: "placed" | "skipped" | "failed";
         if (skipReason) {
           res = "skipped";
         } else {
-          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 2 });
+          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 1 });
         }
         if (res === "placed") {
           this.scaffolds.protectStructure(wx, wy, wz);
+          consecutiveFail = 0;
         }
+
+        if (res === "placed") placed++;
+        else if (res === "skipped") {
+          skipped++;
+          consecutiveFail = 0;
+        } else {
+          failed++;
+          consecutiveFail++;
+        }
+
         const ev: BuildPlacedBlock = {
           name: b.name,
           x: wx,
@@ -303,16 +323,36 @@ export class BuildService {
         };
         this.pushBlockEvent(ev);
 
-        if (res === "placed") placed++;
-        else if (res === "skipped") skipped++;
-        else failed++;
-
         this.runtime.placed = placed;
         this.runtime.skipped = skipped;
         this.runtime.failed = failed;
-        this.emit();
+        this.runtime.scaffoldsPlaced = this.scaffolds.count;
+        this.runtime.label = `${b.name} · ${i + 1}/${blocks.length} · +${placed} / atla ${skipped} / hata ${failed}`;
+
+        // görev paneli + UI (throttled)
+        if (i % 3 === 0 || res === "placed" || i === blocks.length - 1) {
+          report({ done: i + 1, total: blocks.length, label: this.runtime.label });
+        }
+        if (i % 8 === 0) {
+          this.runtime.materials = this.materialsFor(blocks.slice(i + 1));
+        }
+        this.emit(i === 0 || i === blocks.length - 1 || res === "failed");
+
+        // peş peşe çok hata → kısa mola (path kilitlenmesi)
+        if (consecutiveFail >= 5) {
+          this.runtime.label = `yol sorunu — kısa bekleme (${consecutiveFail} hata)`;
+          this.emit(true);
+          try {
+            this.instance.bot?.pathfinder?.setGoal(null);
+          } catch {
+            /* */
+          }
+          await new Promise((r) => setTimeout(r, 400));
+          consecutiveFail = 0;
+        }
       }
 
+      this.flushEmit();
       this.setPhase("cleanup", "geçici bloklar temizleniyor…");
       this.log().info("Scaffold temizliği", `${this.scaffolds.count} kayıt`);
       const cleared = await this.scaffolds.cleanup(this.instance.bot!, token, (c, t) => {

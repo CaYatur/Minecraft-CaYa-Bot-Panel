@@ -17,12 +17,33 @@ const FACES: [number, number, number][] = [
   [0, 0, -1]
 ];
 
+/** Yerleştirme menzili — bu içinde pathfinder ÇAĞIRMA */
+const PLACE_REACH = 4.2;
+/** Path hedefe yaklaşma yarıçapı */
+const PATH_RANGE = 3.2;
+/** Path zaman aşımı (ms) — 45s eski, takılıyordu */
+const PATH_TIMEOUT_MS = 10_000;
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function dist3(bot: Bot, x: number, y: number, z: number): number {
+  const p = bot.entity.position;
+  const dx = p.x - x;
+  const dy = p.y - y;
+  const dz = p.z - z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/**
+ * Sadece gerekirse pathfinder. Zaten yakındaysa no-op.
+ * Eski kod her blokta GoalNear + 200ms poll + 45s timeout → yavaş ve takılma.
+ */
 async function pathNear(instance: BotInstance, x: number, y: number, z: number, range: number, token: TaskToken) {
   const bot = ensureMovement(instance);
+  if (dist3(bot, x, y, z) <= range + 0.5) return;
+
   bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
   const t0 = Date.now();
   let noPath = false;
@@ -31,11 +52,15 @@ async function pathNear(instance: BotInstance, x: number, y: number, z: number, 
   };
   bot.on("path_update", onPath);
   try {
-    while (!token.cancelled && Date.now() - t0 < 45_000) {
+    while (!token.cancelled && Date.now() - t0 < PATH_TIMEOUT_MS) {
       if (noPath) break;
-      const d = bot.entity.position.distanceTo({ x, y, z } as never);
-      if (d <= range + 0.6) break;
-      await sleep(200);
+      if (dist3(bot, x, y, z) <= range + 0.55) break;
+      // hareket yoksa erken çık (takılı path)
+      if (Date.now() - t0 > 2500 && dist3(bot, x, y, z) > range + 2) {
+        // hâlâ uzak — biraz daha bekle; 6s sonra bırak
+        if (Date.now() - t0 > 6000) break;
+      }
+      await sleep(80);
     }
   } finally {
     bot.removeListener("path_update", onPath);
@@ -60,13 +85,11 @@ export function itemNameForBlock(blockName: string): string[] {
     const base = n.replace(/_wall_sign$/, "_sign").replace(/_hanging_sign$/, "_sign");
     return [base, n];
   }
-  // default: block name is usually the item name
   return [n];
 }
 
 /**
  * Mutlak (x,y,z) konumuna named block yerleştir.
- * Gerekirse scaffold kule/basamak koyar ve tracker'a yazar.
  */
 export async function placeBlockAt(
   instance: BotInstance,
@@ -78,13 +101,13 @@ export async function placeBlockAt(
   scaffolds: ScaffoldTracker,
   opts?: { retries?: number }
 ): Promise<"placed" | "skipped" | "failed"> {
-  const retries = Math.max(1, opts?.retries ?? 2);
+  const retries = Math.max(1, opts?.retries ?? 1);
   let last: "placed" | "skipped" | "failed" = "failed";
   for (let attempt = 0; attempt < retries; attempt++) {
     if (token.cancelled) throw new Error(token.reason ?? "iptal");
     last = await placeBlockAtOnce(instance, x, y, z, blockName, token, scaffolds);
     if (last === "placed" || last === "skipped") return last;
-    await sleep(150 + attempt * 100);
+    if (attempt + 1 < retries) await sleep(80 + attempt * 60);
   }
   return last;
 }
@@ -104,11 +127,12 @@ async function placeBlockAtOnce(
   const name = String(blockName).replace(/^minecraft:/, "");
 
   const existing = bot.blockAt(target);
-  if (existing && existing.name === name) return "skipped";
+  if (existing && (existing.name === name || namesMatch(existing.name, name))) return "skipped";
   if (
     existing &&
     existing.name !== "air" &&
     existing.name !== "cave_air" &&
+    existing.name !== "void_air" &&
     existing.name !== "water" &&
     existing.name !== "lava" &&
     existing.name !== name
@@ -120,22 +144,36 @@ async function placeBlockAtOnce(
   const item = bot.inventory.items().find((i) => itemNames.includes(i.name));
   if (!item) return "failed";
 
-  // sıvı: kova ile bakıp activateItem
-  if (item.name.endsWith("_bucket") && (name === "water" || name === "lava" || name === "powder_snow" || name.includes("water") || name.includes("lava"))) {
-    await pathNear(instance, target.x + 0.5, target.y, target.z + 0.5, 3, token);
+  const tx = target.x + 0.5;
+  const ty = target.y + 0.5;
+  const tz = target.z + 0.5;
+
+  // sıvı: kova
+  if (
+    item.name.endsWith("_bucket") &&
+    (name === "water" || name === "lava" || name === "powder_snow" || name.includes("water") || name.includes("lava"))
+  ) {
+    if (dist3(bot, tx, ty, tz) > PLACE_REACH) {
+      await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
+    }
     try {
-      await bot.equip(item, "hand");
+      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       await bot.lookAt(target.offset(0.5, 0.2, 0.5), true);
-      await sleep(60);
-      await bot.activateItem();
-      await sleep(80);
+      bot.activateItem(false);
+      await sleep(50);
       try {
         bot.deactivateItem();
       } catch {
         /* */
       }
       const after = bot.blockAt(target);
-      if (after && (after.name.includes(name.split("_")[0]!) || after.name === name || after.name.includes("water") || after.name.includes("lava"))) {
+      if (
+        after &&
+        (after.name.includes(name.split("_")[0]!) ||
+          after.name === name ||
+          after.name.includes("water") ||
+          after.name.includes("lava"))
+      ) {
         scaffolds.protectStructure(target.x, target.y, target.z);
         return "placed";
       }
@@ -145,7 +183,10 @@ async function placeBlockAtOnce(
     }
   }
 
-  await pathNear(instance, target.x + 0.5, target.y, target.z + 0.5, 3, token);
+  // sadece uzaktaysa yürü
+  if (dist3(bot, tx, ty, tz) > PLACE_REACH) {
+    await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
+  }
 
   let ref = findReference(bot, target);
   if (!ref) {
@@ -156,12 +197,12 @@ async function placeBlockAtOnce(
 
   const eyeH = (bot.entity as { eyeHeight?: number }).eyeHeight ?? 1.62;
   const eyeY = bot.entity.position.y + eyeH;
-  if (target.y - eyeY > 2.5) {
+  if (target.y - eyeY > 2.8) {
     await climbWithScaffold(instance, target.y - 1, token, scaffolds);
   }
 
   try {
-    await bot.equip(item, "hand");
+    if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
   } catch {
     return "failed";
   }
@@ -169,20 +210,21 @@ async function placeBlockAtOnce(
   ref = findReference(bot, target) ?? ref;
   try {
     await bot.lookAt(ref.block.position.offset(0.5, 0.5, 0.5), true);
-    await sleep(80);
     await bot.placeBlock(ref.block, ref.face);
-    await sleep(120);
-    const after = bot.blockAt(target);
+    // kısa doğrulama (200ms bekleme kaldırıldı)
+    await sleep(40);
+    let after = bot.blockAt(target);
     if (after && (after.name === name || after.name === item.name || namesMatch(after.name, name))) {
       scaffolds.protectStructure(target.x, target.y, target.z);
       return "placed";
     }
-    await sleep(200);
-    const after2 = bot.blockAt(target);
-    if (after2 && (after2.name === name || after2.name === item.name || namesMatch(after2.name, name))) {
+    await sleep(80);
+    after = bot.blockAt(target);
+    if (after && (after.name === name || after.name === item.name || namesMatch(after.name, name))) {
       scaffolds.protectStructure(target.x, target.y, target.z);
       return "placed";
     }
+    // yerleştirme paket gecikmesi — block yok ama hata da yok; komşu ref'ten tekrar deneme yok
     return "failed";
   } catch {
     return "failed";
@@ -199,7 +241,9 @@ function findReference(bot: Bot, target: Vec3): { block: Block; face: Vec3 } | n
   for (const [fx, fy, fz] of FACES) {
     const rp = v3(target.x + fx, target.y + fy, target.z + fz);
     const b = bot.blockAt(rp);
-    if (!b || b.name === "air" || b.name === "cave_air" || b.name === "water" || b.name === "lava") continue;
+    if (!b || b.name === "air" || b.name === "cave_air" || b.name === "void_air" || b.name === "water" || b.name === "lava") {
+      continue;
+    }
     const face = v3(-fx, -fy, -fz);
     return { block: b, face };
   }
@@ -220,7 +264,9 @@ async function ensureSupport(
   const scaffoldName = pickScaffoldItem(bot, instance.config.movement.scaffoldBlocks);
   if (!scaffoldName) return;
 
-  await pathNear(instance, under.x + 0.5, under.y, under.z + 0.5, 3, token);
+  if (dist3(bot, under.x + 0.5, under.y, under.z + 0.5) > PLACE_REACH) {
+    await pathNear(instance, under.x + 0.5, under.y, under.z + 0.5, PATH_RANGE, token);
+  }
   const item = bot.inventory.items().find((i) => i.name === scaffoldName);
   if (!item) return;
 
@@ -231,10 +277,10 @@ async function ensureSupport(
   }
   if (!ref) return;
   try {
-    await bot.equip(item, "hand");
+    if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
     await bot.placeBlock(ref.block, ref.face);
     scaffolds.record(under.x, under.y, under.z, scaffoldName);
-    await sleep(80);
+    await sleep(40);
   } catch {
     /* */
   }
@@ -249,7 +295,7 @@ async function climbWithScaffold(
   const bot = instance.bot!;
   const preferred = instance.config.movement.scaffoldBlocks;
   let guard = 0;
-  while (!token.cancelled && bot.entity.position.y < targetFootY - 0.5 && guard < 24) {
+  while (!token.cancelled && bot.entity.position.y < targetFootY - 0.5 && guard < 16) {
     guard++;
     const scaffoldName = pickScaffoldItem(bot, preferred);
     if (!scaffoldName) break;
@@ -260,11 +306,11 @@ async function climbWithScaffold(
     const fy = Math.floor(bot.entity.position.y);
     const fz = Math.floor(bot.entity.position.z);
     try {
-      await bot.equip(item, "hand");
+      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       const below = bot.blockAt(v3(fx, fy - 1, fz));
       if (below && below.name !== "air") {
         bot.setControlState("jump", true);
-        await sleep(200);
+        await sleep(120);
         try {
           await bot.placeBlock(below, v3(0, 1, 0));
           scaffolds.record(fx, fy, fz, scaffoldName);
@@ -272,7 +318,7 @@ async function climbWithScaffold(
           /* */
         }
         bot.setControlState("jump", false);
-        await sleep(300);
+        await sleep(140);
       } else {
         break;
       }

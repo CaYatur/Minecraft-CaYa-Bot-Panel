@@ -80,13 +80,14 @@ export function BuildPanel({ botId }: { botId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [botId]);
 
+  // origin "here" — sadece boştayken bot konumunu yansıt (inşaatta yürüyünce form kaymasın)
   useEffect(() => {
-    if (bot?.runtime.position && originMode === "here") {
-      setX(Math.floor(bot.runtime.position.x));
-      setY(Math.floor(bot.runtime.position.y));
-      setZ(Math.floor(bot.runtime.position.z));
-    }
-  }, [bot?.runtime.position, originMode]);
+    if (originMode !== "here" || !bot?.runtime.position) return;
+    if (busy) return;
+    setX(Math.floor(bot.runtime.position.x));
+    setY(Math.floor(bot.runtime.position.y));
+    setZ(Math.floor(bot.runtime.position.z));
+  }, [bot?.runtime.position?.x, bot?.runtime.position?.y, bot?.runtime.position?.z, originMode, busy]);
 
   const loadPreview = useCallback(async () => {
     if (!schematicId || !online) {
