@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 0–12 çekirdek tamam (✅*/Paper fizik borçları) · Grok full-suite geçti**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 0–12 ✅* · Faz 13 🔨 (yakın oyuncular + zengin otomasyon + sürüm kataloğu)**
 
 ---
 
@@ -259,6 +259,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 10 | Görev sistemi olgunlaştırma + depo/sandık | ✅ Bitti* (sandık fiziği Paper) |
 | 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
 | 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
+| 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | 🔨 Başlandı |
 
 ---
 
@@ -409,6 +410,41 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [ ] prismarine-viewer, Discord, PWA, multi-user, 2+ saat sızıntı testi → Backlog / opsiyonel.
 - [x] **Kabul v1:** panelden bot+kural+görev yönetimi kodsuz; 5 bot 1 saat saha Backlog.
 
+### Faz 13 — Yakın Oyuncular + Zengin Otomasyon + Sürüm Kataloğu 🔨
+
+> Kullanıcı isteği (2026-07-15): bot detayında menzildeki oyuncular (tıkla takip), daha fazla otomasyon tetik/aksiyon,
+> maden/eşya **listeden seçim**, sunucu sürümüne göre güncel katalog (minecraft-data).
+
+**Protokol notu:** Bu faz da diğerleri gibi TODO ile yönetilir — başlarken `[~]`, bitince `[x]`, §7 tablo + §15 oturum günlüğü.
+
+#### 13.A — Bot detay: yakındaki oyuncular
+- [~] Canlı liste: menzildeki oyuncular (mesafe); entity yoksa tab listesi + “konum bilinmiyor”.
+- [ ] Tek tık: **Takip et** · **Yanına git** · **Saldır** · **Fısılda** (`/msg`).
+- [ ] Socket `bot:nearby` (≤1–2 Hz) veya REST poll; panel kartı (Faz 0–5 tasarım dili).
+- [ ] **Kabul:** Online botta yakındaki isim görünür; tıkla takip görevi kuyruğa girer.
+
+#### 13.B — Sürüme göre eşya/maden kataloğu
+- [~] `minecraft-data` ile `GET /api/catalog?version=` → items, blocks, ores, foods, tools, weapons.
+- [~] `server/src/modules/catalog/minecraftCatalog.ts` iskeleti yazıldı (önbellekli).
+- [ ] REST rotası + web `ItemPicker` / `OrePicker` bileşeni (arama + liste; yazmak yerine seç).
+- [ ] GatherCraftPanel + Automations bu listeleri kullanır (sunucu profili version’ı).
+- [ ] **Kabul:** 1.16 / 1.20 seçiminde ore listesi dolu; demir seç → mine görevi.
+
+#### 13.C — Otomasyon motoru genişletme
+- [~] RuleEngine tetik genişletmesi (kodda): `attacked`, `player_nearby`, `player_joined/left`, `inventory_full`, `task_done/failed`, `item_count` poll; `player` filtresi (belirli kişi).
+- [~] Aksiyon meta + şablon sayısı artırıldı (kodda; panel henüz eski UI).
+- [ ] BotInstance/Manager kablolama: nearby emit, attacked (health drop), tab join/leave, inventory full → RuleEngine.
+- [ ] Panel: form builder (tetik tipi → alanlar → koşul → aksiyon listesi; eşya/maden picker).
+- [ ] Şablonlar UI’da yeni set: saldırıya karşılık, demir madencisi, odun azsa, belirli kişi gel, vs.
+- [ ] **Kabul:** “X kişisi ‘gel’ derse git”; “saldırıya uğrarsan saldırgana saldır”; “iron_log &lt; 16 ise odun topla” panelden kurulur.
+
+#### 13.D — Küçük UX (önceki istekler — yapıldı)
+- [x] Modal backdrop tıklayınca kapanmaz; × / Vazgeç (commit `4a9c639`).
+- [x] Bot ekle: 2+ sunucuda varsayılan “Seçiniz…”.
+- [x] Chat isim parse: JSON component + zengin regex (plugin sunucular).
+- [x] Faz 6–12 paneller tasarım dili hizası (`be558b9`).
+- [x] Master smoke `scripts/grok-smoke-all.mjs` (`9bac4a0`).
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -495,6 +531,9 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Sesli bildirimler; kritik olayda Windows toast.
 - Çoklu panel kullanıcısı + rol bazlı yetki (şimdilik tek kullanıcı varsayımı).
 - REST API anahtarı ile dış araç entegrasyonu (ör. başka bir uygulamadan görev gönderme).
+- Tam node-tabanlı görsel kural editörü (Faz 13 form builder üstüne).
+- Katalogda displayName i18n (TR çeviri tablosu).
+- Paper saha checklist’i (Faz 4–10 ✅* fizik maddeleri) tek sayfa test senaryosu.
 
 ---
 
@@ -518,6 +557,8 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — PanelError `core/errors.ts`e taşındı (inventory→BotManager döngüsel import'unu kırmak için); BotManager geriye dönük re-export ediyor.
 - 2026-07-15 — armor-manager, pencere tıklaması desteklemeyen sunucuda (flying-squid) askıda kalıp envanter senkronunu tıkıyor — §12'ye gotcha yazıldı; gerçek sunucularda sorun beklenmez (tıklamalar anında yanıtlanır).
 - 2026-07-15 — Faz 6 dövüş: mineflayer-pvp kullanılmadı; `CombatService` + `RealismLayer` (custom). Snapshot'a `combat` alanı ve `bot:combat` socket eklendi. Ölüm → `ölüm-<username>` waypoint (BotManager deathAt).
+- 2026-07-15 — Eşya/maden listesi için **minecraft-data** (sürüme göre, npm paketi; web scrape değil) — her sunucu profili `version` alanı ile katalog çözülür; `auto` → 1.20.4 fallback.
+- 2026-07-15 — Faz 13 açıldı: yakın oyuncu UI + otomasyon formu + katalog; çekirdek RuleEngine/katalog dosyaları WIP (`[~]`).
 
 ---
 
@@ -625,3 +666,23 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - armor-manager bannedItems deliği
 - prismarine-viewer / Discord / multi-user Backlog
 - TaskQueue pause = cancel+requeue (tam bağlamlı pause değil)
+
+### 2026-07-15 — Grok 4.5 — UX + smoke + Faz 13 başlangıç (TODO senkron)
+
+**Tamamlanıp commitlenen (önceki mesajlar):**
+
+| Commit | Ne |
+|---|---|
+| `f94a9a9` | Faz 7–12 çekirdek |
+| `bd2c01e` | audit: RuleEngine rate/auth, fetch honesty |
+| `9bac4a0` | `grok-smoke-all` master smoke |
+| `be558b9` | UI tasarım dili hizası (Combat/Yaşam/İş/Otomasyon/Ayarlar) |
+| `4a9c639` | modal backdrop kapanmaz; sunucu Seçiniz; chat isim parse |
+
+**Faz 13 kullanıcı isteği → TODO’ya alındı (§8 Faz 13).** WIP dosyalar (henüz bitmedi / doğrulanmadı):
+
+- `[~]` `server/src/modules/catalog/minecraftCatalog.ts` + `minecraft-data` dependency
+- `[~]` `RuleEngine.ts` geniş tetik/aksiyon/şablon seti (panel + BotInstance kablosu eksik)
+- `[ ]` NearbyPlayers paneli, ItemPicker, Automations form builder, REST `/api/catalog`
+
+**TODO güncelleme kuralı (tekrar):** Her işe başlamadan `[~]`, bitince `[x]` + §7 + §15 + gerekirse §14. Yeni özellik isteği → yeni faz maddesi veya §13 Backlog; sessizce unutulmaz.
