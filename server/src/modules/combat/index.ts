@@ -597,10 +597,8 @@ export class CombatService {
     if (!bot?.entity) return;
     if ((bot.health ?? 0) <= 0) return;
 
-    const cur = this.instance.tasks.currentSummary;
-    if (cur?.type === "defend" || cur?.type === "attack" || cur?.type === "flee" || cur?.type === "clear-mobs") {
-      return;
-    }
+    // zaten dövüş/kaçış görevi var veya kuyrukta — spam görev açma
+    if (this.hasActiveCombatTask()) return;
     if (this.mode === "fleeing" || this.mode === "attacking" || this.mode === "defending") return;
 
     const range = Math.max(4, Math.min(32, Math.floor(this.cfg().defendRange ?? 12)));
@@ -617,17 +615,26 @@ export class CombatService {
       return;
     }
 
-    this.log().info(`Öz savunma: ${label}`, `mod=${mode} r=${range}`);
+    const dist = bot.entity.position.distanceTo(target.position);
+    this.log().info(`Öz savunma: ${label}`, `mod=${mode} r=${range} d=${dist.toFixed(1)} id=${target.id}`);
     this.instance.tasks.enqueue(
       {
         type: "defend",
         label: `öz-savun: ${label}`,
         priority: PRIORITY.DEFENSE,
-        params: { target: label, selfGuard: true },
+        params: { target: label, selfGuard: true, entityId: target.id },
         requeueOnPreempt: false
       },
       () => (token, report) => this.runDefend(target, label, token, report)
     );
+  }
+
+  /** savun/saldır/kaç aktif veya kuyrukta mı */
+  private hasActiveCombatTask(): boolean {
+    const types = new Set(["defend", "attack", "flee", "clear-mobs"]);
+    const cur = this.instance.tasks.currentSummary;
+    if (cur && types.has(cur.type)) return true;
+    return this.instance.tasks.queueSummaries.some((t) => types.has(t.type));
   }
 
   /** Proaktif hedef: hostile mob her zaman; oyuncu yalnız recentThreat */
@@ -1064,8 +1071,7 @@ export class CombatService {
 
     const label = labelEntity(attacker);
     // don't stack infinite defense tasks
-    const cur = this.instance.tasks.currentSummary;
-    if (cur?.type === "defend" && cur.label.includes(label)) return;
+    if (this.hasActiveCombatTask()) return;
     if (this.mode === "defending" && this.activeTargetLabel === label) return;
 
     this.log().info(`Savunma: ${label} (mod=${mode})`);
@@ -1074,7 +1080,7 @@ export class CombatService {
         type: "defend",
         label: `savun: ${label}`,
         priority: PRIORITY.DEFENSE,
-        params: { target: label },
+        params: { target: label, entityId: attacker.id },
         requeueOnPreempt: false
       },
       () => (token, report) => this.runDefend(attacker, label, token, report)
@@ -1082,47 +1088,102 @@ export class CombatService {
   }
 
   private async runDefend(initial: Entity, label: string, token: TaskToken, report: ProgressFn) {
-    await sleep(randomReactionMs(this.cfg()));
+    // kısa tepki — 300ms+ beklerken zombi vuruyor; öz savunmada hızlı ol
+    const react = Math.min(120, randomReactionMs(this.cfg()));
+    await sleep(react);
     if (token.cancelled) throw new Error(token.reason ?? "iptal");
 
     this.setMode("defending", label);
     await this.equipBestWeapon();
 
-    const chase = this.cfg().chaseDistance ?? 24;
+    // chaseDistance 0/bozuksa yine de dövüşü terk etme
+    const chase = Math.max(12, Number(this.cfg().chaseDistance) || 24);
     const t0 = Date.now();
+    let targetId: number | null = typeof initial?.id === "number" ? initial.id : null;
+    let lostSince: number | null = null;
+    let hits = 0;
 
-    while (!token.cancelled && Date.now() - t0 < 120_000) {
-      if ((this.bot?.health ?? 20) <= (this.cfg().fleeAtHealth ?? 6)) {
-        this.enqueueFlee(label);
-        throw new Error("Can kritik");
+    try {
+      while (!token.cancelled && Date.now() - t0 < 120_000) {
+        if ((this.bot?.health ?? 20) <= (this.cfg().fleeAtHealth ?? 6)) {
+          this.enqueueFlee(label);
+          throw new Error("Can kritik");
+        }
+
+        const bot = this.requireBot();
+        if (!bot.entity) break;
+
+        // 1) entity id  2) en yakın aynı etiket  3) en yakın uygun tehdit
+        let entity =
+          this.resolveCombatEntity(targetId, label, chase + 4) ??
+          this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "all" : this.cfg().defendMode, chase) ??
+          (initial && initial.isValid !== false ? initial : null);
+
+        if (!entity || entity.isValid === false) {
+          if (lostSince == null) lostSince = Date.now();
+          // kısa grace — entity paket gecikmesi
+          if (Date.now() - lostSince > 2000) {
+            this.log().info("Saldırgan kayboldu — savunma bitti", label);
+            break;
+          }
+          report({ done: 0, total: 1, label: `savun ${label} · aranıyor` });
+          await sleep(150);
+          continue;
+        }
+        lostSince = null;
+        if (typeof entity.id === "number") targetId = entity.id;
+
+        // gövde mesafesi (göz-aim bazen 1.21'de şişebilir; kovalama için feet)
+        const dist = bot.entity.position.distanceTo(entity.position);
+        report({
+          done: hits,
+          total: Math.max(hits + 1, 1),
+          label: `savun ${labelEntity(entity)} · ${dist.toFixed(1)}m${hits ? ` · ${hits} vuruş` : ""}`
+        });
+
+        if (dist > chase) {
+          // yanlış uzak entity seçildiyse en yakını dene, hemen vazgeçme
+          const nearer =
+            this.findNearestByLabel(label, chase) ??
+            this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "mob" : this.cfg().defendMode, chase);
+          if (!nearer) {
+            this.log().info("Saldırgan menzilden çıktı — kovalama bırakıldı", `${dist.toFixed(1)}>${chase}`);
+            break;
+          }
+          entity = nearer;
+          if (typeof entity.id === "number") targetId = entity.id;
+        }
+
+        if (entity.health !== undefined && entity.health <= 0) {
+          this.log().info(`Hedef öldü: ${labelEntity(entity)}`);
+          break;
+        }
+
+        const reach = this.cfg().reach ?? 3;
+        if (!inMeleeRange(bot, entity, reach)) {
+          await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
+          continue;
+        }
+
+        const res = await tryRealisticAttack(bot, entity, this.cfg(), this.lastSwing, token);
+        if (res.ok) {
+          hits += 1;
+          if (entity.health !== undefined && entity.health <= 0) break;
+        } else if (res.reason === "range" || res.reason === "los") {
+          await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
+        } else if (res.reason === "cancelled") {
+          throw new Error(res.detail ?? token.reason ?? "iptal");
+        }
+
+        await sleep(50);
       }
 
-      let entity = this.findEntityByLabel(label) ?? (initial.isValid ? initial : null);
-      // re-scan if gone
-      if (!entity || !entity.isValid) {
-        entity = this.pickDefenseTarget(this.cfg().defendMode);
-        if (!entity) break;
-      }
-
-      const dist = distanceEyeToEntity(this.requireBot(), entity);
-      report({ done: 0, total: 1, label: `savun ${labelEntity(entity)} · ${dist.toFixed(1)}m` });
-
-      if (dist > chase) {
-        this.log().info("Saldırgan menzilden çıktı — kovalama bırakıldı");
-        break;
-      }
-
-      if (!inMeleeRange(this.requireBot(), entity, this.cfg().reach)) {
-        await this.approachEntity(entity, 2, token);
-        continue;
-      }
-
-      await tryRealisticAttack(this.requireBot(), entity, this.cfg(), this.lastSwing, token);
-      await sleep(100);
+      if (token.cancelled) throw new Error(token.reason ?? "iptal");
+      if (hits > 0) this.log().info(`Savunma bitti: ${label}`, `${hits} vuruş`);
+    } finally {
+      this.clearPathfinder();
+      this.restoreCompanionMode();
     }
-
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
-    this.restoreCompanionMode();
   }
 
   private onDeath() {
@@ -1250,36 +1311,129 @@ export class CombatService {
   }
 
   private findEntityByLabel(label: string): Entity | null {
-    const bot = this.bot;
-    if (!bot) return null;
-    // player name
-    const p = bot.players[label]?.entity;
-    if (p) return p;
+    // geriye uyum — en yakını tercih et (ilk rastgele entity değil!)
+    return this.findNearestByLabel(label, 64);
+  }
+
+  /**
+   * Aynı etiketli (zombie / oyuncu adı) en yakın entity.
+   * Eski findEntityByLabel ilk map girdisini alıyordu → uzak zombie seçilip
+   * "menzilden çıktı" spam'i oluşuyordu.
+   */
+  private findNearestByLabel(label: string, maxDist: number): Entity | null {
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity || !label) return null;
+    const want = label.toLowerCase();
+
+    let playerEnt = bot.players[label]?.entity ?? null;
+    if (!playerEnt) {
+      for (const name of Object.keys(bot.players)) {
+        if (name.toLowerCase() === want) {
+          playerEnt = bot.players[name]?.entity ?? null;
+          break;
+        }
+      }
+    }
+    if (playerEnt) {
+      try {
+        const d = bot.entity.position.distanceTo(playerEnt.position);
+        if (d <= maxDist) return playerEnt;
+      } catch {
+        /* */
+      }
+    }
+
+    let best: Entity | null = null;
+    let bestD = maxDist + 0.001;
     for (const id in bot.entities) {
       const e = bot.entities[id];
-      if (e && labelEntity(e) === label) return e;
+      if (!e || e === bot.entity) continue;
+      if (labelEntity(e).toLowerCase() !== want) continue;
+      if (e.isValid === false) continue;
+      try {
+        const d = bot.entity.position.distanceTo(e.position);
+        if (d < bestD) {
+          bestD = d;
+          best = e;
+        }
+      } catch {
+        /* position yok */
+      }
     }
-    return null;
+    return best;
+  }
+
+  /** id ile tut, yoksa en yakın label */
+  private resolveCombatEntity(id: number | null, label: string, maxDist: number): Entity | null {
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity) return null;
+
+    if (id != null) {
+      const byId = bot.entities[id];
+      if (byId && byId.isValid !== false) {
+        try {
+          const d = bot.entity.position.distanceTo(byId.position);
+          if (d <= maxDist) return byId;
+        } catch {
+          /* */
+        }
+      }
+    }
+    return this.findNearestByLabel(label, maxDist);
   }
 
   private async approachEntity(entity: Entity, range: number, token: TaskToken) {
     if (this.deadPaused) return;
     const bot = this.requireBot();
     if ((bot.health ?? 0) <= 0 || !bot.entity) return;
+    const hold = Math.max(0.8, range);
     try {
-      ensureMovement(this.instance);
-      bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
-      const t0 = Date.now();
-      while (!token.cancelled && !this.deadPaused && Date.now() - t0 < 15_000) {
-        if ((bot.health ?? 0) <= 0 || !bot.entity) break;
-        if (inMeleeRange(bot, entity, this.cfg().reach) && distanceEyeToEntity(bot, entity) <= range + 0.5) break;
-        if (!entity.isValid) break;
+      ensureMovement(this.instance, { allowSprintNow: true });
+      // GoalFollow entity'yi canlı takip eder; GoalNear sabit nokta yedek
+      try {
+        bot.pathfinder.setGoal(new goals.GoalFollow(entity, hold), true);
+      } catch {
         try {
-          await stepLookAtEntity(bot, entity, this.cfg().turnSpeedDegPerTick ?? 24);
+          const p = entity.position;
+          bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
         } catch {
           /* */
         }
-        await sleep(120);
+      }
+
+      const t0 = Date.now();
+      let lastRepath = 0;
+      while (!token.cancelled && !this.deadPaused && Date.now() - t0 < 12_000) {
+        if ((bot.health ?? 0) <= 0 || !bot.entity) break;
+        if (!entity || entity.isValid === false) break;
+
+        // taze entity (id)
+        const live =
+          typeof entity.id === "number" ? (bot.entities[entity.id] ?? entity) : entity;
+        const reach = this.cfg().reach ?? 3;
+        if (inMeleeRange(bot, live, reach)) break;
+
+        // ara sıra hedef yenile (entity hareket ediyor)
+        if (Date.now() - lastRepath > 800) {
+          lastRepath = Date.now();
+          try {
+            bot.pathfinder.setGoal(new goals.GoalFollow(live, hold), true);
+          } catch {
+            try {
+              const p = live.position;
+              bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
+            } catch {
+              /* */
+            }
+          }
+        }
+
+        try {
+          await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
+        } catch {
+          /* */
+        }
+        await sleep(100);
       }
       try {
         bot.pathfinder.setGoal(null);

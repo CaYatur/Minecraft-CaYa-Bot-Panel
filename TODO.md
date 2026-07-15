@@ -640,6 +640,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — protectAggro `threats`: oyuncuya sadece recentThreat (bot hasar + pickDefenseTarget); mob’lar retaliateMobs ile. `non_whitelist` = PvP eşlik.
 - 2026-07-15 — Öz savunma proaktif `selfGuardTick` (defendMode+defendRange); eşlik korumasından ayrı. CombatPanel ayarları anlık (Kaydet butonu kaldırıldı).
 - 2026-07-15 — Yeni bot `defendMode` varsayılan `mob` (boşta zombie savunsun); mevcut bot config’i bots.json’da kalır.
+- 2026-07-15 — Dövüş hedef çözümlemesi: mob adında **en yakın** entity + id takibi (ilk map girdisi değil) — aksi halde uzak zombie “menzilden çıktı” spam.
 
 ---
 
@@ -901,3 +902,18 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 5. TODO §6/§14/§15; typecheck temiz.
 
 **Kullanım:** Dövüş → Öz savunma → **Mob** (veya Hepsi). Eşlik için Yakındaki oyuncular → Koru.
+
+### 2026-07-15 — Grok 4.5 — Fix: öz savunma vuruş yapmıyor (menzilden çıktı spam)
+
+**Saha log:** `Öz savunma: zombie` → hemen `Saldırgan menzilden çıktı` → görev biter → spam; can düşünce kaçış/ölüm. Kılıç vuruşu yok.
+
+**Kök neden:** `findEntityByLabel("zombie")` entity map’te **ilk** zombie’yi alıyordu (uzak olabilir); yakın hedef `initial` yok sayılıyordu → dist > chase → anında vazgeç.
+
+**Fix:**
+1. Hedef **entity id** ile takip; yoksa **en yakın** aynı etiket (`findNearestByLabel`).
+2. `runDefend`: gövde mesafesi, grace 2s, uzaksa yeniden nearest; vuruş sayacı; finally pathfinder+mode temiz.
+3. `approachEntity`: GoalFollow + GoalNear yedek, sprint, canlı entity repath.
+4. Görev spam: `hasActiveCombatTask()` (current+queue).
+5. Tepki gecikmesi öz savunmada ≤120ms.
+
+**Beklenen log:** `öz-savun zombie d=3.2 id=…` → yaklaş → vuruş → `Savunma bitti: zombie · N vuruş`.
