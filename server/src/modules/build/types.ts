@@ -104,6 +104,10 @@ export interface BuildRuntime {
   /** yerleştirme sırası tercihi */
   placeOrder?: BuildPlaceOrder;
   collectMissing?: boolean;
+  /** anlık iş: "Toplanıyor: oak_log · 3/16" / "Craft: …" */
+  activity?: string | null;
+  /** şu an üzerinde çalışılan malzeme adı */
+  activityMaterial?: string | null;
 }
 
 export function emptyBuildRuntime(): BuildRuntime {
@@ -125,6 +129,8 @@ export function emptyBuildRuntime(): BuildRuntime {
     recentBlocks: [],
     transform: { rotateY: 0, mirrorX: false, mirrorZ: false },
     placeOrder: "nearby-first",
-    collectMissing: false
+    collectMissing: false,
+    activity: null,
+    activityMaterial: null
   };
 }

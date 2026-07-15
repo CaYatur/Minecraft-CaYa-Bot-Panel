@@ -313,6 +313,12 @@ export interface BuildRuntimeSnapshot {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
+  placeOrder?: "nearby-first" | "layer-first";
+  collectMissing?: boolean;
+  /** anlık iş metni: Toplanıyor / Craft / Kondu… */
+  activity?: string | null;
+  /** şu an işlenen malzeme adı (UI highlight) */
+  activityMaterial?: string | null;
 }
 
 export interface BotSnapshot {

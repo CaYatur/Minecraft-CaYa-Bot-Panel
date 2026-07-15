@@ -242,6 +242,9 @@ export interface BuildRuntime {
   };
   placeOrder?: "nearby-first" | "layer-first";
   collectMissing?: boolean;
+  /** anlık: Toplanıyor / Kondu / Craft… */
+  activity?: string | null;
+  activityMaterial?: string | null;
 }
 
 export interface BotSnapshot {

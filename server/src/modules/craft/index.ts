@@ -46,6 +46,26 @@ export class CraftService {
     );
   }
 
+  /** Build/acquire içinden kuyruğa almadan craft dene */
+  async runCraftInline(item: string, count: number, token: TaskToken, report: ProgressFn) {
+    const name = item.replace(/^minecraft:/, "");
+    const n = Math.max(1, Math.min(64, Math.floor(count)));
+    await this.runCraft(name, n, token, report);
+  }
+
+  /** Tarif var mı? (2x2 / masa) */
+  canCraft(item: string): boolean {
+    const bot = this.instance.bot;
+    if (!bot) return false;
+    const name = item.replace(/^minecraft:/, "");
+    const id = bot.registry.itemsByName[name]?.id;
+    if (id == null) return false;
+    const r1 = bot.recipesFor(id, null, 1, null) as unknown[];
+    if (r1.length) return true;
+    const r2 = bot.recipesFor(id, null, 1, true) as unknown[];
+    return r2.length > 0;
+  }
+
   private buildPlan(bot: Bot, item: string, count: number, depth: number): CraftPlanStep[] {
     if (depth > MAX_DEPTH) return [{ kind: "gather", item, count, note: "derinlik sınırı" }];
     const id = bot.registry.itemsByName[item]?.id;
@@ -91,7 +111,13 @@ export class CraftService {
     for (const step of plan) {
       if (token.cancelled) throw new Error(token.reason ?? "iptal");
       stepI++;
-      report({ done: stepI - 1, total: plan.length, label: `${step.kind} ${step.item}×${step.count}` });
+      const stepLabel =
+        step.kind === "craft"
+          ? `Craft: ${step.item} ×${step.count}`
+          : step.kind === "smelt"
+            ? `Eritiliyor: ${step.item} ×${step.count}`
+            : `Toplanıyor: ${step.item} ×${step.count}`;
+      report({ done: stepI - 1, total: plan.length, label: stepLabel });
 
       if (step.kind === "gather") {
         await this.gatherFallback(step.item, step.count, token, report);
@@ -102,6 +128,7 @@ export class CraftService {
           this.log().warn("Smelt adımı atlandı");
         }
       } else if (step.kind === "craft") {
+        report({ done: stepI - 1, total: plan.length, label: `Craft deneniyor: ${step.item} ×${step.count}` });
         await this.craftItem(bot, step.item, step.count, token);
       }
     }
@@ -109,9 +136,10 @@ export class CraftService {
     const have = bot.inventory.items().filter((i) => i.name === item).reduce((s, i) => s + i.count, 0);
     if (have < count) {
       // final direct craft attempt
+      report({ done: plan.length, total: plan.length, label: `Craft deneniyor: ${item} ×${count}` });
       await this.craftItem(bot, item, count, token);
     }
-    report({ done: plan.length, total: plan.length, label: `üretildi: ${item}` });
+    report({ done: plan.length, total: plan.length, label: `Craft bitti: ${item}` });
     this.log().success(`Üretim bitti: ${item}`);
   }
 

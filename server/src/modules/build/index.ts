@@ -63,7 +63,20 @@ export class BuildService {
     this.runtime.phase = phase;
     if (label != null) this.runtime.label = label;
     if (error != null) this.runtime.error = error;
-    this.emit();
+    this.emit(true);
+  }
+
+  private setActivity(text: string | null, material?: string | null) {
+    this.runtime.activity = text;
+    this.runtime.activityMaterial = material ?? null;
+    if (text) this.runtime.label = text;
+    this.emit(true);
+  }
+
+  /** Malzeme listesini envanterden anlık yenile + UI'ye bas */
+  private refreshMaterials(blocks: SchematicBlock[], force = true) {
+    this.runtime.materials = this.materialsFor(blocks);
+    this.emit(force);
   }
 
   private pushBlockEvent(ev: BuildPlacedBlock) {
@@ -127,47 +140,52 @@ export class BuildService {
         requeueOnPreempt: false
       },
       () => async (token, report) => {
+        this.setActivity("Malzeme listesi hazırlanıyor…");
         this.setPhase("acquiring", "malzeme listesi…");
         report({ done: 0, total: 1, label: "malzeme listesi…" });
         const parsed = await loadParsedSchematic(sid, version, opts.transform);
         const blocks = parsed.blocks.filter((b) => !shouldSkipBlock(b.name, b.properties));
-        let mats = this.materialsFor(blocks);
-        this.runtime.materials = mats;
-        this.emit(true);
+        this.refreshMaterials(blocks, true);
 
-        // önce yakındaki yer eşyaları
         try {
+          this.setActivity("Yere düşen eşyalar toplanıyor…", null);
           report({ done: 0, total: 1, label: "yere düşenler…" });
-          await this.instance.gather.runCollectDrops(undefined, 28, token, report);
+          await this.instance.gather.runCollectDrops(undefined, 28, token, (p) => {
+            report(p);
+            this.setActivity(p.label ?? "Yere düşenler…", null);
+            this.refreshMaterials(blocks, true);
+          });
         } catch {
           /* best-effort */
         }
+        this.refreshMaterials(blocks, true);
 
-        mats = this.materialsFor(blocks);
-        const missing = mats.filter((m) => m.missing > 0);
+        const missing = this.materialsFor(blocks).filter((m) => m.missing > 0);
         if (!missing.length) {
+          this.setActivity(null, null);
           this.setPhase("idle", "eksik malzeme yok");
           report({ done: 1, total: 1, label: "eksik yok" });
           return;
         }
 
-        // sırayla her eksik — yakında yoksa runCollectBlock halka arar
         let i = 0;
         for (const m of missing) {
           if (token.cancelled) throw new Error(token.reason ?? "iptal");
           i++;
-          this.setPhase("acquiring", `topla ${m.name} ×${m.missing} (${i}/${missing.length})`);
+          this.setActivity(`Toplanıyor: ${m.name} ×${m.missing} (${i}/${missing.length})`, m.name);
           report({ done: i - 1, total: missing.length, label: `topla ${m.name} ×${m.missing}` });
           try {
-            await this.acquireOneMaterial(m.name, m.missing, token, report);
+            await this.acquireOneMaterial(m.name, m.missing, token, report, blocks);
           } catch (e) {
             this.log().warn(`Malzeme toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
+            this.setActivity(`Başarısız: ${m.name} — ${e instanceof Error ? e.message : String(e)}`, m.name);
           }
-          this.runtime.materials = this.materialsFor(blocks);
-          this.emit(true);
+          this.refreshMaterials(blocks, true);
         }
 
         const still = this.materialsFor(blocks).filter((m) => m.missing > 0);
+        this.refreshMaterials(blocks, true);
+        this.setActivity(null, null);
         const label =
           still.length === 0
             ? "malzemeler tamam"
@@ -182,16 +200,57 @@ export class BuildService {
     );
   }
 
-  /** Tek malzeme topla (inline — build veya acquire görevi) */
+  /** Tek malzeme: önce craft dene, yetmezse topla — activity + materials anlık */
   private async acquireOneMaterial(
     blockName: string,
     count: number,
     token: TaskToken,
-    report: ProgressFn
+    report: ProgressFn,
+    allBlocks: SchematicBlock[]
   ) {
-    const item = itemNameForBlock(blockName)[0] ?? blockName;
+    const names = itemNameForBlock(blockName);
+    const item = names[0] ?? blockName;
     const n = Math.max(1, count);
-    await this.instance.gather.runCollectBlock(item, n, token, report);
+
+    const wrapActivity: ProgressFn = (p) => {
+      report(p);
+      let label = p.label ?? `Toplanıyor: ${item}`;
+      // gather ham etiketleri netleştir
+      if (label && !/^(Toplanıyor|Craft|Eritiliyor|Kondu|Atlandı|Hata|Başarısız)/i.test(label)) {
+        label = `Toplanıyor: ${label}`;
+      }
+      this.runtime.activity = label;
+      this.runtime.activityMaterial = blockName;
+      this.runtime.label = label;
+      this.refreshMaterials(allBlocks, true);
+    };
+
+    // 1) Craft edilebiliyorsa önce craft dene (planks, stairs, slab…)
+    if (this.instance.craft.canCraft(item)) {
+      this.setActivity(`Craft deneniyor: ${item} ×${n}`, blockName);
+      try {
+        await this.instance.craft.runCraftInline(item, n, token, wrapActivity);
+        this.refreshMaterials(allBlocks, true);
+        if (this.countHaveItem(names) >= n) {
+          this.setActivity(`Craft tamam: ${item}`, blockName);
+          return;
+        }
+        // kısmi craft — kalanı topla
+        const still = Math.max(1, n - this.countHaveItem(names));
+        this.setActivity(`Craft kısmi — toplanıyor: ${item} ×${still}`, blockName);
+      } catch (e) {
+        this.log().warn(
+          `Craft olmadı, toplanacak: ${item}`,
+          e instanceof Error ? e.message : String(e)
+        );
+        this.setActivity(`Craft olmadı — toplanıyor: ${item} ×${n}`, blockName);
+      }
+    }
+
+    // 2) Doğa / maden toplama
+    this.setActivity(`Toplanıyor: ${item} · hedef ×${n}`, blockName);
+    await this.instance.gather.runCollectBlock(item, n, token, wrapActivity);
+    this.refreshMaterials(allBlocks, true);
   }
 
   async previewMaterials(schematicId: string, versionHint?: string, transform?: BuildTransform) {
@@ -396,37 +455,46 @@ export class BuildService {
         parsed.blocks.filter((b) => !shouldSkipBlock(b.name, b.properties))
       );
       this.runtime.total = blocks.length;
-      this.runtime.materials = this.materialsFor(blocks);
-      this.emit();
+      this.refreshMaterials(blocks, true);
 
       // --- eksik malzeme toplama (sıralı, yakında yoksa çevre ara) ---
       if (opts.collectMissing) {
         this.setPhase("acquiring", "eksik malzemeler toplanıyor…");
+        this.setActivity("Yere düşen eşyalar toplanıyor…", null);
         try {
-          await this.instance.gather.runCollectDrops(undefined, 24, token, report);
+          await this.instance.gather.runCollectDrops(undefined, 24, token, (p) => {
+            report(p);
+            this.setActivity(p.label ?? "Yere düşenler…", null);
+            this.refreshMaterials(blocks, true);
+          });
         } catch {
           /* */
         }
-        let missingList = this.materialsFor(blocks).filter((m) => m.missing > 0);
+        this.refreshMaterials(blocks, true);
+        const missingList = this.materialsFor(blocks).filter((m) => m.missing > 0);
         let ai = 0;
         for (const m of missingList) {
           if (token.cancelled) throw new Error(token.reason ?? "iptal");
           ai++;
-          this.setPhase("acquiring", `topla ${m.name} ×${m.missing} (${ai}/${missingList.length})`);
+          this.setActivity(`Toplanıyor: ${m.name} ×${m.missing} (${ai}/${missingList.length})`, m.name);
           report({
             done: ai - 1,
             total: missingList.length,
             label: `topla ${m.name} ×${m.missing}`
           });
           try {
-            await this.acquireOneMaterial(m.name, m.missing, token, report);
+            await this.acquireOneMaterial(m.name, m.missing, token, report, blocks);
           } catch (e) {
             this.log().warn(`Toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
+            this.setActivity(
+              `Başarısız: ${m.name} — ${e instanceof Error ? e.message : String(e)}`,
+              m.name
+            );
           }
-          this.runtime.materials = this.materialsFor(blocks);
-          this.emit(true);
+          this.refreshMaterials(blocks, true);
         }
-        this.runtime.materials = this.materialsFor(blocks);
+        this.setActivity(null, null);
+        this.refreshMaterials(blocks, true);
       }
 
       const missing = this.runtime.materials.filter((m) => m.missing > 0);
@@ -446,6 +514,7 @@ export class BuildService {
         transform.rotateY || transform.mirrorX || transform.mirrorZ
           ? ` · R${transform.rotateY ?? 0}${transform.mirrorX ? " mX" : ""}${transform.mirrorZ ? " mZ" : ""}`
           : "";
+      this.setActivity(`İnşa ediliyor: ${parsed.meta.name}`, null);
       this.setPhase("building", `inşa: ${parsed.meta.name}${rotLabel}`);
       this.log().info(
         `İnşaat başladı: ${parsed.meta.name}`,
@@ -474,7 +543,7 @@ export class BuildService {
       let skipped = 0;
       let failed = 0;
       let consecutiveFail = 0;
-      this.runtime.materials = this.materialsFor(blocks);
+      this.refreshMaterials(blocks, true);
 
       const markDone = (job: Job, res: "placed" | "skipped" | "failed") => {
         if (job.done) return;
@@ -504,8 +573,18 @@ export class BuildService {
         this.runtime.failed = failed;
         this.runtime.scaffoldsPlaced = this.scaffolds.count;
         const doneN = placed + skipped + failed;
+        const act =
+          res === "placed"
+            ? `Kondu: ${job.name}`
+            : res === "skipped"
+              ? `Atlandı: ${job.name}`
+              : `Hata: ${job.name}`;
+        this.runtime.activity = `${act} · ${doneN}/${jobs.length}`;
+        this.runtime.activityMaterial = job.name;
         this.runtime.label = `${job.name} @${job.wx},${job.wy},${job.wz} · ${doneN}/${jobs.length} · +${placed}`;
-        this.emit();
+        // envanter değişti — malzeme sayılarını anlık güncelle
+        this.runtime.materials = this.materialsFor(blocks);
+        this.emit(true);
       };
 
       /** nearby-first: envanterde olan önce, sonra mesafe; layer-first: mesafe */
@@ -658,10 +737,8 @@ export class BuildService {
           consecutiveFail = 0;
         }
 
-        if (guard % 5 === 0) {
-          this.runtime.materials = this.materialsFor(
-            jobs.filter((j) => !j.done).map((j) => ({ dx: 0, dy: 0, dz: 0, name: j.name }))
-          );
+        if (guard % 3 === 0) {
+          this.refreshMaterials(blocks, true);
         }
       }
 
@@ -693,7 +770,8 @@ export class BuildService {
       }
 
       const label = `bitti: ${placed} kondu, ${skipped} atlandı, ${failed} başarısız, scaffold ${cleared}`;
-      this.runtime.materials = this.materialsFor([]);
+      this.refreshMaterials(blocks, true);
+      this.setActivity(null, null);
       // Tam başarıda done + dur; hata varsa failed (görev de fail)
       if (failed === 0) {
         this.setPhase("done", label);

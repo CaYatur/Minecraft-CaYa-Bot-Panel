@@ -43,7 +43,9 @@ const emptyBuild = (): BuildRuntime => ({
   recentBlocks: [],
   transform: { rotateY: 0, mirrorX: false, mirrorZ: false },
   placeOrder: "nearby-first",
-  collectMissing: false
+  collectMissing: false,
+  activity: null,
+  activityMaterial: null
 });
 
 /** Bot detay — Yapı sekmesi (şema + transform + animasyonlu ilerleme) */
@@ -347,52 +349,6 @@ export function BuildPanel({ botId }: { botId: string }) {
         </p>
       )}
 
-      <div>
-        <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-zinc-500 uppercase">
-          Malzemeler
-          {missingCount > 0 && (
-            <span className="rounded-full bg-red-950/50 px-2 py-0.5 text-[10px] font-normal normal-case text-red-300">
-              {missingCount} eksik
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => void loadPreview()}
-            className="ml-auto text-[10px] font-normal normal-case text-indigo-400 hover:underline"
-          >
-            Yenile
-          </button>
-        </div>
-        <div className="max-h-40 overflow-y-auto rounded-lg border border-zinc-800">
-          {materials.length === 0 ? (
-            <p className="p-2 text-[11px] text-zinc-600 italic">Önizleme için bot online + şema seçili olmalı.</p>
-          ) : (
-            <table className="w-full text-left text-[11px]">
-              <thead className="sticky top-0 bg-zinc-900 text-zinc-500">
-                <tr>
-                  <th className="px-2 py-1">Blok</th>
-                  <th className="px-2 py-1 text-right">Gerek</th>
-                  <th className="px-2 py-1 text-right">Var</th>
-                  <th className="px-2 py-1 text-right">Eksik</th>
-                </tr>
-              </thead>
-              <tbody>
-                {materials.map((m) => (
-                  <tr key={m.name} className={`border-t border-zinc-800/80 ${m.missing > 0 ? "bg-red-950/20" : ""}`}>
-                    <td className="mono px-2 py-0.5 text-zinc-300">{m.name}</td>
-                    <td className="mono px-2 py-0.5 text-right text-zinc-400">{m.need}</td>
-                    <td className="mono px-2 py-0.5 text-right text-zinc-400">{m.have}</td>
-                    <td className={`mono px-2 py-0.5 text-right ${m.missing > 0 ? "text-red-400" : "text-emerald-500"}`}>
-                      {m.missing}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -421,6 +377,92 @@ export function BuildPanel({ botId }: { botId: string }) {
         <span className="self-center text-[10px] text-zinc-600">
           Scaffold: {bot.config.movement.scaffoldBlocks.join(", ") || "—"}
         </span>
+      </div>
+
+      {/* Anlık iş + malzeme listesi — butonların altında, scroll ile taşmaz */}
+      {(busy || build.activity) && (
+        <div className="rounded-lg border border-amber-900/40 bg-amber-950/25 px-3 py-2">
+          <div className="text-[10px] font-semibold tracking-wide text-amber-500/90 uppercase">Şu an</div>
+          <p className="mt-0.5 break-words text-sm text-amber-100">
+            {build.activity || build.label || PHASE_TR[build.phase]}
+          </p>
+          {build.activityMaterial && (
+            <p className="mono mt-0.5 text-[10px] text-amber-600/90">malzeme: {build.activityMaterial}</p>
+          )}
+        </div>
+      )}
+
+      <div className="min-w-0 space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-zinc-500 uppercase">
+          Malzemeler
+          {missingCount > 0 && (
+            <span className="rounded-full bg-red-950/50 px-2 py-0.5 text-[10px] font-normal normal-case text-red-300">
+              {missingCount} eksik
+            </span>
+          )}
+          {(busy || Boolean(build.activity)) && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-normal normal-case text-emerald-500/90">
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+              canlı
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void loadPreview()}
+            className="ml-auto text-[10px] font-normal normal-case text-indigo-400 hover:underline"
+          >
+            Yenile
+          </button>
+        </div>
+        <div className="max-h-52 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg border border-zinc-800">
+          {materials.length === 0 ? (
+            <p className="p-2 text-[11px] text-zinc-600 italic">Önizleme için bot online + şema seçili olmalı.</p>
+          ) : (
+            <table className="w-full table-fixed text-left text-[11px]">
+              <thead className="sticky top-0 z-10 bg-zinc-900 text-zinc-500">
+                <tr>
+                  <th className="w-[46%] px-2 py-1">Blok</th>
+                  <th className="w-[18%] px-2 py-1 text-right">Gerek</th>
+                  <th className="w-[18%] px-2 py-1 text-right">Var</th>
+                  <th className="w-[18%] px-2 py-1 text-right">Eksik</th>
+                </tr>
+              </thead>
+              <tbody>
+                {materials.map((m) => {
+                  const active = build.activityMaterial === m.name;
+                  return (
+                    <tr
+                      key={m.name}
+                      className={`border-t border-zinc-800/80 ${
+                        active
+                          ? "bg-amber-950/40 ring-1 ring-inset ring-amber-700/50"
+                          : m.missing > 0
+                            ? "bg-red-950/20"
+                            : m.have >= m.need
+                              ? "bg-emerald-950/15"
+                              : ""
+                      }`}
+                    >
+                      <td className="mono truncate px-2 py-0.5 text-zinc-300" title={m.name}>
+                        {active ? "▸ " : ""}
+                        {m.name}
+                      </td>
+                      <td className="mono px-2 py-0.5 text-right text-zinc-400 tabular-nums">{m.need}</td>
+                      <td className="mono px-2 py-0.5 text-right text-zinc-200 tabular-nums">{m.have}</td>
+                      <td
+                        className={`mono px-2 py-0.5 text-right tabular-nums ${
+                          m.missing > 0 ? "text-red-400" : "text-emerald-500"
+                        }`}
+                      >
+                        {m.missing}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
     </div>
   );
