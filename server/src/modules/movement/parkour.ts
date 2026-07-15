@@ -375,8 +375,10 @@ async function climbViaPathfinder(
   timeoutMs: number
 ): Promise<boolean> {
   ensureParkourBot(instance);
-  const goal = new goals.GoalNear(top.x + 0.5, top.y, top.z + 0.5, 1);
+  // GoalNear floor eder — blok koordinatı ver
+  const goal = new goals.GoalNear(top.x, top.y, top.z, 1.5);
   return new Promise((resolve) => {
+    let settled = false;
     const stop = () => {
       try {
         bot.pathfinder.setGoal(null);
@@ -391,6 +393,8 @@ async function climbViaPathfinder(
       bot.removeListener("path_update", onPath);
     };
     const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       stop();
       clearControls(bot);
@@ -401,6 +405,7 @@ async function climbViaPathfinder(
       if (r.status === "noPath" || r.status === "timeout") done(false);
     };
     const watch = setInterval(() => {
+      if (settled) return;
       if (token.cancelled) {
         done(false);
         return;
@@ -409,15 +414,14 @@ async function climbViaPathfinder(
         done(false);
         return;
       }
-      // yeterince yükseğe çıktıysa OK
-      if (bot.entity.position.y >= top.y - 0.6) {
+      // yeterince yükseğe çıktıysa OK (goal_reached gecikebilir)
+      if (bot.entity.position.y >= top.y - 0.7) {
         done(true);
-        return;
       }
     }, 200);
     const deadline = setTimeout(() => {
       const y = bot.entity?.position.y ?? 0;
-      done(y >= top.y - 0.8);
+      done(y >= top.y - 0.85);
     }, timeoutMs);
     bot.on("goal_reached", onReached);
     bot.on("path_update", onPath);
@@ -504,10 +508,12 @@ async function climbManualHold(
     if (p.y > lastProgressY + 0.12) {
       lastProgressY = p.y;
       lastProgressAt = Date.now();
-    } else if (Date.now() - lastProgressAt > 2800) {
+    } else if (Date.now() - lastProgressAt > 2500) {
       // takıldı: kısa bırak-yeniden bas (merdivene yeniden yapış)
+      const stalledY = p.y;
       clearControls(bot);
-      await sleep(150);
+      await sleep(120);
+      if (!bot.entity) return "stuck";
       if (!stillOnLadder(bot) && bot.entity.onGround) {
         bot.setControlState("forward", true);
         await sleep(200);
@@ -520,13 +526,10 @@ async function climbManualHold(
       bot.setControlState("forward", true);
       bot.setControlState("jump", true);
       lastProgressAt = Date.now();
-      // 2. stuck turu hâlâ yerindeyse vazgeç
-      if (Math.abs(bot.entity.position.y - lastProgressY) < 0.1 && Date.now() - t0 > 6000) {
-        // bir kez daha dene, sonra stuck
-        if (Date.now() - t0 > 12_000) {
-          clearControls(bot);
-          return "stuck";
-        }
+      // 2.5s daha ilerleme yoksa stuck
+      if (Math.abs(bot.entity.position.y - stalledY) < 0.1 && Date.now() - t0 > 8_000) {
+        clearControls(bot);
+        return "stuck";
       }
     }
 

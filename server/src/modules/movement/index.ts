@@ -4,7 +4,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
 import { safeMaxDropForPath } from "./edgeSafety";
-import { easeLookAt, entityLookPoint, stepLookAlongMotion, stepLookAtEntity } from "./look";
+import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
 
 const GOTO_TIMEOUT_MS = 180_000;
 
@@ -87,21 +87,25 @@ export function ensureMovement(
   return bot;
 }
 
-/** Pathfinder aktifken bakışa karışma — zıplama/geri çekme bozulmasın */
+/**
+ * Pathfinder aktifken bakışa karışma.
+ * isMoving false olsa bile goal set ise (yeniden path hesap) bakış bozar.
+ */
 function isPathfinderBusy(bot: Bot): boolean {
   try {
     const pf = bot.pathfinder as {
       isMoving?: () => boolean;
       isMining?: () => boolean;
       isBuilding?: () => boolean;
+      goal?: unknown;
     };
+    if (pf.goal != null) return true;
     if (pf.isMoving?.()) return true;
     if (pf.isMining?.()) return true;
     if (pf.isBuilding?.()) return true;
   } catch {
     /* */
   }
-  // zıplama / havada — bakış pathfinder'ın
   try {
     if (bot.entity && !bot.entity.onGround) return true;
     if ((bot.entity?.velocity?.y ?? 0) > 0.05) return true;
@@ -180,20 +184,9 @@ function pathfinderGoal(
         reject(new Error("Bağlantı koptu — hareket görevi sonlandı."));
         return;
       }
-      // Pathfinder her tick bot.look(hedef-yaw) yapar.
-      // Üzerine lookAt basmak 1-up zıplamada "ileri→geri→tekrar zıpla" yapar — KARŞMA.
-      // Bakış sadece path sakin / yerdeyken ve humanize açıksa.
-      if (moveCfg(instance).humanize === false) return;
-      if (isPathfinderBusy(bot)) return;
-      void (async () => {
-        try {
-          const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
-          if (lt) await stepLookAlongMotion(bot, lt, Math.min(10, turnSpeed(instance)));
-        } catch {
-          /* look fail ignore */
-        }
-      })();
-    }, 250);
+      // Path sırasında bakış yok — pathfinder her tick look(yaw) yapar.
+      // lookTarget varış sonrası easeLookAt ile (runGoto / runGotoPlayer).
+    }, 200);
 
     const deadline = setTimeout(() => {
       cleanup();
