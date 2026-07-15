@@ -849,3 +849,14 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 **MLG:** Resistance efekti; hay/slime/su landingMul; ölümcülde totem offhand; hız bazlı erken MLG tetik.
 **Yapı:** facing/axis/hinge transform; kapı üstü/portal skip; place retry×2; scaffold protectStructure; sunucu versionHint; path noPath.
 **Test:** fallDamageHp + stairs north→90° east; typecheck temiz.
+
+### 2026-07-15 — Grok 4.5 — Takip bakış + anti-cheat hareket
+
+**İstek:** Takipte hedefe bakılsın; movement AC flag’leri azaltılsın.
+
+**Yapılanlar:**
+1. `movement/look.ts` — yumuşak stepLook (force=false, sınırlı °/tick).
+2. `runFollow` her ~100ms hedef entity göz hizasına bakıyor; sprint yalnız uzakken.
+3. goto/goto-player hareket yönü + hedef bakış; reaksiyon gecikmesi; maxDrop/kule kısıtı.
+4. `movement.humanize` varsayılan true; stopMovement control state temizler.
+5. Combat yaklaşma da hedefe bakıyor.

@@ -973,10 +973,16 @@ export class CombatService {
       ensureMovement(this.instance);
       bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
       const t0 = Date.now();
+      const { stepLookAtEntity } = await import("../movement/look");
       while (!token.cancelled && Date.now() - t0 < 15_000) {
         if (inMeleeRange(bot, entity, this.cfg().reach) && distanceEyeToEntity(bot, entity) <= range + 0.5) break;
         if (!entity.isValid) break;
-        await sleep(200);
+        try {
+          await stepLookAtEntity(bot, entity, this.cfg().turnSpeedDegPerTick ?? 24);
+        } catch {
+          /* */
+        }
+        await sleep(120);
       }
       try {
         bot.pathfinder.setGoal(null);

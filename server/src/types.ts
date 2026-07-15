@@ -82,6 +82,17 @@ export interface MovementConfig {
   allowParkour: boolean;
   /** sacrificial blocks the bot may place to cross obstacles */
   scaffoldBlocks: string[];
+  /**
+   * Anti-cheat dostu hareket (varsayılan true):
+   * yumuşak bakış, sınırlı drop, kule spam kapalı, sprint sadece uzakta, reaksiyon gecikmesi.
+   */
+  humanize?: boolean;
+  /** bakış dönüş hızı °/tick (takip/goto) — düşük = daha insanî, varsayılan 16 */
+  lookTurnDegPerTick?: number;
+  /** max düşme yüksekliği pathfinder (humanize açıkken) */
+  maxDrop?: number;
+  /** 1x1 kule (scaffold) — AC riski, varsayılan humanize ile kapalı */
+  allowTower?: boolean;
 }
 
 export interface BotConfig {
@@ -304,7 +315,11 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       canDig: true,
       allowSprint: true,
       allowParkour: true,
-      scaffoldBlocks: ["dirt", "cobblestone", "netherrack"]
+      scaffoldBlocks: ["dirt", "cobblestone", "netherrack"],
+      humanize: true,
+      lookTurnDegPerTick: 16,
+      maxDrop: 3,
+      allowTower: false
     }
   };
 }

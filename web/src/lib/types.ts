@@ -42,7 +42,16 @@ export interface BotConfig {
     };
   };
   chat: { minMessageIntervalMs: number };
-  movement: { canDig: boolean; allowSprint: boolean; allowParkour: boolean; scaffoldBlocks: string[] };
+  movement: {
+    canDig: boolean;
+    allowSprint: boolean;
+    allowParkour: boolean;
+    scaffoldBlocks: string[];
+    humanize?: boolean;
+    lookTurnDegPerTick?: number;
+    maxDrop?: number;
+    allowTower?: boolean;
+  };
 }
 
 export interface DeathRecord {
