@@ -24,10 +24,9 @@ function turnSpeed(instance: BotInstance): number {
 }
 
 /**
- * pathfinder Movements — anti-cheat dostu ayarlar:
- * - sürekli sprint yok (uzakta açılır)
- * - parkour/dig kontrollü
- * - maxDrop sınırlı (şüpheli uçurum atlama)
+ * pathfinder Movements:
+ * - sprint: config.allowSprint (varsayılan açık, takipte de sürekli koşar)
+ * - humanize: bakış + maxDrop/kule; sprint’i kısıtlamaz
  */
 export function ensureMovement(instance: BotInstance, opts?: { allowSprintNow?: boolean }): Bot {
   const bot = requireBot(instance);
@@ -39,7 +38,8 @@ export function ensureMovement(instance: BotInstance, opts?: { allowSprintNow?: 
   const movements = new Movements(bot);
 
   movements.canDig = Boolean(cfg.canDig);
-  const sprintAllowed = opts?.allowSprintNow ?? cfg.allowSprint;
+  // allowSprintNow belirtilmezse config; takip/goto her zaman koşabilsin
+  const sprintAllowed = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
   // parkour açık kalabilir ama kule + yüksek drop kapatılır (AC)
   movements.allowParkour = Boolean(cfg.allowParkour);
@@ -159,8 +159,7 @@ export async function runGoto(
   const bot = requireBot(instance);
   const dist = Math.round(bot.entity.position.distanceTo({ x, y, z } as never));
   report({ done: 0, total: dist, label: `hedefe gidiliyor (${dist} blok)` });
-  // uzaktaysa sprint, yakınsa yürü
-  ensureMovement(instance, { allowSprintNow: moveCfg(instance).allowSprint && dist > 8 });
+  ensureMovement(instance, { allowSprintNow: moveCfg(instance).allowSprint !== false });
   await pathfinderGoal(
     instance,
     new goals.GoalNear(x, y, z, Math.max(1, range)),
@@ -196,8 +195,7 @@ export async function runGotoPlayer(
   }
   report({ done: 0, total: 1, label: `${playerName} oyuncusuna gidiliyor` });
   const p = entity.position;
-  const dist = bot.entity.position.distanceTo(p);
-  ensureMovement(instance, { allowSprintNow: moveCfg(instance).allowSprint && dist > 6 });
+  ensureMovement(instance, { allowSprintNow: moveCfg(instance).allowSprint !== false });
 
   // giderken periyodik bakış entity’ye
   await pathfinderGoal(
@@ -223,7 +221,7 @@ export async function runGotoPlayer(
 
 /**
  * Sürekli takip: pathfinder GoalFollow + her tick hedefe yumuşak bakış.
- * Sprint yalnızca uzakken; bakış force=false (AC).
+ * Sprint config.allowSprint ile sürekli açık (yetişmek için).
  */
 export async function runFollow(
   instance: BotInstance,
@@ -235,23 +233,15 @@ export async function runFollow(
   const holdDist = Math.max(1, Math.min(16, distance));
   // hafif jitter — robotik sabit mesafe flag’i azaltır
   const distJitter = () => holdDist + (Math.random() * 0.35 - 0.1);
+  const canSprint = () => moveCfg(instance).allowSprint !== false;
 
   while (!token.cancelled) {
     const bot = requireBot(instance);
     const entity = bot.players[playerName]?.entity;
     if (entity) {
-      report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış açık` });
+      report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış · sprint` });
 
-      let lastSprintState: boolean | null = null;
-      const applyMoveForDist = (d: number) => {
-        const wantSprint = Boolean(moveCfg(instance).allowSprint) && d > holdDist + 3.5;
-        if (lastSprintState !== wantSprint) {
-          ensureMovement(instance, { allowSprintNow: wantSprint });
-          lastSprintState = wantSprint;
-        }
-      };
-
-      applyMoveForDist(bot.entity.position.distanceTo(entity.position));
+      ensureMovement(instance, { allowSprintNow: canSprint() });
       const followBot = bot;
       try {
         followBot.pathfinder.setGoal(new goals.GoalFollow(entity, distJitter()), true);
@@ -265,7 +255,11 @@ export async function runFollow(
         if (!ent) break;
 
         const d = bot.entity.position.distanceTo(ent.position);
-        applyMoveForDist(d);
+
+        // sprint açık kalsın (pathfinder movements ara sıra yenile)
+        if (Math.random() < 0.05) {
+          ensureMovement(instance, { allowSprintNow: canSprint() });
+        }
 
         // GoalFollow entity referansı — ara sıra yenile (jitter mesafe)
         if (Math.random() < 0.08) {
@@ -286,7 +280,7 @@ export async function runFollow(
         report({
           done: 0,
           total: 0,
-          label: `takip ${playerName} · ${d.toFixed(1)}m${lastSprintState ? " · sprint" : ""}`
+          label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}`
         });
 
         // 90–140ms — 50ms altı paket spam / AC
