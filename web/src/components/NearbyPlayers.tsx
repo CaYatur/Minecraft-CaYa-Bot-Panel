@@ -20,7 +20,13 @@ const defaultCompanion = (): CompanionState => ({
   attackPlayer: null,
   protectPlayers: [],
   protectPlayer: null,
-  protectSettings: { range: 10, retaliateMobs: true, retaliatePlayers: true, whitelist: [] }
+  protectSettings: {
+    range: 10,
+    protectAggro: "threats",
+    retaliateMobs: true,
+    retaliatePlayers: true,
+    whitelist: []
+  }
 });
 
 const btnBase = "rounded-lg px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-40";
@@ -46,6 +52,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
   const [protectRange, setProtectRange] = useState(10);
   const [retaliateMobs, setRetaliateMobs] = useState(true);
   const [retaliatePlayers, setRetaliatePlayers] = useState(true);
+  const [protectAggro, setProtectAggro] = useState<"threats" | "non_whitelist">("threats");
   const [whitelistText, setWhitelistText] = useState("");
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
 
@@ -57,12 +64,14 @@ export function NearbyPlayers({ botId }: { botId: string }) {
     setProtectRange(companion.protectSettings?.range ?? 10);
     setRetaliateMobs(companion.protectSettings?.retaliateMobs ?? true);
     setRetaliatePlayers(companion.protectSettings?.retaliatePlayers ?? true);
+    setProtectAggro(companion.protectSettings?.protectAggro === "non_whitelist" ? "non_whitelist" : "threats");
     setWhitelistText((companion.protectSettings?.whitelist ?? []).join(", "));
   }, [
     companion.followDistance,
     companion.protectSettings?.range,
     companion.protectSettings?.retaliateMobs,
     companion.protectSettings?.retaliatePlayers,
+    companion.protectSettings?.protectAggro,
     wards.join(","),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     (companion.protectSettings?.whitelist ?? []).join(",")
@@ -146,6 +155,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
         enabled: on,
         followDistance: followDist,
         range: protectRange,
+        protectAggro,
         retaliateMobs,
         retaliatePlayers,
         whitelist: wl,
@@ -153,7 +163,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       },
       on
         ? setAsMain
-          ? `Koruma + ana takip: ${name}`
+          ? `Koruma + ana takip: ${name} (${protectAggro === "non_whitelist" ? "beyaz liste dışı" : "tehdit"})`
           : `Koruma listesine eklendi: ${name} (takip: ${companion.followPlayer ?? name})`
         : `Koruma listesinden çıktı: ${name}`
     );
@@ -182,11 +192,12 @@ export function NearbyPlayers({ botId }: { botId: string }) {
           enabled: true,
           followDistance: followDist,
           range: protectRange,
+          protectAggro,
           retaliateMobs,
           retaliatePlayers,
           whitelist: wl
         },
-        `Koruma ayarları güncellendi (${wards.join(", ") || target})`
+        `Koruma ayarları güncellendi · ${protectAggro === "non_whitelist" ? "beyaz liste dışı" : "sadece tehdit"}`
       );
       if (isFollow(name)) {
         void act({ type: "social-follow", player: name, enabled: true, distance: followDist });
@@ -260,10 +271,17 @@ export function NearbyPlayers({ botId }: { botId: string }) {
           {companion.followPlayer ? (
             <>
               {" "}
-              · ana takip: <span className="text-emerald-300">{companion.followPlayer}</span>
+              · ana: <span className="text-emerald-300">{companion.followPlayer}</span>
             </>
           ) : null}
-          . Listedekilerden herhangi birine tehdit gelirse müdahale edilir; bot ana kişiyi takip eder.
+          {" · "}
+          mod:{" "}
+          <span className="text-amber-300">
+            {(companion.protectSettings?.protectAggro ?? protectAggro) === "non_whitelist"
+              ? "beyaz liste dışı herkese saldır"
+              : "sadece tehdit/saldırgan"}
+          </span>
+          . Bot ana kişiyi takip eder.
         </p>
       )}
 
@@ -336,6 +354,44 @@ export function NearbyPlayers({ botId }: { botId: string }) {
 
               {openSettings && (
                 <div className="mt-2 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs">
+                  <div className="space-y-1.5 rounded-lg border border-indigo-900/40 bg-indigo-950/20 p-2">
+                    <div className="text-[10px] font-semibold tracking-wide text-indigo-300/90 uppercase">
+                      Koruma saldırı modu
+                    </div>
+                    <label className="flex cursor-pointer items-start gap-2 text-zinc-300">
+                      <input
+                        type="radio"
+                        name={`protect-aggro-${p.username}`}
+                        checked={protectAggro === "threats"}
+                        onChange={() => setProtectAggro("threats")}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <b className="text-zinc-100">1 · Sadece tehdit / saldırgan</b>
+                        <span className="mt-0.5 block text-[10px] text-zinc-500">
+                          Korunanın yanındaki düşman yaratıklar ve (aşağıda açıksa) saldırgan oyuncular.
+                          Beyaz listedekilere asla dokunulmaz.
+                        </span>
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 text-zinc-300">
+                      <input
+                        type="radio"
+                        name={`protect-aggro-${p.username}`}
+                        checked={protectAggro === "non_whitelist"}
+                        onChange={() => setProtectAggro("non_whitelist")}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <b className="text-zinc-100">2 · Beyaz liste dışı herkese saldır</b>
+                        <span className="mt-0.5 block text-[10px] text-zinc-500">
+                          Koruma menzilindeki tüm oyuncular (insanlar) — beyaz liste + korunanlar hariç.
+                          Yaratıklar ayrı kutu ile.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
                   <div className="flex flex-wrap items-center gap-3">
                     <label className="flex items-center gap-1 text-zinc-400">
                       Takip mesafe
@@ -363,13 +419,23 @@ export function NearbyPlayers({ botId }: { botId: string }) {
                       <input type="checkbox" checked={retaliateMobs} onChange={(e) => setRetaliateMobs(e.target.checked)} />
                       Yaratıklara saldır
                     </label>
-                    <label className="flex items-center gap-1.5 text-zinc-300">
-                      <input type="checkbox" checked={retaliatePlayers} onChange={(e) => setRetaliatePlayers(e.target.checked)} />
-                      Oyunculara saldır
-                    </label>
+                    {protectAggro === "threats" ? (
+                      <label className="flex items-center gap-1.5 text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={retaliatePlayers}
+                          onChange={(e) => setRetaliatePlayers(e.target.checked)}
+                        />
+                        Tehdit oyuncularına saldır (insan)
+                      </label>
+                    ) : (
+                      <span className="text-[10px] text-amber-400/90">
+                        Mod 2: menzildeki tüm oyunculara saldırılır (WL hariç)
+                      </span>
+                    )}
                   </div>
                   <label className="flex flex-col gap-0.5 text-zinc-400">
-                    Beyaz liste (virgülle — bunlara saldırılmaz; korunanlar zaten korunur)
+                    Beyaz liste (virgülle — asla saldırılmaz; korunanlar otomatik eklenir)
                     <input
                       value={whitelistText}
                       onChange={(e) => setWhitelistText(e.target.value)}

@@ -51,7 +51,13 @@ export function CombatPanel({ botId }: { botId: string }) {
       attackPlayer: null,
       protectPlayers: [],
       protectPlayer: null,
-      protectSettings: { range: 10, retaliateMobs: true, retaliatePlayers: true, whitelist: [] }
+      protectSettings: {
+        range: 10,
+        protectAggro: "threats",
+        retaliateMobs: true,
+        retaliatePlayers: true,
+        whitelist: []
+      }
     }
   };
   const cfg = bot.config.combat;

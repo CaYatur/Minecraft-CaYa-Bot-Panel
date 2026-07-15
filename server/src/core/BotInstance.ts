@@ -297,9 +297,15 @@ export class BotInstance extends EventEmitter {
                 .split(/[,;\s]+/)
                 .filter(Boolean)
             : undefined;
+        const aggroRaw = action.protectAggro != null ? String(action.protectAggro) : "";
+        const protectAggro =
+          aggroRaw === "non_whitelist" || aggroRaw === "threats"
+            ? (aggroRaw as "threats" | "non_whitelist")
+            : undefined;
         this.combat.setProtect(str(action.player, "player"), enabled, {
           followDistance: action.followDistance != null ? Number(action.followDistance) : undefined,
           range: action.range != null ? Number(action.range) : undefined,
+          protectAggro,
           retaliateMobs: action.retaliateMobs != null ? Boolean(action.retaliateMobs) : undefined,
           retaliatePlayers: action.retaliatePlayers != null ? Boolean(action.retaliatePlayers) : undefined,
           whitelist: wl,

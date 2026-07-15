@@ -27,6 +27,7 @@ const defaultCompanion = (): CompanionState => ({
   protectPlayer: null,
   protectSettings: {
     range: 10,
+    protectAggro: "threats",
     retaliateMobs: true,
     retaliatePlayers: true,
     whitelist: []
@@ -293,6 +294,9 @@ export class CombatService {
     }
     if (opts) {
       if (opts.range != null) this.companion.protectSettings.range = Math.max(4, Math.min(32, Math.floor(opts.range)));
+      if (opts.protectAggro === "threats" || opts.protectAggro === "non_whitelist") {
+        this.companion.protectSettings.protectAggro = opts.protectAggro;
+      }
       if (opts.retaliateMobs != null) this.companion.protectSettings.retaliateMobs = Boolean(opts.retaliateMobs);
       if (opts.retaliatePlayers != null) this.companion.protectSettings.retaliatePlayers = Boolean(opts.retaliatePlayers);
       if (opts.whitelist) {
@@ -354,7 +358,7 @@ export class CombatService {
     this.setMode("protecting", this.primaryProtectLabel());
     this.log().info(
       `Koruma: ${this.companion.protectPlayers.join(", ")}`,
-      `ana takip=${this.companion.followPlayer ?? "—"} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
+      `mod=${this.companion.protectSettings.protectAggro} ana=${this.companion.followPlayer ?? "—"} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
     );
     this.emitCombat();
     return this.getRuntime();
@@ -442,8 +446,10 @@ export class CombatService {
   }
 
   /**
-   * Tüm korunanların yanındaki tehditleri tara → DEFENSE.
-   * Ana kişi (followPlayer) takipte kalır; ek korunanlar menzildeyse onlara da müdahale.
+   * Tüm korunanların yanındaki hedefleri tara → DEFENSE.
+   * protectAggro:
+   *  - threats: saldırgan tehdit (hostile mob + yakın düşman oyuncu)
+   *  - non_whitelist: beyaz listede olmayan her oyuncu (+ mob opsiyonel)
    */
   private protectTick() {
     if (!this.hasProtect() || this.instance.status !== "online") return;
@@ -456,6 +462,7 @@ export class CombatService {
     this.ensureFollowTask(main, this.companion.followDistance);
 
     const settings = this.companion.protectSettings;
+    const aggro = settings.protectAggro === "non_whitelist" ? "non_whitelist" : "threats";
     const wl = new Set(settings.whitelist.map((w) => w.toLowerCase()));
     for (const p of this.companion.protectPlayers) wl.add(p.toLowerCase());
     wl.add(bot.username.toLowerCase());
@@ -476,17 +483,23 @@ export class CombatService {
       for (const id in bot.entities) {
         const e = bot.entities[id];
         if (!e || e === bot.entity) continue;
-        // korunanların kendisine saldırma
         if (wardEntities.some((w) => w.ent === e)) continue;
         const d = wardEnt.position.distanceTo(e.position);
         if (d > settings.range) continue;
 
         const player = isPlayerEntity(e);
         const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
+        const uname = (e.username ?? "").toLowerCase();
+
         if (player) {
-          if (!settings.retaliatePlayers) continue;
-          const uname = e.username ?? "";
-          if (uname && wl.has(uname.toLowerCase())) continue;
+          if (uname && wl.has(uname)) continue;
+          if (aggro === "non_whitelist") {
+            // beyaz liste dışı her oyuncu (insan) hedef
+            // retaliatePlayers false olsa bile bu modda oyunculara saldır
+          } else {
+            // threats: sadece oyuncu misillemesi açıksa ve "yakın tehdit" (menzil içi)
+            if (!settings.retaliatePlayers) continue;
+          }
         } else if (hostile) {
           if (!settings.retaliateMobs) continue;
         } else continue;
@@ -507,9 +520,9 @@ export class CombatService {
     this.instance.tasks.enqueue(
       {
         type: "defend",
-        label: `koru(${bestWard})→${label}`,
+        label: `koru(${bestWard}/${aggro})→${label}`,
         priority: PRIORITY.DEFENSE,
-        params: { target: label, ward: bestWard },
+        params: { target: label, ward: bestWard, aggro },
         requeueOnPreempt: false
       },
       () => (token, report) => this.runDefend(best!, label, token, report)

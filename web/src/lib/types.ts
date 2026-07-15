@@ -85,6 +85,8 @@ export interface CompanionState {
   protectPlayer: string | null;
   protectSettings: {
     range: number;
+    /** threats = saldırgan/tehdit · non_whitelist = beyaz liste dışı herkese */
+    protectAggro?: "threats" | "non_whitelist";
     retaliateMobs: boolean;
     retaliatePlayers: boolean;
     whitelist: string[];

@@ -60,9 +60,15 @@ export interface CompanionState {
   protectSettings: {
     /** her korunanın etrafında tehdit tarama yarıçapı */
     range: number;
+    /**
+     * Koruma saldırı politikası:
+     * - threats: korunanın yanındaki saldırgan tehditler (mob + yakın düşman oyuncu)
+     * - non_whitelist: menzilde beyaz listede olmayan tüm oyunculara saldır (+ mob opsiyonel)
+     */
+    protectAggro: "threats" | "non_whitelist";
     retaliateMobs: boolean;
     retaliatePlayers: boolean;
-    /** bu isimler korunan'a vursa bile bot saldırmasın */
+    /** bu isimlere asla saldırmasın (korunanlar zaten eklenir) */
     whitelist: string[];
   };
 }
