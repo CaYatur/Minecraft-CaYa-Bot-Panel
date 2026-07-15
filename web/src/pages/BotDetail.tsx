@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
 import { LogPanel } from "../components/LogPanel";
+import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { TasksPanel } from "../components/TasksPanel";
 import { api } from "../lib/api";
@@ -141,11 +142,7 @@ export function BotDetail() {
       <div className="min-h-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
         {tab === "chat" && <ChatPanel botId={id} />}
         {tab === "logs" && <LogPanel botId={id} />}
-        {tab === "inventory" && (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-            🎒 Envanter arayüzü Faz 5'te geliyor (TODO.md)
-          </div>
-        )}
+        {tab === "inventory" && <InventoryPanel botId={id} />}
         {tab === "tasks" && <TasksPanel botId={id} />}
       </div>
     </div>

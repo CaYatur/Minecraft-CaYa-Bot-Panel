@@ -4,8 +4,18 @@ import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import { parseChatMessage } from "../modules/chat/parse";
+import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { runFollow, runGoto, runGotoPlayer, stopMovement } from "../modules/movement";
-import type { BotConfig, BotRuntimeState, BotSnapshot, BotStatus, ChatEntry, ServerProfile, TaskSummary } from "../types";
+import type {
+  BotConfig,
+  BotRuntimeState,
+  BotSnapshot,
+  BotStatus,
+  ChatEntry,
+  InventorySnapshot,
+  ServerProfile,
+  TaskSummary
+} from "../types";
 import { defaultRuntime } from "../types";
 import { chatComponentToText, friendlyError } from "../utils/chatText";
 import { createLogger, type BotLogger } from "../utils/logger";
@@ -34,6 +44,9 @@ export class BotInstance extends EventEmitter {
   private posTimer: NodeJS.Timeout | null = null;
   private lastPosKey = "";
   private pingCounter = 0;
+  private lastInventory: InventorySnapshot | null = null;
+  private invTimer: NodeJS.Timeout | null = null;
+  private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
   private readonly log: BotLogger;
 
@@ -119,7 +132,8 @@ export class BotInstance extends EventEmitter {
       status: this.status,
       runtime: this.runtime,
       chatQueueLength: this.limiter.length,
-      tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries }
+      tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries },
+      inventory: this.lastInventory
     };
   }
 
@@ -220,6 +234,7 @@ export class BotInstance extends EventEmitter {
       this.log.info("Sunucuya giriş yapıldı, spawn bekleniyor…");
     });
 
+    let invHooked = false; // spawn her respawn'da tetiklenir — kancalar bot başına BİR kez
     bot.on("spawn", () => {
       this.reconnectAttempt = 0;
       this.runtime.kickReason = undefined;
@@ -229,6 +244,12 @@ export class BotInstance extends EventEmitter {
       this.log.success("Bot dünyaya girdi (spawn)");
       this.emitVitals();
       this.startPositionLoop();
+      if (!invHooked) {
+        invHooked = true;
+        this.hookInventory(bot);
+        if (this.config.inventory.autoBestGear) this.loadArmorManager(bot);
+      }
+      this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
     });
 
     bot.on("respawn", () => {
@@ -320,6 +341,10 @@ export class BotInstance extends EventEmitter {
       clearInterval(this.posTimer);
       this.posTimer = null;
     }
+    if (this.invTimer) {
+      clearTimeout(this.invTimer);
+      this.invTimer = null;
+    }
     const bot = this.bot;
     this.bot = null;
     if (bot) {
@@ -408,6 +433,57 @@ export class BotInstance extends EventEmitter {
         });
       }
     }, POSITION_EMIT_MS);
+  }
+
+  // ---- envanter (Faz 5) ---------------------------------------------------------
+
+  private hookInventory(bot: Bot) {
+    const push = () => this.scheduleInventorySync();
+    bot.inventory.on("updateSlot", push);
+    (bot as unknown as NodeJS.EventEmitter).on("heldItemChanged", push);
+  }
+
+  /** 150ms debounce: slot güncellemesi patlamalarını tek yayına toplar */
+  private scheduleInventorySync() {
+    if (this.invTimer) return;
+    this.invTimer = setTimeout(() => {
+      this.invTimer = null;
+      const bot = this.bot;
+      if (!bot || this.status !== "online") return;
+      try {
+        this.lastInventory = snapshotInventory(bot);
+      } catch (err) {
+        this.log.debug("Envanter okunamadı", String(err));
+        return;
+      }
+      this.emit("inventory", { botId: this.config.id, inventory: this.lastInventory });
+
+      const used = usedMainSlots(this.lastInventory);
+      if (used >= 36 && !this.invWasFull) {
+        this.invWasFull = true;
+        this.log.warn("Envanter tamamen doldu (36/36) — toplama görevleri duraklayabilir");
+      } else if (used < 36 && this.invWasFull) {
+        this.invWasFull = false;
+      }
+    }, 150);
+  }
+
+  private loadArmorManager(bot: Bot) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const armorManager = require("mineflayer-armor-manager");
+      bot.loadPlugin(armorManager);
+      setTimeout(() => {
+        try {
+          (bot as unknown as { armorManager?: { equipAll(): void } }).armorManager?.equipAll();
+        } catch {
+          /* zırh yoksa sorun değil */
+        }
+      }, 2000);
+      this.log.debug("armor-manager yüklendi (en iyi zırhı otomatik giyer)");
+    } catch (err) {
+      this.log.warn("armor-manager yüklenemedi — otomatik zırh devre dışı", String(err));
+    }
   }
 
   private pushChat(entry: ChatEntry) {

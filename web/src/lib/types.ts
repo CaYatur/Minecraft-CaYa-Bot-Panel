@@ -89,12 +89,28 @@ export interface Waypoint {
   note?: string;
 }
 
+export interface InventoryItem {
+  slot: number;
+  name: string;
+  displayName: string;
+  count: number;
+  durability?: { left: number; max: number };
+  enchants: string[];
+}
+
+export interface InventorySnapshot {
+  slots: (InventoryItem | null)[];
+  heldQuickBar: number;
+  ts: number;
+}
+
 export interface BotSnapshot {
   config: BotConfig;
   status: BotStatus;
   runtime: BotRuntimeState;
   chatQueueLength: number;
   tasks: { current: TaskSummary | null; queue: TaskSummary[] };
+  inventory: InventorySnapshot | null;
 }
 
 export interface StateSnapshot {

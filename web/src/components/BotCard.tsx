@@ -10,6 +10,12 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
   const toast = useAppStore((s) => s.toast);
   const running = bot.status !== "stopped";
   const problem = bot.runtime.kickReason || bot.runtime.lastError;
+  // ana envanter + hotbar doluluk (36 slot) — 30+ olunca kartta uyarı rozeti
+  let invUsed: number | null = null;
+  if (bot.inventory) {
+    invUsed = 0;
+    for (let s = 9; s <= 44; s++) if (bot.inventory.slots[s]) invUsed++;
+  }
 
   const toggle = async () => {
     try {
@@ -39,7 +45,14 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
             <span>
               📍 {fmtPos(bot.runtime.position)} · {dimensionLabel(bot.runtime.dimension)}
             </span>
-            <span>{bot.runtime.ping} ms</span>
+            <span className="flex items-center gap-2">
+              {invUsed !== null && invUsed >= 30 && (
+                <span className={invUsed >= 36 ? "text-red-400" : "text-amber-400"} title="Envanter doluluk">
+                  🎒 {invUsed}/36
+                </span>
+              )}
+              {bot.runtime.ping} ms
+            </span>
           </div>
         </div>
       ) : problem ? (

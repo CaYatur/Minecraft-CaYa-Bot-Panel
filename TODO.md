@@ -251,7 +251,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 2 | Çoklu bot + sunucu profilleri | ✅ Bitti |
 | 3 | Sohbet sistemi (izle + yaz) ve log paneli | ✅ Bitti |
 | 4 | Hareket: pathfinder, waypoint, engel aşma | ✅ Bitti* (engel/takip fiziği Paper'da doğrulanacak) |
-| 5 | Envanter arayüzü ve kısıtlar | ☐ Bekliyor |
+| 5 | Envanter arayüzü ve kısıtlar | ✅ Bitti* (kuşan/at fiziği Paper'da doğrulanacak) |
 | 6 | Gerçekçi dövüş sistemi | ☐ Bekliyor |
 | 7 | Hayatta kalma: yeme, avlanma, pişirme | ☐ Bekliyor |
 | 8 | Kaynak toplama + halka arama | ☐ Bekliyor |
@@ -325,16 +325,21 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] **Görev kuyruğu çekirdeği erkenden alındı** (`core/TaskQueue.ts`, İ6 öncelikleri + kesmede yeniden kuyruklama v1; bağlam koruyan pause Faz 10'da). Panel: aktif görev + ilerleme çubuğu + kuyruk + iptal düğmeleri.
 - [~] **Kabul:** Bot verilen koordinata gider ✓ (12+12 blok, ±3.5); waypoint döngüsü ✓; durdur ✓; ulaşamazsa sebep Log'da ✓ (noPath/timeout mesajları). Duvar/çukur aşma → Paper doğrulaması bekliyor (yukarıdaki saha notu).
 
-### Faz 5 — Envanter Arayüzü ve Kısıtlar
+### Faz 5 — Envanter Arayüzü ve Kısıtlar ✅*
 
-- [ ] Envanter senkronu: 36 slot + zırh 4 + offhand + eldeki slot; her değişimde `bot:inventory` (değişen slotlar, tam durum değil).
-- [ ] Eşya görselleri: `minecraft-assets`/prismarine ikonları; bulunamayan eşyada isim + adet rozetli kutu.
-- [ ] Panel **InventoryGrid**: gerçek MC düzeni (zırh · ana envanter · hotbar · offhand); üzerine gelince tooltip (isim, adet, dayanıklılık barı, büyüler).
-- [ ] Aksiyonlar (sağ tık menüsü / sürükle): giydir (zırh/offhand) · eldeki slot yap · 1 adet at · tümünü at · hotbar slotuna taşı.
-- [ ] "En iyisini kullan" otomatiği: armor-manager (zırh) + tool (kazma aleti) + dövüşte en yüksek hasarlı silah; bot başına aç/kapa.
-- [ ] **Kısıtlar:** `bannedItems` (bot bu eşyaları hiçbir otomasyonda kullanamaz/giymez — panelde eşyaya "yasakla" işareti), `keepItems` (asla atılmaz/depoya gitmez). Tüm modüller (dövüş, toplama, yeme) bu listelere uymak zorundadır.
-- [ ] Envanter dolu uyarısı: Log'a WARN + kartta rozet.
-- [ ] **Kabul:** Panelden zırh giydirilir, eşya atılır; "demir kılıcı yasakla" denince bot dövüşte taş kılıca geçer.
+> *Saha notu: flying-squid pencere tıklamalarına YANIT VERMİYOR — kuşan/çıkar/at fiziği
+> orada test edilemedi (kod hazır, REST hatası panele temiz düşüyor). İlk Paper testinde:
+> zırh kuşan/çıkar, 1-at/hepsini-at, moveSlot ve autoBestGear'ın gerçekten giydiğini doğrula.
+> Senkron, hotbar seçimi ve kısıt redleri otomatik testte DOĞRULANDI (`scripts/inventory-test.mjs`).
+
+- [x] Envanter senkronu: 46 slot (zırh 4 + ana 27 + hotbar 9 + offhand) + eldeki slot; `bot:inventory` ile **150ms debounce'lu TAM anlık görüntü** (delta değil — karar günlüğüne bkz; respawn sonrası kendini onarır). `modules/inventory/index.ts`.
+- [~] Eşya görselleri: v1 = isim + adet rozetli metin çipi + dayanıklılık barı (yeşil→kırmızı). Gerçek `minecraft-assets` ikonları → Backlog (sunucudan statik servis gerekir).
+- [x] Panel **InventoryPanel**: gerçek MC düzeni (zırh sütunu · sol el · ana 9×3 · hotbar 1-9, eldeki sarı halka); tooltip'te isim/adet/dayanıklılık/büyüler; doluluk sayacı (x/36) + kartta 30+ rozeti.
+- [x] Aksiyonlar: eşyaya tıkla → aksiyon çubuğu: **Eline Al · Kuşan (zırh/kalkan) · Çıkar · Elde Seç (hotbar) · 1 At · Hepsini At**; API'de ayrıca `moveSlot` var (sürükle-bırak UI → Backlog). *(Fizik: Paper doğrulaması, üstteki not.)*
+- [~] "En iyisini kullan": zırh = armor-manager entegre (bot başına aç/kapa; kapatma yeniden bağlanınca tam etkili). Alet seçimi Faz 8'de (mineflayer-tool), en iyi silah Faz 6'da. Yasaklı zırh + autoBestGear çakışması Faz 6'da kendi seçicimizle çözülecek.
+- [x] **Kısıtlar:** `bannedItems` (kuşanılamaz/ele alınamaz — panelde 🚫 + tek tık yasakla) ve `keepItems` (atılamaz — 📌) sunucu tarafında zorlanıyor; redler anlamlı Türkçe 400 hatası. *(Otomatik test: ikisi de doğrulandı; UI toggle → config persist doğrulandı.)* Gelecek modüller (dövüş/toplama/yeme) bu listelere UYMAK ZORUNDA — kontrol fonksiyonları hazır: `config.inventory.bannedItems/keepItems`.
+- [~] Envanter dolu uyarısı: 36/36'da Log WARN (geçiş bazlı) + kart rozeti (30+ sarı, 36 kırmızı) kodda; 36 slotu fiilen doldurma senaryosu Paper'da denenecek.
+- [~] **Kabul:** Kısıt akışı ✓ (yasaklı kask kuşanma reddi + korunan dirt atma reddi, otomatik test). Panelden giydirme/atma fiziği → Paper. "Dövüşte yasaklıysa taş kılıca geçer" → Faz 6'daki silah seçicisiyle birlikte test edilecek.
 
 ### Faz 6 — Gerçekçi Dövüş Sistemi
 
@@ -482,7 +487,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Fırın/sandık pencereleri açıkken bot hareket edemez; pencereyi işi bitince **kapatmayı unutma** (aksi halde görevler kilitlenir).
 - `bot.dig` yanlış aletle çok yavaştır; her kazıda `mineflayer-tool` ile alet seç.
 - Aynı prosese çok bot: her bot ~50–150 MB; 10+ bot planlanıyorsa Backlog'daki worker izolasyonunu öne çek.
-- **flying-squid test sunucusu sınırları (2026-07-15'te saptandı):** (1) Oyuncu VARLIKLARINI (entity) istemcilere yayınlamıyor — `bot.players[x].entity` hep undefined, dolayısıyla follow/goto-player/dövüş fiziği orada TEST EDİLEMEZ (1.16.1'de tab listesi de boş; 1.8.8'de tab listesi dolu ama entity yine yok). (2) `bot.players[me].ping` hep undefined → panelde ping 0 görünür. (3) Süperflat düz zemin — engel aşma senaryosu kurulamaz. Bu üçü İÇİN gerçek Paper sunucu şart; bağlantı/sohbet/hareket/kazı testleri için flying-squid yeterli.
+- **flying-squid test sunucusu sınırları (2026-07-15'te saptandı):** (1) Oyuncu VARLIKLARINI (entity) istemcilere yayınlamıyor — `bot.players[x].entity` hep undefined, dolayısıyla follow/goto-player/dövüş fiziği orada TEST EDİLEMEZ (1.16.1'de tab listesi de boş; 1.8.8'de tab listesi dolu ama entity yine yok). (2) `bot.players[me].ping` hep undefined → panelde ping 0 görünür. (3) Süperflat düz zemin — engel aşma senaryosu kurulamaz. (4) **Pencere tıklamalarına yanıt vermiyor** — `bot.equip/toss/moveSlotItem` orada zaman aşımına düşer ("Server didn't respond to transaction"); dahası ASKIDA KALAN tıklama işlemi mineflayer'da envanter senkronunu da tıkar. Bu yüzden flying-squid'e karşı testlerde `autoBestGear=false` yapılmalı (armor-manager otomatik kuşanmayı deneyip kilitliyor — inventory-test.mjs böyle yapar). `/give` ÇALIŞIR (everybody-op sayesinde) — envanter senkron testleri için kullan. Bu dördü İÇİN gerçek Paper sunucu şart; bağlantı/sohbet/hareket/kazı/senkron testleri için flying-squid yeterli.
 - **Panel (zustand) kuralı:** store seçicisi içinde yeni dizi/obje üretme (`s.x[id] ?? []` YASAK) — "getSnapshot should be cached" sonsuz döngüsüyle tüm sayfayı karartır. Varsayılanı seçici DIŞINDA modül sabitiyle ver (`?? EMPTY`). App kökünde ErrorBoundary var ama kuralı yine de boz*ma*.
 
 ---
@@ -521,3 +526,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — TaskQueue Faz 10 beklenmeden Faz 4'te kuruldu (hareket görevleri için gerekliydi). Kesme modeli v1: yüksek öncelik gelince çalışan görev iptal + paramlarıyla yeniden kuyruğa (yeniden başlatılabilir görevlerde "devam" etkisi). Runner'lar bot referansını ÇALIŞMA anında `instance.bot`tan alır (yeniden bağlanma sonrası bayat referans olmasın).
 - 2026-07-15 — Takip/yanına-git fiziği flying-squid'de doğrulanamadı (entity yayını yok, §12) — movement-test bu durumu otomatik ATLAR; Paper'da tam koşulmalı.
 - 2026-07-15 — Panel App köküne ErrorBoundary eklendi (tek bileşen hatası tüm paneli karartmasın).
+- 2026-07-15 — Envanter senkronu delta yerine **150ms debounce'lu tam anlık görüntü** (46 slot ≈ birkaç KB): kaçırılan olay/respawn durumlarında kendini onarır, iki uçta tek kod yolu. TODO Faz 5 maddesi buna göre güncellendi.
+- 2026-07-15 — Eşya görselleri v1: metin çipi + dayanıklılık barı. minecraft-assets ikon paketi (tüm sürümler, yüzlerce MB) Backlog'a — eklenirse sunucudan `/api/assets` statik rotası ile servis edilmeli.
+- 2026-07-15 — PanelError `core/errors.ts`e taşındı (inventory→BotManager döngüsel import'unu kırmak için); BotManager geriye dönük re-export ediyor.
+- 2026-07-15 — armor-manager, pencere tıklaması desteklemeyen sunucuda (flying-squid) askıda kalıp envanter senkronunu tıkıyor — §12'ye gotcha yazıldı; gerçek sunucularda sorun beklenmez (tıklamalar anında yanıtlanır).

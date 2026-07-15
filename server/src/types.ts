@@ -120,12 +120,31 @@ export interface Waypoint {
   note?: string;
 }
 
+export interface InventoryItem {
+  /** pencere slot numarası (oyuncu envanteri: 5-8 zırh, 9-35 ana, 36-44 hotbar, 45 offhand) */
+  slot: number;
+  name: string;
+  displayName: string;
+  count: number;
+  durability?: { left: number; max: number };
+  enchants: string[];
+}
+
+export interface InventorySnapshot {
+  /** 0-45 arası pencere slotları (boş slot = null) */
+  slots: (InventoryItem | null)[];
+  /** seçili hotbar slotu (0-8) */
+  heldQuickBar: number;
+  ts: number;
+}
+
 export interface BotSnapshot {
   config: BotConfig;
   status: BotStatus;
   runtime: BotRuntimeState;
   chatQueueLength: number;
   tasks: { current: TaskSummary | null; queue: TaskSummary[] };
+  inventory: InventorySnapshot | null;
 }
 
 export interface StateSnapshot {

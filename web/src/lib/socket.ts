@@ -1,7 +1,7 @@
 import { io } from "socket.io-client";
 import { useAppStore } from "../stores/useAppStore";
 import { EV } from "./events";
-import type { BotSnapshot, ChatEntry, LogEntry, StateSnapshot, TaskSummary } from "./types";
+import type { BotSnapshot, ChatEntry, InventorySnapshot, LogEntry, StateSnapshot, TaskSummary } from "./types";
 
 // Aynı origin (vite proxy → 3001). Tek socket örneği, modül yüklenince bağlanır.
 export const socket = io({ transports: ["websocket", "polling"] });
@@ -39,6 +39,9 @@ socket.on(
 socket.on(EV.BOT_CHAT, (e: ChatEntry) => store().addChat(e));
 socket.on(EV.BOT_TASK, (p: { botId: string; current: TaskSummary | null; queue: TaskSummary[] }) =>
   store().patchBot(p.botId, { tasks: { current: p.current, queue: p.queue } })
+);
+socket.on(EV.BOT_INVENTORY, (p: { botId: string; inventory: InventorySnapshot }) =>
+  store().patchBot(p.botId, { inventory: p.inventory })
 );
 socket.on(EV.BOT_CHAT_QUEUE, (p: { botId: string; length: number }) => store().setChatQueue(p.botId, p.length));
 socket.on(EV.BOT_LOG, (e: LogEntry) => store().addLog(e));

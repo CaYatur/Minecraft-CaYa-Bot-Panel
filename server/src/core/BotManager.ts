@@ -4,7 +4,11 @@ import type { BotConfig, ServerProfile, StateSnapshot, Waypoint } from "../types
 import { USERNAME_RE, defaultBotConfig, mergeConfig, newId } from "../types";
 import { createLogger } from "../utils/logger";
 import { BotInstance } from "./BotInstance";
+import { PanelError } from "./errors";
 import { WaypointStore } from "./Waypoints";
+
+// geriye dönük uyumluluk: PanelError eskiden bu dosyadaydı, mevcut import'lar bozulmasın
+export { PanelError };
 
 const BOTS_FILE = "bots.json";
 const SERVERS_FILE = "servers.json";
@@ -268,16 +272,6 @@ export class BotManager extends EventEmitter {
         409
       );
     }
-  }
-}
-
-/** REST katmanının HTTP koduna çevirebildiği hata tipi */
-export class PanelError extends Error {
-  constructor(
-    message: string,
-    public readonly httpStatus = 400
-  ) {
-    super(message);
   }
 }
 

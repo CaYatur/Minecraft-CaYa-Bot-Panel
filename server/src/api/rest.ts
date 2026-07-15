@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { BotManager, PanelError } from "../core/BotManager";
+import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
 
 type Handler = (req: Request, res: Response) => void | Promise<void>;
@@ -167,6 +168,22 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/tasks/cancel-all",
     h((req, res) => {
       manager.mustGet(req.params.id!).tasks.cancelAll("panelden tümü iptal edildi");
+      res.json({ ok: true });
+    })
+  );
+
+  // ---- envanter (Faz 5) -----------------------------------------------------------
+  r.post(
+    "/bots/:id/inventory",
+    h(async (req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      try {
+        await runInventoryOp(inst, req.body ?? {});
+      } catch (err) {
+        if (err instanceof PanelError) throw err;
+        // mineflayer'ın ham hataları (equip timeout vb.) panele anlaşılır dönsün
+        throw new PanelError(`Envanter işlemi başarısız: ${err instanceof Error ? err.message : String(err)}`);
+      }
       res.json({ ok: true });
     })
   );
