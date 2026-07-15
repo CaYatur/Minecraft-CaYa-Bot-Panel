@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
-import { parseChatMessage } from "../modules/chat/parse";
+import { parseChatComponent, parseChatMessage } from "../modules/chat/parse";
 import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
 import { GatherService } from "../modules/gather";
@@ -492,14 +492,23 @@ export class BotInstance extends EventEmitter {
       } catch {
         ansi = undefined;
       }
-      const parsed = parseChatMessage(plain);
+      // 1) JSON component (chat.type.text with player) — plugin/vanilla isim kaybını önler
+      // 2) düz metin regex (Essentials / LuckPerms / AuthMe satırları)
+      const fromJson = parseChatComponent(jsonMsg);
+      const fromPlain = parseChatMessage(plain);
+      const parsed =
+        fromJson?.username != null
+          ? fromJson
+          : fromPlain.username != null
+            ? fromPlain
+            : fromJson ?? fromPlain;
       const entry: ChatEntry = {
         ts: Date.now(),
         botId: this.config.id,
         kind: parsed.kind,
         username: parsed.username,
         self: parsed.username != null && parsed.username.toLowerCase() === this.config.username.toLowerCase(),
-        text: parsed.kind === "server" ? plain : parsed.text,
+        text: parsed.kind === "server" ? plain : parsed.text || plain,
         ansi
       };
       this.pushChat(entry);
