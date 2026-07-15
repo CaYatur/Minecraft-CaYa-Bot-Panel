@@ -52,7 +52,7 @@ function ensureParkourBot(instance: BotInstance): Bot {
   movements.allowParkour = cfg.allowParkour !== false;
   movements.allow1by1towers = Boolean(cfg.allowTower);
   try {
-    (movements as { maxDrop?: number }).maxDrop = Math.max(cfg.maxDrop ?? 3, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2));
+    (movements as { maxDropDown?: number }).maxDropDown = Math.max(cfg.maxDrop ?? 3, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2));
   } catch {
     /* */
   }
@@ -68,6 +68,51 @@ function clearControls(bot: Bot) {
       /* */
     }
   }
+}
+
+// caya-rubberband-fix-v1: Pathfinder ile manuel kontrol arasında tek sahipli güvenli devir.
+const caya_rubberband_fix_v1 = true;
+async function handoffToManualControl(bot: Bot, settleMs = 140): Promise<void> {
+  try {
+    bot.pathfinder.setGoal(null);
+  } catch {
+    /* pathfinder henüz hazır olmayabilir */
+  }
+  clearControls(bot);
+
+  const until = Date.now() + Math.max(40, settleMs);
+  while (Date.now() < until) {
+    try {
+      const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+      if (pf.isMoving?.() === false) break;
+    } catch {
+      break;
+    }
+    await sleep(20);
+  }
+
+  // En az iki fizik tick'i: eski pathfinder kontrol paketlerinin boşalması için.
+  await sleep(50);
+  clearControls(bot);
+}
+
+async function alignManualLookAt(bot: Bot, target: ReturnType<typeof v3>): Promise<void> {
+  // force=false: anlık yaw sıçraması/anti-cheat düzeltmesi üretmez.
+  try {
+    await bot.lookAt(target, false);
+  } catch {
+    /* bakış başarısızsa hareket kodu güvenli biçimde devam eder */
+  }
+  await sleep(50);
+}
+
+async function alignManualYaw(bot: Bot, yaw: number, pitch = 0): Promise<void> {
+  try {
+    await bot.look(yaw, pitch, false);
+  } catch {
+    /* bakış başarısızsa hareket kodu güvenli biçimde devam eder */
+  }
+  await sleep(50);
 }
 
 function isSolid(bot: Bot, x: number, y: number, z: number): boolean {
@@ -183,36 +228,34 @@ export async function executeGapJump(
 
   const g = Math.min(4, Math.max(2, Math.round(gap)));
   report?.({ done: 0, total: 1, label: `parkur ${g} blok atlama → ${landing.x},${landing.y},${landing.z}` });
-
-  try {
-    bot.pathfinder.setGoal(null);
-  } catch {
-    /* */
-  }
-  clearControls(bot);
+  await handoffToManualControl(bot);
 
   const lx = landing.x + 0.5;
   const ly = landing.y;
   const lz = landing.z + 0.5;
 
-  // hedefe bak
-  try {
-    await bot.lookAt(v3(lx, ly + 0.5, lz), true);
-  } catch {
-    /* */
-  }
+  // Hedefe yalnızca hareket başlamadan önce, yumuşak biçimde hizalan.
+  await alignManualLookAt(bot, v3(lx, ly + 0.5, lz));
 
   // kenara hizalan — acele etme (daha emin iniş)
   const edgeMs = g >= 4 ? 320 : g === 3 ? 220 : 150;
   bot.setControlState("forward", true);
   if (g >= 3) bot.setControlState("sprint", true);
   await sleep(edgeMs);
+  if (token.cancelled) {
+    clearControls(bot);
+    throw new Error(token.reason ?? "iptal");
+  }
 
   // zıpla — kısa basış, sonra bırak
   if (g >= 4) await sleep(60);
   bot.setControlState("jump", true);
   await sleep(g >= 4 ? 80 : g === 3 ? 70 : 60);
   bot.setControlState("jump", false);
+  if (token.cancelled) {
+    clearControls(bot);
+    throw new Error(token.reason ?? "iptal");
+  }
 
   // havada yön tut (daha kontrollü süre)
   bot.setControlState("forward", true);
@@ -236,11 +279,7 @@ export async function executeGapJump(
       clearControls(bot);
       break;
     }
-    try {
-      await bot.lookAt(v3(lx, ly + 0.8, lz), true);
-    } catch {
-      /* */
-    }
+    // Havada yaw değiştirme: yön, başlangıç hizası ve hareket momentumu ile korunur.
     // inişe yaklaştıysa bırak
     const d = pos.distanceTo(v3(lx, ly, lz) as never);
     if (d < 1.2 && bot.entity.onGround) break;
@@ -479,14 +518,12 @@ async function climbManualHold(
   let reattachOnce = false;
   const t0 = Date.now();
 
+  await handoffToManualControl(bot);
+
   try {
-    await bot.look(wall.yaw, 0, true);
+    await alignManualYaw(bot, wall.yaw, 0);
   } catch {
-    try {
-      await bot.lookAt(v3(ladder.x + 0.5, bot.entity!.position.y + 0.4, ladder.z + 0.5), true);
-    } catch {
-      /* */
-    }
+    await alignManualLookAt(bot, v3(ladder.x + 0.5, bot.entity!.position.y + 0.4, ladder.z + 0.5));
   }
 
   bot.setControlState("sprint", false);
@@ -524,12 +561,7 @@ async function climbManualHold(
       clearControls(bot);
       return "fell";
     }
-
-    try {
-      await bot.look(wall.yaw, 0.05, true);
-    } catch {
-      /* */
-    }
+    // Tırmanış sırasında yaw sahibi manuel momentumdur; her tick bakış zorlanmaz.
     bot.setControlState("sprint", false);
     bot.setControlState("forward", true);
     bot.setControlState("jump", true);
@@ -549,11 +581,7 @@ async function climbManualHold(
           bot.setControlState("forward", true);
           await sleep(150);
         }
-        try {
-          await bot.look(wall.yaw, 0, true);
-        } catch {
-          /* */
-        }
+        await alignManualYaw(bot, wall.yaw, 0);
         bot.setControlState("forward", true);
         bot.setControlState("jump", true);
         lastProgressAt = Date.now();
@@ -608,12 +636,8 @@ async function exitLadderTop(bot: Bot): Promise<void> {
   }
   const { dx, dz } = lands[0]!;
   clearControls(bot);
-  try {
-    await bot.lookAt(v3(fx + dx + 0.5, fy, fz + dz + 0.5), true);
-  } catch {
-    /* */
-  }
-  await sleep(100);
+  await alignManualLookAt(bot, v3(fx + dx + 0.5, fy, fz + dz + 0.5));
+  await sleep(70);
   bot.setControlState("forward", true);
   if (stillOnLadder(bot)) {
     bot.setControlState("jump", true);

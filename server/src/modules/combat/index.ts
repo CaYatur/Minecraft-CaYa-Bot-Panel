@@ -1432,24 +1432,27 @@ export class CombatService {
         const reach = this.cfg().reach ?? 3;
         if (inMeleeRange(bot, live, reach)) break;
 
-        // Bakış: yürürken pathfinder dümeni sürer — yalnızca vuruş mesafesine
-        // yaklaşınca (ön nişan) veya bot dururken hedefe bak (D1 hazırlığı).
+        // Bakış: aktif rota boyunca yaw tamamen pathfinder'a aittir.
+      // İnsanî hedef bakışı yalnızca rota ve fiziksel hız gerçekten durduğunda uygulanır.
         try {
-          const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
-          const nearlyThere = distanceEyeToEntity(bot, live) <= reach + 1.5;
-          if (nearlyThere || pf.isMoving?.() === false) {
-            await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
-          }
-        } catch {
-          /* */
+        const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+        const vx = bot.entity.velocity?.x ?? 0;
+        const vz = bot.entity.velocity?.z ?? 0;
+        const physicallyStopped = Math.hypot(vx, vz) < 0.03;
+        if (pf.isMoving?.() === false && physicallyStopped && bot.entity.onGround) {
+          await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
         }
+      } catch {
+        /* */
+      }
         await sleep(120);
       }
       try {
-        bot.pathfinder.setGoal(null);
-      } catch {
-        /* noop */
-      }
+      bot.pathfinder.setGoal(null);
+    } catch {
+      /* noop */
+    }
+    await waitForPathfinderIdle(bot, token);
     } catch (e) {
       this.log().debug("Yaklaşma başarısız", e instanceof Error ? e.message : String(e));
       this.clearPathfinder();
@@ -1546,6 +1549,23 @@ export class CombatService {
     if (!bot || this.instance.status !== "online") throw new Error("Bot çevrimdışı — dövüş yapılamaz");
     this.bot = bot;
     return bot;
+  }
+}
+
+// caya-rubberband-fix-v1: pathfinder durduktan sonra bakış sistemine güvenli devir.
+const caya_rubberband_fix_v1_combat = true;
+async function waitForPathfinderIdle(bot: Bot, token: TaskToken, maxMs = 180): Promise<void> {
+  const until = Date.now() + Math.max(40, maxMs);
+  while (!token.cancelled && Date.now() < until) {
+    try {
+      const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+      const vx = bot.entity?.velocity?.x ?? 0;
+      const vz = bot.entity?.velocity?.z ?? 0;
+      if (pf.isMoving?.() === false && Math.hypot(vx, vz) < 0.03) return;
+    } catch {
+      return;
+    }
+    await sleep(20);
   }
 }
 
