@@ -35,7 +35,7 @@ export interface FallGuardConfig {
   lethalHealthMargin: number;
   /** Yere bu kadar blok kala MLG yerleştir (su/tekne) */
   mlgTriggerBlocks: number;
-  /** Sadece ölümcül düşüşte mi yoksa her tehlikeli düşüşte mi */
+  /** Sadece tehlikeli/ölümcül düşüşte müdahale */
   onlyWhenDangerous: boolean;
 }
 
@@ -68,15 +68,29 @@ const BOAT_NAMES = [
   "bamboo_chest_raft"
 ];
 
+/** Yumuşak iniş / hasarsız yüzeyler (üzerine inince fall damage yok veya çok az) */
+const SOFT_LANDING = new Set([
+  "water",
+  "bubble_column",
+  "lava", // hasar farklı ama düşüş hasarı yok
+  "cobweb",
+  "powder_snow",
+  "hay_block",
+  "slime_block",
+  "honey_block",
+  "scaffolding",
+  "ladder",
+  "vine",
+  "twisting_vines",
+  "weeping_vines",
+  "twisting_vines_plant",
+  "weeping_vines_plant",
+  "sweet_berry_bush"
+]);
+
 /**
  * Yüksekten düşerken hasar almamak / ölmemek için MLG ve yumuşak iniş.
- * Pathfinder/görevlerden bağımsız, tick bazlı (SURVIVAL önceliği — gerçek zaman).
- *
- * Yöntemler (envanter + durum):
- *  - water_bucket MLG
- *  - tekne MLG
- *  - saman (hay) yastık
- *  - slime / cobweb / merdiven / scaffolding / powder snow
+ * Pathfinder/görevlerden bağımsız, tick bazlı.
  */
 export class FallGuardService {
   private bot: Bot | null = null;
@@ -85,7 +99,6 @@ export class FallGuardService {
   private lastMlgAt = 0;
   private lastEmitAt = 0;
   private lastWarnAt = 0;
-  /** Düşüş başlangıç yüksekliği (fallDistance metadata yoksa yedek) */
   private fallPeakY: number | null = null;
   private placedWaterPos: { x: number; y: number; z: number } | null = null;
   private state: FallGuardState = idleState();
@@ -123,7 +136,6 @@ export class FallGuardService {
 
   private emit(force = false) {
     const now = Date.now();
-    // düşerken socket spam olmasın (max ~5 Hz); önemli geçişlerde force
     if (!force && now - this.lastEmitAt < 200) return;
     this.lastEmitAt = now;
     this.instance.emit("fallGuard", { botId: this.instance.config.id, fallGuard: this.getState() });
@@ -142,11 +154,19 @@ export class FallGuardService {
       return;
     }
 
-    // su aldıktan sonra kovayı doldur / suyu geri al
-    if (bot.entity.onGround || (bot.entity as { isInWater?: boolean }).isInWater) {
-      if (this.placedWaterPos) {
-        void this.tryPickupWater(bot);
+    // creative / spectator / elytra glide / slow falling → müdahale yok
+    if (shouldIgnoreFall(bot)) {
+      if (this.state.falling || this.fallPeakY != null) {
+        this.fallPeakY = null;
+        this.state = idleState();
+        this.state.lastAction = "düşüş yok sayıldı (efekt/mod)";
+        this.emit(true);
       }
+      return;
+    }
+
+    if (bot.entity.onGround || isInLiquid(bot)) {
+      if (this.placedWaterPos) void this.tryPickupWater(bot);
       if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
         this.state.lastAction = "iniş tamam";
@@ -169,19 +189,41 @@ export class FallGuardService {
       return;
     }
 
-    // zirve yüksekliği: düşüş başında veya daha yükseğe çıktıysa güncelle
     if (this.fallPeakY == null || feetY > this.fallPeakY) {
       this.fallPeakY = feetY;
     }
 
-    const ground = findGroundY(bot);
-    const remaining = ground != null ? Math.max(0, feetY - ground - 0.05) : 64;
-    // meta fallDistance (+ kalan) veya peak→ground (metadata yoksa)
-    const fromPeak = ground != null && this.fallPeakY != null ? Math.max(0, this.fallPeakY - ground) : remaining;
+    const groundInfo = findLandingBelow(bot);
+    // zaten yumuşak yüzeye iniyorsa (su/hay/slime…) MLG gereksiz
+    if (groundInfo?.soft) {
+      const remSoft = Math.max(0, feetY - groundInfo.standY);
+      if (remSoft < 8) {
+        this.state = {
+          active: false,
+          falling: true,
+          method: null,
+          fallDistance: round1(Math.max(metaFall, this.fallPeakY - groundInfo.standY)),
+          remainingBlocks: round1(remSoft),
+          predictedDamage: 0,
+          lethal: false,
+          lastAction: `yumuşak iniş: ${groundInfo.name}`,
+          inventoryOptions: availableMethods(bot, this.instance.config.inventory.bannedItems)
+        };
+        this.emit();
+        return;
+      }
+    }
+
+    const remaining =
+      groundInfo != null ? Math.max(0, feetY - groundInfo.standY - 0.05) : 64;
+    const fromPeak =
+      groundInfo != null && this.fallPeakY != null
+        ? Math.max(0, this.fallPeakY - groundInfo.standY)
+        : remaining;
     const bestFall = Math.max(metaFall > 0.5 ? metaFall + Math.max(0, remaining - 0.5) : 0, fromPeak);
 
-    const ff = featherFallingLevel(bot);
-    const predictedDamage = fallDamageHp(bestFall, ff);
+    const { feather, protection } = armorFallEnchants(bot);
+    const predictedDamage = fallDamageHp(bestFall, feather, protection);
     const health = bot.health ?? 20;
     const lethal = predictedDamage >= health - cfg.lethalHealthMargin;
     const dangerous = predictedDamage >= cfg.minDamageHp || lethal;
@@ -199,7 +241,6 @@ export class FallGuardService {
       inventoryOptions: options
     };
 
-    // düşük hasar — izle
     if (cfg.onlyWhenDangerous && !dangerous) {
       this.emit();
       return;
@@ -215,12 +256,10 @@ export class FallGuardService {
     }
     if (Date.now() - this.lastMlgAt < 400) return;
 
-    // zamanlama: yere yaklaşınca yerleştir; hay/slime için biraz daha erken hazırlık
     const method = pickBestMethod(options, remaining, lethal, predictedDamage);
     if (method === "none") {
       this.state.lastAction = lethal ? "kurtarma yok — ölümcül düşüş!" : "kurtarma malzemesi yok";
       this.emit();
-      // log spam önle: en fazla 3 sn'de bir
       if (lethal && Date.now() - this.lastWarnAt > 3000) {
         this.lastWarnAt = Date.now();
         this.log().warn("Ölümcül düşüş — MLG malzemesi yok", `~${predictedDamage} HP · ${bestFall.toFixed(1)} blok`);
@@ -228,14 +267,12 @@ export class FallGuardService {
       return;
     }
 
-    // su/tekne: trigger mesafesinde; hay/slime: remaining < 8'de hazırlık yerleştir
     const trigger =
       method === "water" || method === "boat" || method === "powder_snow"
         ? remaining <= cfg.mlgTriggerBlocks && remaining > 0.15
         : remaining <= Math.max(cfg.mlgTriggerBlocks + 2, 6) && remaining > 0.15;
 
     if (!trigger && remaining > cfg.mlgTriggerBlocks + 4) {
-      // henüz erken — sadece hazırlan: eşyayı ele al
       if (!this.busy) void this.preEquip(bot, method);
       this.state.method = method;
       this.state.lastAction = `hazırlık: ${method} (${remaining.toFixed(1)}m)`;
@@ -259,7 +296,6 @@ export class FallGuardService {
     );
 
     try {
-      // pathfinder'ı kes — bakış bozulmasın
       try {
         (bot as { pathfinder?: { setGoal: (g: null) => void } }).pathfinder?.setGoal(null);
       } catch {
@@ -293,16 +329,20 @@ export class FallGuardService {
     const item = findItemForMethod(bot, method, banned);
     if (!item) throw new Error(`${method} eşyası yok`);
 
-    // aşağı bak
     await lookDown(bot);
 
     if (method === "water" || method === "powder_snow") {
       await bot.equip(item, "hand");
       await sleep(30);
       await lookDown(bot);
-      bot.activateItem(false);
+      // right-click place
+      await bot.activateItem();
       await sleep(50);
-      // su kaynağı tahmini ayak altı
+      try {
+        bot.deactivateItem();
+      } catch {
+        /* */
+      }
       const p = bot.entity.position;
       this.placedWaterPos = { x: Math.floor(p.x), y: Math.floor(p.y - 1), z: Math.floor(p.z) };
       return;
@@ -312,33 +352,30 @@ export class FallGuardService {
       await bot.equip(item, "hand");
       await sleep(30);
       await lookDown(bot);
-      // tekne: activateItem veya place — sürüme göre activate
       try {
-        bot.activateItem(false);
+        await bot.activateItem();
+        await sleep(40);
+        bot.deactivateItem();
       } catch {
         /* */
       }
       return;
     }
 
-    // blok yerleştirme (hay, slime, cobweb, ladder, scaffolding)
     await bot.equip(item, "hand");
     await sleep(20);
     const feet = bot.entity.position;
     const tx = Math.floor(feet.x);
-    const ty = Math.floor(feet.y - Math.min(2, Math.max(1, Math.floor(remaining))));
+    // yere yakın yastık: remaining'e göre 1–2 blok alt
+    const ty = Math.floor(feet.y - Math.min(2, Math.max(1, Math.ceil(remaining * 0.5))));
     const tz = Math.floor(feet.z);
     await this.tryPlaceAt(bot, tx, ty, tz, method);
   }
 
   private async tryPlaceAt(bot: Bot, x: number, y: number, z: number, method: FallMethod) {
-    const target = v3(x, y, z);
-    const existing = bot.blockAt(target);
+    const existing = bot.blockAt(v3(x, y, z));
     if (existing && existing.name !== "air" && existing.name !== "cave_air") {
-      // zaten dolu — yanına / altına dene
-      if (method === "ladder") {
-        await this.placeLadderOnNearestWall(bot);
-      }
+      if (method === "ladder") await this.placeLadderOnNearestWall(bot);
       return;
     }
 
@@ -362,7 +399,6 @@ export class FallGuardService {
         continue;
       }
     }
-    // referans yok — merdiven için duvar ara
     if (method === "ladder") await this.placeLadderOnNearestWall(bot);
   }
 
@@ -380,9 +416,7 @@ export class FallGuardService {
       if (!wall || wall.name === "air" || wall.name === "cave_air") continue;
       try {
         await bot.lookAt(wall.position.offset(0.5, 0.5, 0.5), true);
-        // ladder on face toward player = opposite of wall offset from player... place against wall
         await bot.placeBlock(wall, v3(-dx, 0, -dz));
-        // merdivene yapış
         bot.setControlState("forward", true);
         await sleep(100);
         bot.setControlState("forward", false);
@@ -402,13 +436,21 @@ export class FallGuardService {
     }
     try {
       const pos = this.placedWaterPos;
-      const block = bot.blockAt(v3(pos.x, pos.y, pos.z));
-      // water still / flowing
-      if (block && (block.name === "water" || block.name.includes("water"))) {
-        await bot.equip(bucket, "hand");
-        await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
-        bot.activateItem(false);
-        await sleep(100);
+      // su kaynağı ayak altında veya 1 altta
+      for (const dy of [0, -1, 1]) {
+        const block = bot.blockAt(v3(pos.x, pos.y + dy, pos.z));
+        if (block && (block.name === "water" || block.name.includes("water"))) {
+          await bot.equip(bucket, "hand");
+          await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+          await bot.activateItem();
+          await sleep(80);
+          try {
+            bot.deactivateItem();
+          } catch {
+            /* */
+          }
+          break;
+        }
       }
     } catch {
       /* */
@@ -431,49 +473,122 @@ function idleState(): FallGuardState {
   };
 }
 
-/** Minecraft: 3 bloktan sonraki her blok ≈ 1 HP (yarım kalp); Feather Falling azaltır */
-export function fallDamageHp(fallDistance: number, featherFallingLevel = 0): number {
+/**
+ * Fall damage = max(0, fallDistance − 3) HP (half-hearts).
+ * Feather Falling: wiki (12 × level)% azaltma, max %48 (FF IV).
+ * Protection: kabaca %4 × seviye (tüm parçalar toplanır), FF ile birlikte cap %80.
+ * @see https://minecraft.wiki/w/Damage#Fall_damage
+ * @see https://minecraft.wiki/w/Feather_Falling
+ */
+export function fallDamageHp(fallDistance: number, featherFallingLevel = 0, protectionLevel = 0): number {
   if (fallDistance <= 3) return 0;
-  let dmg = Math.max(0, Math.floor(fallDistance) - 3);
-  if (featherFallingLevel > 0) {
-    // EPF: FF level * 3, max 20 EPF → damage *= (1 - min(20,epf)/25)
-    const epf = Math.min(20, featherFallingLevel * 3);
-    dmg = Math.floor(dmg * (1 - epf / 25));
-  }
+  let dmg = Math.max(0, fallDistance - 3);
+  // wiki genelde tam blok sayımı; kesirli mesafede floor benzeri
+  dmg = Math.max(0, Math.floor(fallDistance) - 3);
+  const ffReduce = Math.min(0.48, Math.max(0, featherFallingLevel) * 0.12);
+  const protReduce = Math.min(0.8, Math.max(0, protectionLevel) * 0.04);
+  const totalReduce = Math.min(0.8, ffReduce + protReduce);
+  dmg = Math.floor(dmg * (1 - totalReduce));
   return Math.max(0, dmg);
 }
 
-function featherFallingLevel(bot: Bot): number {
+function shouldIgnoreFall(bot: Bot): boolean {
   try {
-    const boots = bot.inventory.slots[8] ?? null; // armor boots often slot 8 in window
-    // also check equipment
-    const eq = (bot as unknown as { entity?: { equipment?: (Item | null)[] } }).entity?.equipment;
-    const candidates = [boots, eq?.[2], eq?.[5]].filter(Boolean) as Item[];
-    for (const it of candidates) {
-      const ench = (it as unknown as { enchants?: Array<{ name: string; lvl: number }> }).enchants
-        ?? (it as unknown as { nbt?: unknown });
-      if (Array.isArray((it as unknown as { enchants?: unknown }).enchants)) {
-        for (const e of (it as unknown as { enchants: Array<{ name: string; lvl: number }> }).enchants) {
-          if (String(e.name).includes("feather_falling") || String(e.name).includes("featherFalling")) {
-            return e.lvl ?? 1;
-          }
-        }
+    const ent = bot.entity as unknown as { elytraFlying?: boolean };
+    if (ent.elytraFlying) return true;
+    const gm = (bot as unknown as { game?: { gameMode?: string } }).game?.gameMode;
+    if (gm === "creative" || gm === "spectator") return true;
+
+    // mineflayer: entity.effects is Effect[] | object depending on version
+    const effects = bot.entity.effects as unknown;
+    if (Array.isArray(effects)) {
+      for (const e of effects) {
+        const name = String((e as { name?: string })?.name ?? "");
+        if (/slow.?falling/i.test(name)) return true;
       }
-      // mineflayer enchantments helper
-      const anyIt = it as unknown as { enchants?: Array<{ name: string; lvl: number }> };
-      if (anyIt.enchants) {
-        for (const e of anyIt.enchants) {
-          if (/feather/i.test(e.name)) return e.lvl ?? 1;
+    } else if (effects && typeof effects === "object") {
+      for (const [k, v] of Object.entries(effects as Record<string, unknown>)) {
+        if (/slow.?falling/i.test(k)) return true;
+        const name = String((v as { name?: string })?.name ?? "");
+        if (/slow.?falling/i.test(name)) return true;
+      }
+    }
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+function isInLiquid(bot: Bot): boolean {
+  try {
+    if ((bot.entity as { isInWater?: boolean }).isInWater) return true;
+    const p = bot.entity.position;
+    const b = bot.blockAt(v3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)));
+    if (b && (b.name === "water" || b.name.includes("water") || b.name === "lava")) return true;
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+function armorFallEnchants(bot: Bot): { feather: number; protection: number } {
+  let feather = 0;
+  let protection = 0;
+  try {
+    // armor slots in inventory window: 5 helmet, 6 chest, 7 legs, 8 boots
+    const slots = [5, 6, 7, 8]
+      .map((i) => bot.inventory.slots[i])
+      .filter(Boolean) as Item[];
+    // also held? no
+    for (const it of slots) {
+      const list = getEnchants(it);
+      for (const e of list) {
+        const n = e.name.toLowerCase();
+        if (n.includes("feather_falling") || n.includes("featherfalling") || n === "feather_falling") {
+          feather = Math.max(feather, e.lvl);
+        }
+        if (n === "protection" || n.endsWith(".protection") || n.includes("protection") && !n.includes("fire") && !n.includes("blast") && !n.includes("projectile")) {
+          protection += e.lvl;
         }
       }
     }
   } catch {
     /* */
   }
-  return 0;
+  return { feather, protection };
 }
 
-function findGroundY(bot: Bot): number | null {
+function getEnchants(it: Item): Array<{ name: string; lvl: number }> {
+  const any = it as unknown as {
+    enchants?: Array<{ name: string; lvl: number }>;
+    nbt?: { value?: { Enchantments?: { value?: { value?: Array<{ name?: { value?: string }; id?: { value?: string }; lvl?: { value?: number } }> } } } };
+  };
+  if (Array.isArray(any.enchants) && any.enchants.length) {
+    return any.enchants.map((e) => ({ name: String(e.name), lvl: Number(e.lvl) || 1 }));
+  }
+  // raw nbt fallback
+  try {
+    const ench = any.nbt?.value?.Enchantments?.value?.value;
+    if (Array.isArray(ench)) {
+      return ench.map((e) => ({
+        name: String(e.name?.value ?? e.id?.value ?? ""),
+        lvl: Number(e.lvl?.value ?? 1)
+      }));
+    }
+  } catch {
+    /* */
+  }
+  return [];
+}
+
+interface LandingInfo {
+  standY: number;
+  soft: boolean;
+  name: string;
+}
+
+/** Aşağıdaki iniş yüzeyi: yumuşak (su/hay…) veya katı */
+function findLandingBelow(bot: Bot): LandingInfo | null {
   const pos = bot.entity.position;
   const x = Math.floor(pos.x);
   const z = Math.floor(pos.z);
@@ -482,11 +597,15 @@ function findGroundY(bot: Bot): number | null {
   for (let y = startY; y >= minY; y--) {
     const b = bot.blockAt(v3(x, y, z));
     if (!b) continue;
-    const n = b.name;
-    if (n === "air" || n === "cave_air" || n === "void_air" || n === "water" || n === "lava" || n === "light") continue;
-    // non-solid-ish
-    if (n.includes("sign") || n === "torch" || n.includes("button") || n.includes("pressure_plate")) continue;
-    return y + 1; // feet stand on top of solid
+    const n = b.name.replace(/^minecraft:/, "");
+    if (n === "air" || n === "cave_air" || n === "void_air" || n === "light") continue;
+    if (n.includes("sign") || n === "torch" || n.includes("button") || n.includes("pressure_plate") || n.includes("rail")) continue;
+
+    if (SOFT_LANDING.has(n) || n.includes("water") || n.endsWith("_carpet")) {
+      return { standY: y + (n.includes("water") ? 0 : 1), soft: true, name: n };
+    }
+    // solid
+    return { standY: y + 1, soft: false, name: n };
   }
   return null;
 }
@@ -513,7 +632,6 @@ function pickBestMethod(
   predictedDamage: number
 ): FallMethod {
   if (!options.length) return "none";
-  // skor: ölümcülde su/tekne en iyi; hay hasarı %80 azaltır
   const score: Record<FallMethod, number> = {
     water: 100,
     powder_snow: 95,
@@ -525,12 +643,10 @@ function pickBestMethod(
     scaffolding: 50,
     none: 0
   };
-  // kısa mesafede hay yeterli olabilir
   if (!lethal && predictedDamage < 8) {
     score.hay += 10;
     score.slime += 5;
   }
-  // çok yakın yere su timing zor — tekne/hay tercih
   if (remaining < 1.2) {
     score.boat += 8;
     score.hay += 5;
@@ -573,7 +689,6 @@ function findItemForMethod(bot: Bot, method: FallMethod, banned: string[]): Item
 
 async function lookDown(bot: Bot) {
   try {
-    // pitch = -90° (düz aşağı)
     await bot.look(bot.entity.yaw, -Math.PI / 2, true);
   } catch {
     try {

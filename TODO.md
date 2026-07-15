@@ -828,3 +828,18 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 4. TODO §7/§8/§14/§15 güncellendi.
 
 **Audit bulguları kapatıldı:** JSON 1mb schem kırılması; path traversal riski; stop’ta scaffold unutulması; progress’te lastBlock yokluğu.
+
+### 2026-07-15 — Grok 4.5 — Derin tarama MLG + Yapı (hesap/eksik)
+
+**MLG düzeltmeleri (wiki):**
+- Feather Falling: `(12×level)%` max 48% (önce EPF yaklaşımı; FF tek başına aynı sonuç, Protection eklendi).
+- Yumuşak iniş yüzeyi (su/hay/slime/cobweb…) → gereksiz MLG yok; fallDistance peak takibi.
+- Slow Falling / creative / elytra skip; boots enchant slot 5–8; activateItem await+deactivate.
+- Emit/log rate limit (önceki fix).
+
+**Yapı düzeltmeleri:**
+- pathNear `noPath` dinleme (45s boş bekleme azaltma).
+- Blok→item alias: water/lava/powder_snow kovası, redstone_wire→redstone.
+- Malzeme sayımında kova alias.
+
+**Bilinçli kalan sınırlar:** block state (merdiven yönü) rotate’da yok; litematic packed long saha; hay %80 sadece yerleştirme ile (hasar formülünde değil); totem/ender pearl yok.

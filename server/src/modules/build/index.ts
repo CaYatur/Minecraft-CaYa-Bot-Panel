@@ -63,9 +63,18 @@ export class BuildService {
         haveMap[it.name] = (haveMap[it.name] ?? 0) + it.count;
       }
     }
+    // water/lava şemada blok adı; envanterde kova
+    const aliasHave = (blockName: string): number => {
+      if (haveMap[blockName] != null) return haveMap[blockName]!;
+      if (blockName === "water" || blockName === "flowing_water") return haveMap["water_bucket"] ?? 0;
+      if (blockName === "lava" || blockName === "flowing_lava") return haveMap["lava_bucket"] ?? 0;
+      if (blockName === "powder_snow") return haveMap["powder_snow_bucket"] ?? 0;
+      if (blockName === "redstone_wire") return haveMap["redstone"] ?? 0;
+      return 0;
+    };
     return Object.entries(needMap)
       .map(([name, need]) => {
-        const have = haveMap[name] ?? 0;
+        const have = aliasHave(name);
         return { name, need, have, missing: Math.max(0, need - have) };
       })
       .sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
