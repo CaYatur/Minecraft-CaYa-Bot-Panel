@@ -259,6 +259,11 @@ export class RuleEngine {
   }
 
   onChat(botId: string, username: string | undefined, text: string) {
+    // Kendi mesajını yoksay — bot sohbete yazınca kural kelimesi geçerse tekrar tetiklenmesin
+    if (this.isOwnUsername(botId, username)) {
+      log.debug(`Sohbet yoksayıldı (kendi mesajı)`, `bot=${botId} · ${username}: ${text.slice(0, 80)}`);
+      return;
+    }
     // komut argümanları (arg0, arg…) için özel yol
     for (const rule of this.rules) {
       if (!rule.enabled) continue;
@@ -274,6 +279,23 @@ export class RuleEngine {
         this.persist();
       }
     }
+  }
+
+  /** Bot kendi kullanıcı adını mı söylüyor / hedef mi? */
+  private isOwnUsername(botId: string, name: string | undefined | null): boolean {
+    if (!name?.trim()) return false;
+    const inst = this.manager.get(botId);
+    if (!inst) return false;
+    const n = name.trim().toLowerCase();
+    const cfg = inst.config.username?.toLowerCase();
+    if (cfg && n === cfg) return true;
+    try {
+      const live = inst.bot?.username?.toLowerCase();
+      if (live && n === live) return true;
+    } catch {
+      /* */
+    }
+    return false;
   }
 
   onVitals(botId: string, health: number, food: number) {
@@ -312,6 +334,8 @@ export class RuleEngine {
 
   onNearby(botId: string, players: Array<{ username: string; distance: number }>) {
     for (const p of players) {
+      // kendi entity'si yakında listesine sızarsa yoksay
+      if (this.isOwnUsername(botId, p.username)) continue;
       this.fireMatching(botId, "player_nearby", { player: p.username, distance: String(Math.round(p.distance)) }, (rule) => {
         if (rule.trigger.type !== "player_nearby") return false;
         const r = rule.trigger.radius ?? 16;
@@ -1292,6 +1316,10 @@ export class RuleEngine {
     }
     if (type === "attack") {
       const target = interpolate(String(action.target ?? action.player ?? ctx.player ?? ctx.attacker ?? ""), ctx);
+      if (target && this.isOwnUsername(botId, target)) {
+        log.warn("attack yoksayıldı: bot kendisine saldıramaz", target);
+        return;
+      }
       if (target) inst.combat.enqueueAttackPlayer(target);
       return;
     }
@@ -1301,6 +1329,10 @@ export class RuleEngine {
     }
     if (type === "follow") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p && this.isOwnUsername(botId, p)) {
+        log.warn("follow yoksayıldı: bot kendisini takip edemez", p);
+        return;
+      }
       if (p) inst.enqueueAction({ type: "follow", player: p, distance: Number(action.distance ?? 3) });
       return;
     }
@@ -1312,7 +1344,12 @@ export class RuleEngine {
         const wp = list.find((w) => w.name.toLowerCase() === name.toLowerCase() || w.id === name);
         if (wp) inst.enqueueAction({ type: "goto", x: wp.x, y: wp.y, z: wp.z, label: `waypoint: ${wp.name}` });
       } else if (action.player || ctx.player) {
-        inst.enqueueAction({ type: "goto-player", player: interpolate(String(action.player ?? ctx.player), ctx) });
+        const p = interpolate(String(action.player ?? ctx.player), ctx);
+        if (this.isOwnUsername(botId, p)) {
+          log.warn("goto-player yoksayıldı: hedef botun kendisi", p);
+          return;
+        }
+        inst.enqueueAction({ type: "goto-player", player: p });
       } else if (action.x != null) {
         inst.enqueueAction({ type: "goto", x: action.x, y: action.y, z: action.z });
       }
@@ -1421,6 +1458,10 @@ export class RuleEngine {
     }
     if (type === "protect" || type === "social-protect") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p && this.isOwnUsername(botId, p)) {
+        log.warn("protect yoksayıldı: bot kendisini koruyamaz (hedef = kendi)", p);
+        return;
+      }
       if (p) {
         inst.enqueueAction({
           type: "social-protect",
@@ -1433,6 +1474,10 @@ export class RuleEngine {
     }
     if (type === "social-follow") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p && action.enabled !== false && this.isOwnUsername(botId, p)) {
+        log.warn("social-follow yoksayıldı: bot kendisini takip edemez", p);
+        return;
+      }
       if (p) {
         inst.enqueueAction({
           type: "social-follow",
@@ -1445,6 +1490,10 @@ export class RuleEngine {
     }
     if (type === "social-attack") {
       const p = interpolate(String(action.player ?? action.target ?? ctx.player ?? ctx.attacker ?? ""), ctx);
+      if (p && action.enabled !== false && this.isOwnUsername(botId, p)) {
+        log.warn("social-attack yoksayıldı: bot kendisine saldıramaz", p);
+        return;
+      }
       if (p) {
         inst.enqueueAction({ type: "social-attack", player: p, enabled: action.enabled !== false });
       }

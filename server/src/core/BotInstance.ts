@@ -230,6 +230,20 @@ export class BotInstance extends EventEmitter {
     this.limiter.enqueue(text);
   }
 
+  /** Takip/goto/saldırı hedefi botun kendisi mi? */
+  isSelfPlayerName(name: string | undefined | null): boolean {
+    if (!name?.trim()) return false;
+    const n = name.trim().toLowerCase();
+    if (n === this.config.username.toLowerCase()) return true;
+    try {
+      const live = this.bot?.username?.toLowerCase();
+      if (live && n === live) return true;
+    } catch {
+      /* */
+    }
+    return false;
+  }
+
   get chatQueueLength(): number {
     return this.limiter.length;
   }
@@ -376,6 +390,10 @@ export class BotInstance extends EventEmitter {
       }
       case "goto-player": {
         const player = str(action.player, "player");
+        if (this.isSelfPlayerName(player)) {
+          this.log.warn(`goto-player reddedildi: hedef botun kendisi (${player})`);
+          return null;
+        }
         const range = clampRange(action.range ?? 2);
         return this.tasks.enqueue(
           { type, label: `oyuncuya git: ${player}`, priority: PRIORITY.USER, params: { player, range } },
@@ -389,6 +407,10 @@ export class BotInstance extends EventEmitter {
           return null;
         }
         const player = str(action.player, "player");
+        if (this.isSelfPlayerName(player)) {
+          this.log.warn(`follow reddedildi: bot kendisini takip edemez (${player})`);
+          return null;
+        }
         const distance = clampRange(action.distance ?? 3);
         this.combat.setFollow(player, true, distance);
         return this.tasks.currentSummary?.type === "follow" ? this.tasks.currentSummary : null;
@@ -408,16 +430,30 @@ export class BotInstance extends EventEmitter {
       // yakındaki oyuncular — toggle companion
       case "social-follow": {
         const enabled = action.enabled !== false && action.enabled !== "false";
-        this.combat.setFollow(str(action.player, "player"), enabled, action.distance != null ? Number(action.distance) : undefined);
+        const player = str(action.player, "player");
+        if (enabled && this.isSelfPlayerName(player)) {
+          this.log.warn(`social-follow reddedildi: bot kendisini takip edemez (${player})`);
+          return null;
+        }
+        this.combat.setFollow(player, enabled, action.distance != null ? Number(action.distance) : undefined);
         return null;
       }
       case "social-attack": {
         const enabled = action.enabled !== false && action.enabled !== "false";
-        this.combat.setAttack(str(action.player, "player"), enabled);
+        const player = str(action.player, "player");
+        if (enabled && this.isSelfPlayerName(player)) {
+          this.log.warn(`social-attack reddedildi: bot kendisine saldıramaz (${player})`);
+          return null;
+        }
+        this.combat.setAttack(player, enabled);
         return null;
       }
       case "social-protect": {
         const enabled = action.enabled !== false && action.enabled !== "false";
+        if (enabled && this.isSelfPlayerName(str(action.player, "player"))) {
+          this.log.warn(`social-protect reddedildi: bot kendisini koruyamaz (${action.player})`);
+          return null;
+        }
         const wl = Array.isArray(action.whitelist)
           ? (action.whitelist as unknown[]).map(String)
           : typeof action.whitelist === "string"

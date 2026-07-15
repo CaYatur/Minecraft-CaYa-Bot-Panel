@@ -72,6 +72,21 @@ export class CombatService {
 
   constructor(private readonly instance: BotInstance) {}
 
+  /** Bot kendi kullanıcı adı mı? (takip/saldırı/koruma hedefi olamaz) */
+  private isSelfName(name: string): boolean {
+    const n = name.trim().toLowerCase();
+    if (!n) return false;
+    const cfg = this.instance.config.username?.toLowerCase();
+    if (cfg && n === cfg) return true;
+    try {
+      const live = this.bot?.username?.toLowerCase() ?? this.instance.bot?.username?.toLowerCase();
+      if (live && n === live) return true;
+    } catch {
+      /* */
+    }
+    return false;
+  }
+
   private markThreat(label: string, ttlMs = 20_000) {
     if (!label) return;
     this.recentThreats.set(label, Date.now() + ttlMs);
@@ -374,6 +389,11 @@ getRuntime(): CombatRuntime {
   setFollow(player: string, enabled: boolean, distance?: number) {
     const name = player.trim();
     if (!name) throw new Error("Oyuncu adı boş");
+    // Bot asla kendisini takip etmez (panel / otomasyon / sohbet echo)
+    if (enabled && this.isSelfName(name)) {
+      this.log().warn(`Takip reddedildi: bot kendisini takip edemez (${name})`);
+      return this.getRuntime();
+    }
     if (distance != null && Number.isFinite(distance)) {
       this.companion.followDistance = Math.max(1, Math.min(16, Math.floor(distance)));
     }
@@ -420,6 +440,10 @@ getRuntime(): CombatRuntime {
   setAttack(player: string, enabled: boolean) {
     const name = player.trim();
     if (!name) throw new Error("Oyuncu adı boş");
+    if (enabled && this.isSelfName(name)) {
+      this.log().warn(`Saldırı reddedildi: bot kendisine saldıramaz (${name})`);
+      return this.getRuntime();
+    }
     if (!enabled) {
       if (this.companion.attackPlayer?.toLowerCase() === name.toLowerCase()) {
         this.companion.attackPlayer = null;
@@ -458,6 +482,10 @@ getRuntime(): CombatRuntime {
   ) {
     const name = player.trim();
     if (!name) throw new Error("Oyuncu adı boş");
+    if (enabled && this.isSelfName(name)) {
+      this.log().warn(`Koruma reddedildi: bot kendisini koruma hedefi yapamaz (${name})`);
+      return this.getRuntime();
+    }
     if (opts?.followDistance != null) {
       this.companion.followDistance = Math.max(1, Math.min(16, Math.floor(opts.followDistance)));
     }
@@ -818,6 +846,9 @@ getRuntime(): CombatRuntime {
   enqueueAttackPlayer(playerName: string) {
     const name = playerName.trim();
     if (!name) throw new Error("Oyuncu adı boş olamaz");
+    if (this.isSelfName(name)) {
+      throw new Error("Bot kendisine saldıramaz");
+    }
     return this.instance.tasks.enqueue(
       {
         type: "attack",

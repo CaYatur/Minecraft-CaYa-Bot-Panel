@@ -300,11 +300,19 @@ export class BotManager extends EventEmitter {
         if (info.botId) this.rules.onBotEvent(info.botId, "died");
       }
     );
-    inst.on("chatParsed", (entry: { botId: string; username?: string; text: string; kind: string }) => {
-      if (entry.kind === "player" || entry.kind === "whisper") {
-        this.rules.onChat(entry.botId, entry.username, entry.text);
+    inst.on(
+      "chatParsed",
+      (entry: { botId: string; username?: string; text: string; kind: string; self?: boolean }) => {
+        // Botun kendi mesajı (echo) otomasyonu ASLA tetiklemez — aksi halde
+        // "gel" / "bot durum" gibi kelimeler kendi cevabında tekrar ateşlenir.
+        if (entry.self) return;
+        const me = inst.config.username?.toLowerCase();
+        if (entry.username && me && entry.username.toLowerCase() === me) return;
+        if (entry.kind === "player" || entry.kind === "whisper") {
+          this.rules.onChat(entry.botId, entry.username, entry.text);
+        }
       }
-    });
+    );
     inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
     inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
     inst.on("attacked", (p: { botId: string; attacker?: string; source: "mob" | "player" }) => {
