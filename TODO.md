@@ -551,6 +551,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Faz 6 dövüş: mineflayer-pvp kullanılmadı; `CombatService` + `RealismLayer` (custom). Snapshot'a `combat` alanı ve `bot:combat` socket eklendi. Ölüm → `ölüm-<username>` waypoint (BotManager deathAt).
 - 2026-07-15 — Eşya/maden listesi için **minecraft-data** (sürüme göre, npm paketi; web scrape değil) — her sunucu profili `version` alanı ile katalog çözülür; `auto` → 1.20.4 fallback.
 - 2026-07-15 — Faz 13 açıldı: yakın oyuncu UI + otomasyon formu + katalog; çekirdek RuleEngine/katalog dosyaları WIP (`[~]`).
+- 2026-07-15 — Paper sohbet isimleri: 1.19+ `playerChat` gönderici UUID + `chat`/`whisper` olayları + JSON/clickEvent + öğrenilmiş prefix; sadece `message.toString()` yetmez (isim ayrı alanda).
 
 ---
 

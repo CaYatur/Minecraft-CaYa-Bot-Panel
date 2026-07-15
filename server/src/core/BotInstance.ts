@@ -3,7 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
-import { parseChatComponent, parseChatMessage } from "../modules/chat/parse";
+import {
+  applyLearnedPrefix,
+  parseChatComponent,
+  parseChatMessage,
+  resolveUsernameFromSender,
+  stripColorCodes
+} from "../modules/chat/parse";
 import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
 import { GatherService } from "../modules/gather";
@@ -49,6 +55,10 @@ export class BotInstance extends EventEmitter {
   private foodWatchTimer: NodeJS.Timeout | null = null;
   private nearbyTick = 0;
   private lastNearbyKey = "";
+  /** son 2 sn sohbet dedup (chat olayı + message çiftini önle) */
+  private recentChatKeys = new Map<string, number>();
+  /** başarılı isim+ayırıcı kalıpları (plugin prefix öğrenme) */
+  private learnedChatUsers = new Set<string>();
   private wantsRunning = false;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -479,6 +489,8 @@ export class BotInstance extends EventEmitter {
       }
       this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
       this.emit("spawned", { botId: this.config.id });
+      // yakındaki oyuncular paneli hemen dolsun
+      setTimeout(() => this.emitNearby(true), 500);
     });
 
     bot.on("respawn", () => {
@@ -536,8 +548,24 @@ export class BotInstance extends EventEmitter {
       }
     });
 
-    // All incoming chat/system messages (Faz 3). "game_info" = actionbar spam, skipped.
-    bot.on("message", (jsonMsg: any, position: string) => {
+    /**
+     * Sohbet (Paper / plugin akıllı parse):
+     * 1) mineflayer `chat`/`whisper` — kullanıcı adı hazır (legacy kalıp)
+     * 2) `message` + sender UUID (1.19+ playerChat paketi 4. arg)
+     * 3) JSON component (chat.type.text / clickEvent /msg)
+     * 4) düz metin regex + öğrenilmiş isimler
+     * Dedup: aynı oyuncu+metin 2 sn içinde iki kez yazılmaz.
+     */
+    bot.on("chat", (username: string, message: string) => {
+      if (!username || message == null) return;
+      this.ingestPlayerChat(username, String(message), "player");
+    });
+    bot.on("whisper", (username: string, message: string) => {
+      if (!username || message == null) return;
+      this.ingestPlayerChat(username, String(message), "whisper");
+    });
+
+    bot.on("message", (jsonMsg: any, position: string, sender?: unknown) => {
       if (position === "game_info") return;
       let plain = "";
       try {
@@ -546,35 +574,104 @@ export class BotInstance extends EventEmitter {
         return;
       }
       if (!plain.trim()) return;
+
       let ansi: string | undefined;
       try {
         ansi = typeof jsonMsg?.toAnsi === "function" ? jsonMsg.toAnsi() : undefined;
       } catch {
         ansi = undefined;
       }
-      // 1) JSON component (chat.type.text with player) — plugin/vanilla isim kaybını önler
-      // 2) düz metin regex (Essentials / LuckPerms / AuthMe satırları)
+
+      // A) 1.19+ playerChat: sender UUID → tab list ismi (Paper'da en güvenilir)
+      const fromUuid = resolveUsernameFromSender(sender, bot.players as Record<string, { uuid?: string }>);
+      // B) component (translate / clickEvent /msg)  C) düz metin regex
       const fromJson = parseChatComponent(jsonMsg);
       const fromPlain = parseChatMessage(plain);
-      const parsed =
-        fromJson?.username != null
-          ? fromJson
-          : fromPlain.username != null
-            ? fromPlain
-            : fromJson ?? fromPlain;
+
+      let username = fromUuid ?? fromJson?.username ?? fromPlain.username;
+      let text = (fromJson?.text || fromPlain.text || plain).trim();
+      let kind: "player" | "whisper" | "server" = username
+        ? fromJson?.kind === "whisper" || fromPlain.kind === "whisper"
+          ? "whisper"
+          : "player"
+        : "server";
+
+      // D) öğrenilmiş isimler — plugin prefix değişse bile
+      if (!username) {
+        for (const known of this.learnedChatUsers) {
+          const hit = applyLearnedPrefix(plain, known);
+          if (hit?.username) {
+            username = hit.username;
+            text = hit.text;
+            kind = "player";
+            break;
+          }
+        }
+      }
+
+      // E) position chat + UUID yok ama düz metin kısa ve sistem cümlesi değilse:
+      //    hâlâ sunucu mesajı say (yanlış isim uydurma)
+      if (username && kind !== "server") {
+        const cleaned = applyLearnedPrefix(plain, username, text);
+        if (cleaned?.text) text = cleaned.text;
+        // UUID geldiğinde toString() sadece "selam" olabilir — text zaten body
+        if (fromUuid && (!fromJson?.username && !fromPlain.username)) {
+          // plain tüm satır isim içermiyorsa body = plain
+          if (!stripColorCodes(plain).toLowerCase().includes(username.toLowerCase())) {
+            text = stripColorCodes(plain);
+          }
+        }
+        this.ingestPlayerChat(username, text || stripColorCodes(plain), kind === "whisper" ? "whisper" : "player", ansi);
+        return;
+      }
+
+      // sunucu / sistem (AuthMe, join, vb.)
+      const key = `s:${stripColorCodes(plain)}`;
+      if (!this.noteChatKey(key)) return;
       const entry: ChatEntry = {
         ts: Date.now(),
         botId: this.config.id,
-        kind: parsed.kind,
-        username: parsed.username,
-        self: parsed.username != null && parsed.username.toLowerCase() === this.config.username.toLowerCase(),
-        text: parsed.kind === "server" ? plain : parsed.text || plain,
+        kind: "server",
+        text: plain,
         ansi
       };
       this.pushChat(entry);
-      // otomasyon motoru (Faz 11) — BotManager dinler
       this.emit("chatParsed", entry);
     });
+  }
+
+  /** oyuncu sohbetini tek kanaldan yaz (dedup + öğrenme) */
+  private ingestPlayerChat(username: string, message: string, kind: "player" | "whisper", ansi?: string) {
+    const text = message.trimEnd();
+    const key = `${kind[0]}:${username.toLowerCase()}:${text}`;
+    if (!this.noteChatKey(key)) return;
+    this.learnedChatUsers.add(username);
+    // set sınırla
+    if (this.learnedChatUsers.size > 200) {
+      const first = this.learnedChatUsers.values().next().value;
+      if (first) this.learnedChatUsers.delete(first);
+    }
+    const entry: ChatEntry = {
+      ts: Date.now(),
+      botId: this.config.id,
+      kind,
+      username,
+      self: username.toLowerCase() === this.config.username.toLowerCase(),
+      text,
+      ansi
+    };
+    this.pushChat(entry);
+    this.emit("chatParsed", entry);
+  }
+
+  private noteChatKey(key: string): boolean {
+    const now = Date.now();
+    for (const [k, t] of this.recentChatKeys) {
+      if (now - t > 2000) this.recentChatKeys.delete(k);
+    }
+    if (this.recentChatKeys.has(key)) return false;
+    this.recentChatKeys.set(key, now);
+    return true;
   }
 
   private teardownBot() {
