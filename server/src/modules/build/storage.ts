@@ -203,7 +203,7 @@ async function withPortableShulker(
 
   const placed = bot.blockAt(location.target);
   if (!placed || placed.name !== shulkerName) {
-    throw new Error("Shulker placeilemedi");
+    throw new Error("Could not place shulker");
   }
 
   let container: OpenContainer | null = null;

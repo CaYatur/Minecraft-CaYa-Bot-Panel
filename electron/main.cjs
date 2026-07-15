@@ -61,10 +61,12 @@ function createWindow() {
 app.whenReady().then(async () => {
   try {
     await startServer();
+    createWindow();
   } catch (err) {
     console.error("Failed to start Minecraft CaYa Bot Panel server:", err);
+    app.quit();
+    return;
   }
-  createWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
