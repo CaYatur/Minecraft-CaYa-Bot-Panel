@@ -563,9 +563,9 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           ))}
         </div>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          Goto yolu yoksa 2–4 blok gap jump dener. Merdiven: önce pathfinder, olmazsa continuous tırman (forward+jump
-          basılı); düşünce MLG. Path sırasında bakış karışmaz (1-up geri-at döngüsü yok). Görev:{" "}
-          <span className="mono text-zinc-400">parkour-goto</span>.
+          Pathfinder parkour takip/goto’da açıkken atlanabilir boşluklardan atlar (safe-only değil). Yol yoksa 2–4
+          blok özel gap jump. Merdiven: path + manuel; düşünce MLG. Zıplarken bakış basılmaz (geri-at azalır).
+          Görev: <span className="mono text-zinc-400">parkour-goto</span>.
         </p>
 
         <div className="mt-3 border-t border-zinc-800 pt-2">
