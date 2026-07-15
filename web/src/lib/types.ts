@@ -40,6 +40,12 @@ export interface BotConfig {
       mlgTriggerBlocks: number;
       onlyWhenDangerous: boolean;
     };
+    waterGuard?: {
+      enabled: boolean;
+      surfaceOxygenBelow: number;
+      seekLand: boolean;
+      landSearchRadius: number;
+    };
   };
   chat: { minMessageIntervalMs: number };
   movement: {

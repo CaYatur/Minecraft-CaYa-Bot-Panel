@@ -120,6 +120,13 @@ export interface BotConfig {
       mlgTriggerBlocks: number;
       onlyWhenDangerous: boolean;
     };
+    /** suda boğulmama + karaya çık (spawn/otomatik) */
+    waterGuard?: {
+      enabled: boolean;
+      surfaceOxygenBelow: number;
+      seekLand: boolean;
+      landSearchRadius: number;
+    };
   };
   chat: {
     minMessageIntervalMs: number;
@@ -315,6 +322,12 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         lethalHealthMargin: 2,
         mlgTriggerBlocks: 3.2,
         onlyWhenDangerous: true
+      },
+      waterGuard: {
+        enabled: true,
+        surfaceOxygenBelow: 14,
+        seekLand: true,
+        landSearchRadius: 16
       }
     },
     chat: { minMessageIntervalMs: 1500 },

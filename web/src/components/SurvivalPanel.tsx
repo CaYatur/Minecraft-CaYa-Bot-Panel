@@ -25,6 +25,13 @@ const defaultFg = {
   onlyWhenDangerous: true
 };
 
+const defaultWg = {
+  enabled: true,
+  surfaceOxygenBelow: 14,
+  seekLand: true,
+  landSearchRadius: 16
+};
+
 /** Faz 7 — Hayatta kalma + düşüş kurtarma (MLG). */
 export function SurvivalPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
@@ -46,6 +53,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
   if (!bot) return null;
   const s = bot.config.survival;
   const fg = { ...defaultFg, ...(s.fallGuard ?? {}) };
+  const wg = { ...defaultWg, ...(s.waterGuard ?? {}) };
   const online = bot.status === "online";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
@@ -306,6 +314,46 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           ) : null}
           {fgLive?.lastAction ? <p className="mono mt-1 text-zinc-600">son: {fgLive.lastAction}</p> : null}
         </div>
+      </div>
+
+      {/* Su / boğulma koruması */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Su koruması</div>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={wg.enabled}
+            onChange={(e) => void patch({ waterGuard: { ...wg, enabled: e.target.checked } })}
+          />
+          Suda boğulmama + karaya çık (spawn dahil otomatik)
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={wg.seekLand}
+            onChange={(e) => void patch({ waterGuard: { ...wg, seekLand: e.target.checked } })}
+          />
+          Yakındaki karaya yüz / yürü
+        </label>
+        <label className="mb-2 flex flex-col gap-1 text-[10px] text-zinc-500 max-w-xs">
+          Oksijen eşiği (0–20) — altında acil yüzeye
+          <input
+            type="number"
+            min={1}
+            max={20}
+            defaultValue={wg.surfaceOxygenBelow}
+            onBlur={(e) =>
+              void patch({
+                waterGuard: { ...wg, surfaceOxygenBelow: Math.max(1, Math.min(20, Number(e.target.value) || 14)) }
+              })
+            }
+            className="mono w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+          />
+        </label>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Kafa suda iken yukarı yüzer (space/jump). Yüzeyde nefes alır, boğulmaz. Derin suda veya düşük
+          oksijende yakındaki karaya pathfinder ile çıkar. Okyanus spawn’da otomatik devreye girer.
+        </p>
       </div>
     </div>
   );
