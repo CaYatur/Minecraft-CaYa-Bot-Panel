@@ -47,9 +47,18 @@ export interface CompanionState {
   followPlayer: string | null;
   followDistance: number;
   attackPlayer: string | null;
+  /**
+   * Korunan oyuncular (çoklu). Bot ana kişiyi (`followPlayer`) takip eder;
+   * listedekilerden herhangi birinin yanında tehdit olursa müdahale eder.
+   */
+  protectPlayers: string[];
+  /**
+   * Geriye uyum / özet etiket: takip edilen korunan veya listenin ilki.
+   * @deprecated paneller `protectPlayers` kullanmalı
+   */
   protectPlayer: string | null;
   protectSettings: {
-    /** korunanın etrafında tehdit tarama yarıçapı */
+    /** her korunanın etrafında tehdit tarama yarıçapı */
     range: number;
     retaliateMobs: boolean;
     retaliatePlayers: boolean;

@@ -47,6 +47,9 @@ export interface CompanionState {
   followPlayer: string | null;
   followDistance: number;
   attackPlayer: string | null;
+  /** çoklu koruma listesi — ana kişi followPlayer ile takip edilir */
+  protectPlayers: string[];
+  /** özet: takip edilen korunan veya listenin ilki */
   protectPlayer: string | null;
   protectSettings: {
     range: number;

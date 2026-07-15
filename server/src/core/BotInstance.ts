@@ -293,7 +293,13 @@ export class BotInstance extends EventEmitter {
           range: action.range != null ? Number(action.range) : undefined,
           retaliateMobs: action.retaliateMobs != null ? Boolean(action.retaliateMobs) : undefined,
           retaliatePlayers: action.retaliatePlayers != null ? Boolean(action.retaliatePlayers) : undefined,
-          whitelist: wl
+          whitelist: wl,
+          setAsMain:
+            action.setAsMain === true || action.setAsMain === "true"
+              ? true
+              : action.setAsMain === false || action.setAsMain === "false"
+                ? false
+                : undefined
         });
         return null;
       }

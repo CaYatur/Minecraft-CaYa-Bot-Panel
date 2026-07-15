@@ -22,6 +22,7 @@ const defaultCompanion = (): CompanionState => ({
   followPlayer: null,
   followDistance: 3,
   attackPlayer: null,
+  protectPlayers: [],
   protectPlayer: null,
   protectSettings: {
     range: 10,
@@ -54,14 +55,42 @@ export class CombatService {
   constructor(private readonly instance: BotInstance) {}
 
   getRuntime(): CombatRuntime {
+    const protectPlayers = [...this.companion.protectPlayers];
+    const protectPlayer = this.primaryProtectLabel();
     return {
       defendMode: this.instance.config.combat.defendMode,
       fighting: this.mode !== "idle",
       mode: this.mode,
       activeTarget: this.activeTargetLabel,
       lastDeath: this.lastDeath,
-      companion: { ...this.companion, protectSettings: { ...this.companion.protectSettings, whitelist: [...this.companion.protectSettings.whitelist] } }
+      companion: {
+        ...this.companion,
+        protectPlayers,
+        protectPlayer,
+        protectSettings: {
+          ...this.companion.protectSettings,
+          whitelist: [...this.companion.protectSettings.whitelist]
+        }
+      }
     };
+  }
+
+  /** Ana korunan etiketi: takip edilen listedeyse o, yoksa ilk korunan */
+  private primaryProtectLabel(): string | null {
+    const list = this.companion.protectPlayers;
+    if (!list.length) return null;
+    const follow = this.companion.followPlayer;
+    if (follow && list.some((p) => p.toLowerCase() === follow.toLowerCase())) return follow;
+    return list[0] ?? null;
+  }
+
+  private isProtectedName(name: string): boolean {
+    const n = name.toLowerCase();
+    return this.companion.protectPlayers.some((p) => p.toLowerCase() === n);
+  }
+
+  private hasProtect(): boolean {
+    return this.companion.protectPlayers.length > 0;
   }
 
   private emitCombat() {
@@ -102,7 +131,7 @@ export class CombatService {
     bot.on("entityGone", this.entityGoneHook);
 
     // reconnect sonrası companion görevlerini yeniden başlat
-    if (this.companion.protectPlayer) this.startProtectLoop();
+    if (this.hasProtect()) this.startProtectLoop();
     else if (this.companion.followPlayer) this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance);
     if (this.companion.attackPlayer) this.ensureAttackTask(this.companion.attackPlayer);
 
@@ -140,12 +169,12 @@ export class CombatService {
     this.attackTaskId = null;
     this.cancelTasksOfType("attack");
     this.cancelTasksOfType("defend");
-    if (!this.companion.protectPlayer && !this.companion.followPlayer) {
-      this.setMode("idle", null);
-    } else if (this.companion.protectPlayer) {
-      this.setMode("protecting", this.companion.protectPlayer);
-    } else {
+    if (this.hasProtect()) {
+      this.setMode("protecting", this.primaryProtectLabel());
+    } else if (this.companion.followPlayer) {
       this.setMode("idle", this.companion.followPlayer);
+    } else {
+      this.setMode("idle", null);
     }
     this.log().info("Dövüş bırakıldı", reason);
     this.emitCombat();
@@ -169,7 +198,7 @@ export class CombatService {
 
   /**
    * Takip aç/kapa. distance = durma mesafesi (blok).
-   * enabled=false → takip iptal (koruma açıksa korunan hariç).
+   * Koruma listesi doluyken takip tamamen kapanmaz: ana kişi değiştirilebilir.
    */
   setFollow(player: string, enabled: boolean, distance?: number) {
     const name = player.trim();
@@ -179,30 +208,40 @@ export class CombatService {
     }
     if (!enabled) {
       if (this.companion.followPlayer?.toLowerCase() === name.toLowerCase()) {
-        this.companion.followPlayer = null;
-        // koruma aynı kişiye ise takip kapanınca koruma da kapanır mı? hayır — koruma tekrar açar
-        if (this.companion.protectPlayer?.toLowerCase() === name.toLowerCase()) {
-          // koruma hâlâ açık → takip zorla açık kalır
-          this.companion.followPlayer = name;
-          this.ensureFollowTask(name, this.companion.followDistance);
-          this.log().info("Koruma açık — takip kapatılamaz; önce korumayı kapat");
-          this.emitCombat();
-          return this.getRuntime();
+        if (this.hasProtect()) {
+          // koruma açık: takip ana kişiyi listeden tut (aynı kişi veya ilk korunan)
+          const fallback =
+            this.companion.protectPlayers.find((p) => p.toLowerCase() !== name.toLowerCase()) ??
+            this.companion.protectPlayers[0] ??
+            null;
+          if (fallback) {
+            this.companion.followPlayer = fallback;
+            this.ensureFollowTask(fallback, this.companion.followDistance, true);
+            this.log().info(
+              fallback.toLowerCase() === name.toLowerCase()
+                ? "Koruma açık — takip kapatılamaz; önce tüm korumaları kapat"
+                : `Takip ana kişi değişti (koruma): ${fallback}`
+            );
+            if (this.hasProtect()) this.setMode("protecting", this.primaryProtectLabel());
+            this.emitCombat();
+            return this.getRuntime();
+          }
         }
+        this.companion.followPlayer = null;
         this.cancelTasksOfType("follow");
       }
       this.emitCombat();
       return this.getRuntime();
     }
-    // attack başka birine ise çakışma yok; aynı kişiye attack+follow OK değil — attack kapat
+    // aynı kişiye attack+follow çakışmasın
     if (this.companion.attackPlayer?.toLowerCase() === name.toLowerCase()) {
       this.companion.attackPlayer = null;
       this.cancelTasksOfType("attack");
     }
     this.companion.followPlayer = name;
-    // mesafe değişmişse görev etiketini yenile (force)
     this.ensureFollowTask(name, this.companion.followDistance, true);
     this.log().info(`Takip açıldı: ${name} (mesafe ${this.companion.followDistance})`);
+    if (this.hasProtect()) this.setMode("protecting", this.primaryProtectLabel());
     this.emitCombat();
     return this.getRuntime();
   }
@@ -215,20 +254,19 @@ export class CombatService {
         this.companion.attackPlayer = null;
         this.cancelTasksOfType("attack");
         if (this.mode === "attacking") {
-          if (this.companion.protectPlayer) this.setMode("protecting", this.companion.protectPlayer);
+          if (this.hasProtect()) this.setMode("protecting", this.primaryProtectLabel());
           else this.setMode("idle", this.companion.followPlayer);
         }
       }
       this.emitCombat();
       return this.getRuntime();
     }
-    // koruma hedefine saldırma
-    if (this.companion.protectPlayer?.toLowerCase() === name.toLowerCase()) {
+    if (this.isProtectedName(name)) {
       throw new Error("Korunan oyuncuya saldırı açılamaz");
     }
     this.companion.attackPlayer = name;
-    // koruma açıkken takip korunan kişide kalsın; yoksa saldırı takibi kapatır
-    if (!this.companion.protectPlayer) {
+    // koruma yoksa saldırı takibi kapatır; koruma varsa ana kişi takibi kalır
+    if (!this.hasProtect()) {
       this.companion.followPlayer = null;
       this.cancelTasksOfType("follow");
     }
@@ -238,10 +276,14 @@ export class CombatService {
     return this.getRuntime();
   }
 
+  /**
+   * Koruma aç/kapa (çoklu). enabled=true → listeye ekle;
+   * ilk korunan için takip yoksa otomatik takip; ek korunanlar takip değiştirmez.
+   */
   setProtect(
     player: string,
     enabled: boolean,
-    opts?: Partial<CompanionState["protectSettings"]> & { followDistance?: number }
+    opts?: Partial<CompanionState["protectSettings"]> & { followDistance?: number; setAsMain?: boolean }
   ) {
     const name = player.trim();
     if (!name) throw new Error("Oyuncu adı boş");
@@ -258,33 +300,60 @@ export class CombatService {
     }
 
     if (!enabled) {
-      if (this.companion.protectPlayer?.toLowerCase() === name.toLowerCase()) {
-        this.companion.protectPlayer = null;
+      const before = this.companion.protectPlayers.length;
+      this.companion.protectPlayers = this.companion.protectPlayers.filter((p) => p.toLowerCase() !== name.toLowerCase());
+      if (this.companion.protectPlayers.length === before) {
+        this.emitCombat();
+        return this.getRuntime();
+      }
+      this.log().info(`Koruma listesinden çıkarıldı: ${name}`, `kalan: ${this.companion.protectPlayers.join(", ") || "—"}`);
+
+      if (!this.hasProtect()) {
         this.stopProtectLoop();
-        // takip açık kalsın (kullanıcı istese kapatır) — koruma kapanınca takip de kapanır mı?
-        // istek: koruma açınca takip açılır; kapanınca takip kullanıcıda kalabilir — biz takip de kapatıyoruz netlik için
+        // son koruma kalktı — takip kullanıcıda kalsın istersen; netlik: takip de kapanır
         this.companion.followPlayer = null;
         this.cancelTasksOfType("follow");
         this.setMode("idle", null);
-        this.log().info(`Koruma kapatıldı: ${name}`);
+      } else {
+        // ana takip bu kişiyse başka korunana kaydır
+        if (this.companion.followPlayer?.toLowerCase() === name.toLowerCase()) {
+          const next = this.companion.protectPlayers[0]!;
+          this.companion.followPlayer = next;
+          this.ensureFollowTask(next, this.companion.followDistance, true);
+        }
+        this.setMode("protecting", this.primaryProtectLabel());
       }
+      this.companion.protectPlayer = this.primaryProtectLabel();
       this.emitCombat();
       return this.getRuntime();
     }
 
-    // koruma aç → otomatik takip
-    this.companion.protectPlayer = name;
-    this.companion.followPlayer = name;
+    // ekle (yinelenme yok)
+    if (!this.isProtectedName(name)) {
+      this.companion.protectPlayers.push(name);
+    }
+    this.companion.protectPlayer = this.primaryProtectLabel();
+
     if (this.companion.attackPlayer?.toLowerCase() === name.toLowerCase()) {
       this.companion.attackPlayer = null;
       this.cancelTasksOfType("attack");
     }
-    this.ensureFollowTask(name, this.companion.followDistance, true);
+
+    // ilk korunan veya setAsMain → ana takip
+    const becomeMain = opts?.setAsMain === true || !this.companion.followPlayer;
+    if (becomeMain) {
+      this.companion.followPlayer = name;
+      this.ensureFollowTask(name, this.companion.followDistance, true);
+    } else if (this.companion.followPlayer) {
+      // ana kişi sabit; takip görevini canlı tut
+      this.ensureFollowTask(this.companion.followPlayer, this.companion.followDistance);
+    }
+
     this.startProtectLoop();
-    this.setMode("protecting", name);
+    this.setMode("protecting", this.primaryProtectLabel());
     this.log().info(
-      `Koruma açıldı: ${name}`,
-      `mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
+      `Koruma: ${this.companion.protectPlayers.join(", ")}`,
+      `ana takip=${this.companion.followPlayer ?? "—"} mob=${this.companion.protectSettings.retaliateMobs} oyuncu=${this.companion.protectSettings.retaliatePlayers} wl=${this.companion.protectSettings.whitelist.join(",") || "—"}`
     );
     this.emitCombat();
     return this.getRuntime();
@@ -329,9 +398,13 @@ export class CombatService {
 
   /** takip/koruma bitişinde doğru moda dön */
   private restoreCompanionMode() {
-    if (this.companion.protectPlayer) {
-      this.setMode("protecting", this.companion.protectPlayer);
-      this.ensureFollowTask(this.companion.protectPlayer, this.companion.followDistance);
+    if (this.hasProtect()) {
+      const follow = this.companion.followPlayer ?? this.companion.protectPlayers[0] ?? null;
+      if (follow) {
+        this.companion.followPlayer = follow;
+        this.ensureFollowTask(follow, this.companion.followDistance);
+      }
+      this.setMode("protecting", this.primaryProtectLabel());
       return;
     }
     if (this.companion.attackPlayer) {
@@ -367,49 +440,61 @@ export class CombatService {
     }
   }
 
-  /** Korunanın yanındaki tehditleri tara → DEFENSE saldırı */
+  /**
+   * Tüm korunanların yanındaki tehditleri tara → DEFENSE.
+   * Ana kişi (followPlayer) takipte kalır; ek korunanlar menzildeyse onlara da müdahale.
+   */
   private protectTick() {
-    const ward = this.companion.protectPlayer;
-    if (!ward || this.instance.status !== "online") return;
+    if (!this.hasProtect() || this.instance.status !== "online") return;
     const bot = this.bot ?? this.instance.bot;
     if (!bot?.entity) return;
 
-    // takip hâlâ ward'a bağlı mı
-    if (this.companion.followPlayer !== ward) {
-      this.companion.followPlayer = ward;
-      this.ensureFollowTask(ward, this.companion.followDistance);
-    }
-
-    const wardEnt = bot.players[ward]?.entity;
-    if (!wardEnt) return;
+    // ana takip: followPlayer veya ilk korunan
+    const main = this.companion.followPlayer ?? this.companion.protectPlayers[0]!;
+    if (!this.companion.followPlayer) this.companion.followPlayer = main;
+    this.ensureFollowTask(main, this.companion.followDistance);
 
     const settings = this.companion.protectSettings;
     const wl = new Set(settings.whitelist.map((w) => w.toLowerCase()));
-    wl.add(ward.toLowerCase());
+    for (const p of this.companion.protectPlayers) wl.add(p.toLowerCase());
     wl.add(bot.username.toLowerCase());
 
+    // korunan entity'ler (görünenler)
+    const wardEntities: { name: string; ent: Entity }[] = [];
+    for (const name of this.companion.protectPlayers) {
+      const ent = bot.players[name]?.entity;
+      if (ent) wardEntities.push({ name, ent });
+    }
+    if (!wardEntities.length) return;
+
     let best: Entity | null = null;
-    let bestD = settings.range;
+    let bestD = settings.range + 0.01;
+    let bestWard = wardEntities[0]!.name;
 
-    for (const id in bot.entities) {
-      const e = bot.entities[id];
-      if (!e || e === bot.entity || e === wardEnt) continue;
-      const d = wardEnt.position.distanceTo(e.position);
-      if (d > settings.range) continue;
+    for (const { name: wardName, ent: wardEnt } of wardEntities) {
+      for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (!e || e === bot.entity) continue;
+        // korunanların kendisine saldırma
+        if (wardEntities.some((w) => w.ent === e)) continue;
+        const d = wardEnt.position.distanceTo(e.position);
+        if (d > settings.range) continue;
 
-      const player = isPlayerEntity(e);
-      const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
-      if (player) {
-        if (!settings.retaliatePlayers) continue;
-        const uname = e.username ?? "";
-        if (uname && wl.has(uname.toLowerCase())) continue;
-      } else if (hostile) {
-        if (!settings.retaliateMobs) continue;
-      } else continue;
+        const player = isPlayerEntity(e);
+        const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
+        if (player) {
+          if (!settings.retaliatePlayers) continue;
+          const uname = e.username ?? "";
+          if (uname && wl.has(uname.toLowerCase())) continue;
+        } else if (hostile) {
+          if (!settings.retaliateMobs) continue;
+        } else continue;
 
-      if (d < bestD) {
-        bestD = d;
-        best = e;
+        if (d < bestD) {
+          bestD = d;
+          best = e;
+          bestWard = wardName;
+        }
       }
     }
 
@@ -421,9 +506,9 @@ export class CombatService {
     this.instance.tasks.enqueue(
       {
         type: "defend",
-        label: `koru→${label}`,
+        label: `koru(${bestWard})→${label}`,
         priority: PRIORITY.DEFENSE,
-        params: { target: label, ward },
+        params: { target: label, ward: bestWard },
         requeueOnPreempt: false
       },
       () => (token, report) => this.runDefend(best!, label, token, report)

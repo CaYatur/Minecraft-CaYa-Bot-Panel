@@ -710,3 +710,13 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 6. Typecheck server+web temiz.
 
 **Sınır:** Koruma ≈ ward menzilindeki düşman (gerçek “kim vurdu” entityHurt her sunucuda yok); flying-squid entity sınırlı.
+
+### 2026-07-15 — Grok 4.5 — Çoklu koruma (multi-ward)
+
+**İstek:** 2+ kişi koru; ana kişiyi takip et; diğer korunana saldırı olursa da müdahale.
+
+**Yapılanlar:**
+1. `protectPlayers: string[]` (+ özet `protectPlayer`); protectTick tüm ward menzillerini tarar.
+2. İlk Koru → ana takip; ek Koru → listeye ekler, takip değişmez; “Ana yap” ile ana kişi değişir.
+3. UI: koruma satırı vurgusu, `koru:[A,B] · ana:X`, Ana yap butonu.
+4. Typecheck temiz.

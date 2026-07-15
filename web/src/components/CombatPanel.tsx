@@ -49,6 +49,7 @@ export function CombatPanel({ botId }: { botId: string }) {
       followPlayer: null,
       followDistance: 3,
       attackPlayer: null,
+      protectPlayers: [],
       protectPlayer: null,
       protectSettings: { range: 10, retaliateMobs: true, retaliatePlayers: true, whitelist: [] }
     }
