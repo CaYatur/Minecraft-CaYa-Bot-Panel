@@ -3,7 +3,6 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
-import { assessTerrainCare, shouldAllowSprintForCare } from "./careful";
 import { easeLookAt, entityLookPoint, stepLookAlongMotion, stepLookAtEntity } from "./look";
 
 const GOTO_TIMEOUT_MS = 180_000;
@@ -25,11 +24,11 @@ function turnSpeed(instance: BotInstance): number {
 }
 
 /**
- * Pathfinder Movements — dikkatli:
- * - Parkur config’ten açık (atlanabilir boşluk)
- * - Sprint: sadece düz zeminde; basamak/boşluk/merdivende KAPALI
- *   (sprint jump erken atlamayı tetikler — walk jump daha doğru zamanlar)
- * - parkour-goto: sprint serbest (agresif)
+ * Pathfinder Movements:
+ * - follow/goto: allowParkour config’ten AÇIK (atlanabilir boşluklardan atlansın)
+ * - maxDrop: takipte ürkek düşme yok (config maxDrop, genelde 3)
+ * - parkour-goto: daha agresif maxDrop + gap jump yedek
+ * - Bakış path ile yarışırsa 1-up “geri at” olabilir — goto’da bakış yumuşak/sadece yerde
  */
 export function ensureMovement(
   instance: BotInstance,
@@ -41,25 +40,21 @@ export function ensureMovement(
 
   const cfg = moveCfg(instance);
   const mode = opts?.mode ?? (opts?.parkour ? "parkour" : "goto");
+  // Parkur açık: config allowParkour (varsayılan true). Kapalıysa sadece yürüyüş/1-up.
   const parkourOn =
     mode === "parkour" || opts?.parkour === true ? true : cfg.allowParkour !== false;
 
-  // Dikkatli sprint: arazi tarama
-  let sprintAllowed =
-    opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
-  if (mode !== "parkour" && sprintAllowed && cfg.humanize !== false) {
-    const care = assessTerrainCare(bot);
-    sprintAllowed = shouldAllowSprintForCare(care, sprintAllowed);
-  }
-
   const movements = new Movements(bot);
   movements.canDig = Boolean(cfg.canDig);
+  const sprintAllowed =
+    opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
   movements.allowParkour = parkourOn;
   movements.allow1by1towers = Boolean(cfg.allowTower);
 
   try {
     const baseDrop = Math.max(1, Math.min(6, cfg.maxDrop ?? 3));
+    // parkour-goto: biraz daha serbest drop; follow/goto: config (atlanır, uçuruma atılmaz)
     (movements as { maxDrop?: number }).maxDrop =
       mode === "parkour"
         ? Math.max(baseDrop, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2))
@@ -154,25 +149,9 @@ function pathfinderGoal(
         finish(() => reject(new Error("Bağlantı koptu — hareket görevi sonlandı.")));
         return;
       }
-      // Goto: careful sprint + bakış sadece düz/yerde
+      // Goto: hafif bakış (pathfinder look ile yarışmasın diye yavaş + sadece yerde)
       if (moveMode === "parkour") return;
       if (!bot.entity?.onGround) return;
-      const care = assessTerrainCare(bot);
-      if (care !== "flat") {
-        try {
-          bot.setControlState("sprint", false);
-        } catch {
-          /* */
-        }
-        // careful: movements sprint kapat
-        if (Math.random() < 0.35) {
-          ensureMovement(instance, {
-            allowSprintNow: false,
-            mode: moveMode
-          });
-        }
-        return;
-      }
       void (async () => {
         try {
           const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
@@ -307,10 +286,9 @@ export async function runGotoPlayer(
 }
 
 /**
- * Sürekli takip — dikkatli:
- * - Düz yolda sprint + parkur
- * - Basamak / boşluk / merdiven: sprint KAPALI (walk jump = doğru zamanlama)
- * - Zıplarken bakış yok
+ * Sürekli takip: GoalFollow + sprint + hedefe bakış.
+ * Pathfinder parkour config’ten açık → atlanabilir boşluklardan atlar (safe-only değil).
+ * Özel merdiven kilidi / kenar geri-çek YOK (eski “geri geri at” spam’ini tetiklemez).
  */
 export async function runFollow(
   instance: BotInstance,
@@ -321,7 +299,7 @@ export async function runFollow(
 ): Promise<void> {
   const holdDist = Math.max(1, Math.min(16, distance));
   const distJitter = () => holdDist + (Math.random() * 0.35 - 0.1);
-  const configSprint = () => moveCfg(instance).allowSprint !== false;
+  const canSprint = () => moveCfg(instance).allowSprint !== false;
   const parkourOn = () => moveCfg(instance).allowParkour !== false;
 
   const clearGoal = (bot: Bot) => {
@@ -355,11 +333,16 @@ export async function runFollow(
 
       const entity = bot.players[playerName]?.entity;
       if (entity) {
-        report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m)` });
+        report({
+          done: 0,
+          total: 0,
+          label: `${playerName} takip (${holdDist}m)${parkourOn() ? " · parkur" : ""}`
+        });
 
         ensureMovement(instance, {
-          allowSprintNow: configSprint(),
+          allowSprintNow: canSprint(),
           mode: "follow"
+          // parkour: config allowParkour (varsayılan açık)
         });
         const followBot = bot;
         try {
@@ -367,8 +350,6 @@ export async function runFollow(
         } catch {
           /* */
         }
-
-        let lastCareAt = 0;
 
         while (!token.cancelled && instance.status === "online") {
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
@@ -379,23 +360,12 @@ export async function runFollow(
           if (!ent) break;
 
           const d = bot.entity.position.distanceTo(ent.position);
-          const care = assessTerrainCare(bot);
-          const sprintNow = shouldAllowSprintForCare(care, configSprint());
 
-          // arazi değişince movements yenile (sprint on/off)
-          if (Date.now() - lastCareAt > 280) {
-            lastCareAt = Date.now();
+          if (Math.random() < 0.05) {
             ensureMovement(instance, {
-              allowSprintNow: sprintNow,
+              allowSprintNow: canSprint(),
               mode: "follow"
             });
-            if (!sprintNow) {
-              try {
-                bot.setControlState("sprint", false);
-              } catch {
-                /* */
-              }
-            }
           }
 
           if (Math.random() < 0.08) {
@@ -406,36 +376,26 @@ export async function runFollow(
             }
           }
 
-          // Zıplarken / careful: bakış basma (erken zıplama / geri-at azaltır)
-          const jumping = !bot.entity.onGround || (bot.entity.velocity?.y ?? 0) > 0.08;
-          if (!jumping && care === "flat") {
+          // Zıplarken bakış pathfinder yaw’ını bozmasın (geri-at azaltır)
+          const jumping =
+            !bot.entity.onGround || (bot.entity.velocity?.y ?? 0) > 0.08;
+          if (!jumping) {
             try {
               await stepLookAtEntity(bot, ent, turnSpeed(instance));
             } catch {
               /* */
             }
-          } else if (!jumping && care === "careful") {
-            // yavaş bakış
-            try {
-              await stepLookAtEntity(bot, ent, Math.min(10, turnSpeed(instance)));
-            } catch {
-              /* */
-            }
           }
 
-          const careLabel = care === "flat" ? "" : care === "careful" ? " · dikkatli" : " · yavaş";
           report({
             done: 0,
             total: 0,
-            label: `takip ${playerName} · ${d.toFixed(1)}m${sprintNow ? " · sprint" : ""}${
+            label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}${
               parkourOn() ? " · parkur" : ""
-            }${careLabel}`
+            }`
           });
 
-          // careful/hazard: biraz daha yavaş tick
-          const wait =
-            care === "hazard" ? 140 + Math.floor(Math.random() * 40) : care === "careful" ? 110 + Math.floor(Math.random() * 40) : 90 + Math.floor(Math.random() * 40);
-          await sleep(wait);
+          await sleep(90 + Math.floor(Math.random() * 50));
         }
 
         clearGoal(followBot);

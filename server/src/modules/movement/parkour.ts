@@ -202,39 +202,16 @@ export async function executeGapJump(
     /* */
   }
 
-  // Kenara yaklaş — erken zıplama yok: boşluk eşiğine kadar yürü, sonra zıpla
-  bot.setControlState("sprint", false);
+  // kenara hizalan — acele etme (daha emin iniş)
+  const edgeMs = g >= 4 ? 320 : g === 3 ? 220 : 150;
   bot.setControlState("forward", true);
-  const approachDeadline = Date.now() + (g >= 4 ? 900 : g === 3 ? 700 : 550);
-  while (Date.now() < approachDeadline && !token.cancelled && bot.entity) {
-    const pos = bot.entity.position;
-    const horiz = Math.hypot(pos.x - lx, pos.z - lz);
-    // iniş ~gap+0.5 blok; kenar eşiği: inişe gap mesafesi civarı
-    // gap=2 → ~1.4 blok kala zıpla; gap=3 → ~2.0; gap=4 → ~2.6
-    const jumpWhenCloserThan = g + 0.35;
-    if (horiz <= jumpWhenCloserThan && bot.entity.onGround) break;
-    // hâlâ çok uzaktaysa sprint sadece gap≥3 ve mesafe büyükse
-    if (g >= 3 && horiz > jumpWhenCloserThan + 1.2) {
-      bot.setControlState("sprint", true);
-    } else {
-      bot.setControlState("sprint", false);
-    }
-    try {
-      await bot.lookAt(v3(lx, ly + 0.4, lz), true);
-    } catch {
-      /* */
-    }
-    await sleep(40);
-  }
+  if (g >= 3) bot.setControlState("sprint", true);
+  await sleep(edgeMs);
 
-  // tam kenarda kısa hizalama
-  bot.setControlState("sprint", g >= 3);
-  bot.setControlState("forward", true);
-  await sleep(g >= 4 ? 90 : g === 3 ? 70 : 50);
-
-  // zıpla — kısa basış
+  // zıpla — kısa basış, sonra bırak
+  if (g >= 4) await sleep(60);
   bot.setControlState("jump", true);
-  await sleep(g >= 4 ? 75 : g === 3 ? 65 : 55);
+  await sleep(g >= 4 ? 80 : g === 3 ? 70 : 60);
   bot.setControlState("jump", false);
 
   // havada yön tut (daha kontrollü süre)
