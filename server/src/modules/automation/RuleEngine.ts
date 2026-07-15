@@ -2,6 +2,7 @@ import { loadJson, saveJson } from "../../persistence/store";
 import type { BotManager } from "../../core/BotManager";
 import { createLogger } from "../../utils/logger";
 import { newId } from "../../types";
+import { findBlueprint, RULE_BLUEPRINTS, type RuleBlueprint } from "./blueprints";
 
 const FILE = "rules.json";
 const log = createLogger("rules");
@@ -14,6 +15,8 @@ export type TriggerType =
   | "bot_spawned"
   | "bot_died"
   | "item_count"
+  /** envantere yeni eşya geldi / adet arttı */
+  | "item_gained"
   | "attacked"
   | "player_nearby"
   | "player_joined"
@@ -25,7 +28,11 @@ export type TriggerType =
 export interface RuleTrigger {
   type: TriggerType;
   pattern?: string;
-  match?: "exact" | "contains" | "regex";
+  /**
+   * exact | contains | regex | startsWith | command
+   * command: "/gel Steve" → pattern "gel", arg0=Steve (prefix varsayılan /)
+   */
+  match?: "exact" | "contains" | "regex" | "startsWith" | "command";
   /** authorized | anyone | isim listesi */
   from?: "authorized" | "anyone" | string[];
   /** belirli oyuncu (chat/attacked/nearby) */
@@ -39,18 +46,27 @@ export interface RuleTrigger {
   /** attacked: mob | player | all */
   source?: "mob" | "player" | "all";
   taskType?: string;
+  /** slash komut öneki (varsayılan "/") — "!gel" için "!" */
+  commandPrefix?: string;
 }
 
 export interface RuleCondition {
   type:
     | "has_item"
+    | "not_has_item"
     | "task_idle"
+    | "task_busy"
     | "health_below"
+    | "health_above"
     | "food_below"
+    | "food_above"
     | "in_dimension"
     | "online"
+    | "offline"
     | "player_near"
-    | "item_count";
+    | "item_count"
+    | "time_day"
+    | "time_night";
   item?: string;
   threshold?: number;
   dimension?: string;
@@ -83,6 +99,8 @@ export class RuleEngine {
   private intervals = new Map<string, NodeJS.Timeout>();
   private dryRun = false;
   private knownPlayers = new Map<string, Set<string>>(); // botId -> names
+  /** item_gained: botId -> itemName -> last count */
+  private itemSnapshots = new Map<string, Map<string, number>>();
 
   constructor(private readonly manager: BotManager) {}
 
@@ -153,7 +171,27 @@ export class RuleEngine {
   }
 
   onChat(botId: string, username: string | undefined, text: string) {
-    this.fireMatching(botId, "chat", { player: username ?? "", text }, (rule) => this.matchChat(rule, botId, username, text));
+    // komut argümanları (arg0, arg…) için özel yol
+    for (const rule of this.rules) {
+      if (!rule.enabled) continue;
+      if (!this.appliesToBot(rule, botId)) continue;
+      if (rule.trigger.type !== "chat") continue;
+      try {
+        const hit = this.matchChatDetailed(rule, botId, username, text);
+        if (!hit) continue;
+        if (!this.conditionsOk(rule, botId)) continue;
+        if (!this.rateOk(rule)) continue;
+        void this.execute(rule, botId, {
+          player: username ?? "",
+          text,
+          ...hit
+        });
+      } catch (e) {
+        log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        rule.enabled = false;
+        this.persist();
+      }
+    }
   }
 
   onVitals(botId: string, health: number, food: number) {
@@ -224,8 +262,12 @@ export class RuleEngine {
     const t = kind === "done" ? "task_done" : "task_failed";
     this.fireMatching(botId, t, { taskType, label }, (rule) => {
       if (rule.trigger.type !== t) return false;
-      if (rule.trigger.taskType && rule.trigger.taskType !== taskType) return false;
-      return true;
+      const want = (rule.trigger.taskType ?? "").trim();
+      if (!want) return true;
+      // "collect-wood|collect-block|mine" veya tek tip; includes eşleşmesi
+      const aliases = want.split("|").map((s) => s.trim().toLowerCase()).filter(Boolean);
+      const got = taskType.toLowerCase();
+      return aliases.some((a) => got === a || got.includes(a) || a.includes(got));
     });
   }
 
@@ -245,6 +287,63 @@ export class RuleEngine {
         void this.execute(rule, botId, { item, count: String(count) });
       } catch (e) {
         log.error(`item_count kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+      }
+    }
+    // envantere yeni eşya / adet artışı
+    this.onItemGainedTick(botId);
+  }
+
+  /**
+   * Envanterde belirli eşyanın adedi arttıysa (toplama/loot/craft sonucu).
+   * trigger.item opsiyonel: boşsa herhangi bir artış; doluysa o eşya (includes match).
+   * trigger.threshold: minimum artım (varsayılan 1).
+   */
+  onItemGainedTick(botId: string) {
+    const inst = this.manager.get(botId);
+    if (!inst || inst.status !== "online") return;
+    const snap = inst.getSnapshot().inventory;
+    if (!snap) return;
+
+    const nowMap = new Map<string, number>();
+    for (const s of snap.slots) {
+      if (!s) continue;
+      nowMap.set(s.name, (nowMap.get(s.name) ?? 0) + s.count);
+    }
+
+    const prev = this.itemSnapshots.get(botId) ?? new Map<string, number>();
+    const gains: Array<{ item: string; delta: number; count: number }> = [];
+    for (const [name, count] of nowMap) {
+      const before = prev.get(name) ?? 0;
+      if (count > before) gains.push({ item: name, delta: count - before, count });
+    }
+    this.itemSnapshots.set(botId, nowMap);
+    // ilk snapshot — tetikleme (yanlış “hepsini aldı” spam’i olmasın)
+    if (prev.size === 0) return;
+    if (!gains.length) return;
+
+    for (const rule of this.rules) {
+      if (!rule.enabled || rule.trigger.type !== "item_gained") continue;
+      if (!this.appliesToBot(rule, botId)) continue;
+      try {
+        const want = (rule.trigger.item ?? "").replace(/^minecraft:/, "").toLowerCase();
+        const minDelta = Math.max(1, rule.trigger.threshold ?? 1);
+        const hit = gains.find((g) => {
+          if (g.delta < minDelta) return false;
+          if (!want) return true;
+          const n = g.item.toLowerCase();
+          return n === want || n.includes(want) || want.includes(n);
+        });
+        if (!hit) continue;
+        if (!this.conditionsOk(rule, botId)) continue;
+        if (!this.rateOk(rule)) continue;
+        void this.execute(rule, botId, {
+          item: hit.item,
+          count: String(hit.count),
+          delta: String(hit.delta),
+          gained: hit.item
+        });
+      } catch (e) {
+        log.error(`item_gained kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
       }
     }
   }
@@ -301,11 +400,20 @@ export class RuleEngine {
     return rule.botIds === "all" || rule.botIds.includes(botId);
   }
 
-  private matchChat(rule: AutomationRule, botId: string, username: string | undefined, text: string): boolean {
-    if (rule.trigger.type !== "chat") return false;
+  /**
+   * Sohbet eşleşmesi. true yerine ctx map döner (komut argümanları).
+   * null = eşleşmedi.
+   */
+  private matchChatDetailed(
+    rule: AutomationRule,
+    botId: string,
+    username: string | undefined,
+    text: string
+  ): Record<string, string> | null {
+    if (rule.trigger.type !== "chat") return null;
     const tr = rule.trigger;
-    if (tr.player && username && username.toLowerCase() !== tr.player.toLowerCase()) return false;
-    if (tr.player && !username) return false;
+    if (tr.player && username && username.toLowerCase() !== tr.player.toLowerCase()) return null;
+    if (tr.player && !username) return null;
 
     const from = tr.from ?? "authorized";
     if (from === "authorized") {
@@ -313,22 +421,53 @@ export class RuleEngine {
       const allowed =
         Boolean(username) &&
         Boolean(inst?.config.authorizedPlayers.map((x) => x.toLowerCase()).includes(username!.toLowerCase()));
-      if (!allowed) return false;
+      if (!allowed) return null;
     } else if (Array.isArray(from)) {
-      if (!username || !from.map((x) => x.toLowerCase()).includes(username.toLowerCase())) return false;
+      if (!username || !from.map((x) => x.toLowerCase()).includes(username.toLowerCase())) return null;
     }
+
     const pat = tr.pattern ?? "";
     const mode = tr.match ?? "contains";
-    if (!pat && mode !== "exact") return true; // boş desen = her mesaj (dikkatli)
-    if (mode === "exact") return text.trim() === pat;
+    const raw = text.trim();
+    const lower = raw.toLowerCase();
+
+    if (mode === "command") {
+      const prefix = tr.commandPrefix ?? "/";
+      if (!raw.startsWith(prefix)) return null;
+      const body = raw.slice(prefix.length).trim();
+      if (!body) return null;
+      const parts = body.split(/\s+/);
+      const cmd = (parts[0] ?? "").toLowerCase();
+      // pattern: "gel" veya "gel|come|here"
+      const aliases = pat
+        .split("|")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (aliases.length && !aliases.includes(cmd)) return null;
+      const args = parts.slice(1);
+      const ctx: Record<string, string> = {
+        command: cmd,
+        arg: args.join(" "),
+        args: args.join(" "),
+        arg0: args[0] ?? "",
+        arg1: args[1] ?? "",
+        arg2: args[2] ?? ""
+      };
+      return ctx;
+    }
+
+    if (!pat && mode !== "exact") return {}; // boş desen = her mesaj
+    if (mode === "exact") return raw === pat ? {} : null;
+    if (mode === "startsWith") return lower.startsWith(pat.toLowerCase()) ? {} : null;
     if (mode === "regex") {
       try {
-        return new RegExp(pat, "i").test(text);
+        return new RegExp(pat, "i").test(raw) ? {} : null;
       } catch {
         throw new Error(`Geçersiz regex: ${pat}`);
       }
     }
-    return text.toLowerCase().includes(pat.toLowerCase());
+    // contains
+    return lower.includes(pat.toLowerCase()) ? {} : null;
   }
 
   private rateOk(rule: AutomationRule): boolean {
@@ -346,25 +485,40 @@ export class RuleEngine {
   private conditionsOk(rule: AutomationRule, botId: string): boolean {
     const inst = this.manager.get(botId);
     if (!inst) return false;
-    for (const c of rule.conditions) {
+    for (const c of rule.conditions ?? []) {
       if (c.type === "online" && inst.status !== "online") return false;
+      if (c.type === "offline" && inst.status === "online") return false;
       if (c.type === "task_idle" && inst.tasks.currentSummary) return false;
+      if (c.type === "task_busy" && !inst.tasks.currentSummary) return false;
       if (c.type === "health_below" && inst.runtime.health > (c.threshold ?? 10)) return false;
+      if (c.type === "health_above" && inst.runtime.health < (c.threshold ?? 10)) return false;
       if (c.type === "food_below" && inst.runtime.food > (c.threshold ?? 10)) return false;
+      if (c.type === "food_above" && inst.runtime.food < (c.threshold ?? 10)) return false;
       if (c.type === "in_dimension" && c.dimension && inst.runtime.dimension !== c.dimension) return false;
       if (c.type === "has_item" && c.item) {
         if (countItem(inst, c.item) <= 0) return false;
+      }
+      if (c.type === "not_has_item" && c.item) {
+        if (countItem(inst, c.item) > 0) return false;
       }
       if (c.type === "item_count" && c.item) {
         if (!compare(countItem(inst, c.item), c.comparison ?? "gte", c.threshold ?? 1)) return false;
       }
       if (c.type === "player_near" && c.player) {
         const bot = inst.bot;
-        if (!bot) return false;
+        if (!bot?.entity) return false;
         const ent = bot.players[c.player]?.entity;
         if (!ent) return false;
         const d = bot.entity.position.distanceTo(ent.position);
         if (d > (c.radius ?? 16)) return false;
+      }
+      if (c.type === "time_day" || c.type === "time_night") {
+        const bot = inst.bot;
+        if (!bot) return false;
+        const t = ((bot.time?.timeOfDay ?? 0) % 24000 + 24000) % 24000;
+        const isDay = t >= 0 && t < 12000;
+        if (c.type === "time_day" && !isDay) return false;
+        if (c.type === "time_night" && isDay) return false;
       }
     }
     return true;
@@ -470,9 +624,23 @@ export class RuleEngine {
       }
       return;
     }
-    if (type === "collect" || type === "collect_wood" || type === "odun-topla") {
-      const logType = action.block ? String(action.block) : action.logType ? String(action.logType) : undefined;
-      inst.gather.enqueueCollectWood(Number(action.count ?? 16), logType);
+    if (type === "collect" || type === "collect_wood" || type === "odun-topla" || type === "collect_item") {
+      // {arg0}/{item} interpolate; adet string gelebilir
+      const name = interpolate(String(action.block ?? action.item ?? action.logType ?? "oak_log"), ctx).replace(
+        /^minecraft:/,
+        ""
+      );
+      const rawCount = action.count != null ? interpolate(String(action.count), ctx) : "16";
+      const n = Math.max(1, Number(rawCount) || 16);
+      if (!name || name.startsWith("{")) {
+        log.warn("collect: eşya adı yok", JSON.stringify(action));
+        return;
+      }
+      if (name.endsWith("_log") || name.endsWith("_stem") || name === "log") {
+        inst.gather.enqueueCollectWood(n, name === "log" ? undefined : name);
+      } else {
+        inst.gather.enqueueCollectBlock(name, n);
+      }
       return;
     }
     if (type === "collect_drops" || type === "eşya-topla") {
@@ -498,6 +666,49 @@ export class RuleEngine {
     }
     if (type === "stop") {
       inst.enqueueAction({ type: "stop" });
+      return;
+    }
+    if (type === "reset-work" || type === "reset_work" || type === "soft-reset") {
+      inst.resetAllWork("otomasyon reset-work");
+      return;
+    }
+    if (type === "protect" || type === "social-protect") {
+      const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p) {
+        inst.enqueueAction({
+          type: "social-protect",
+          player: p,
+          enabled: action.enabled !== false,
+          setAsMain: action.setAsMain !== false
+        });
+      }
+      return;
+    }
+    if (type === "social-follow") {
+      const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p) {
+        inst.enqueueAction({
+          type: "social-follow",
+          player: p,
+          enabled: action.enabled !== false,
+          distance: Number(action.distance ?? 3)
+        });
+      }
+      return;
+    }
+    if (type === "social-attack") {
+      const p = interpolate(String(action.player ?? action.target ?? ctx.player ?? ctx.attacker ?? ""), ctx);
+      if (p) {
+        inst.enqueueAction({ type: "social-attack", player: p, enabled: action.enabled !== false });
+      }
+      return;
+    }
+    if (type === "equip_best" || type === "equip-best") {
+      void inst.combat.equipBestWeapon(true);
+      return;
+    }
+    if (type === "loot_death" || type === "loot-death") {
+      inst.combat.enqueueLootDeath();
       return;
     }
     inst.enqueueAction({ ...action, type });
@@ -535,159 +746,109 @@ function interpolate(s: string, ctx: Record<string, string>) {
   return s.replace(/\{(\w+)\}/g, (_, k) => ctx[k] ?? "");
 }
 
-export const RULE_TEMPLATES: Array<Partial<AutomationRule>> = [
-  {
-    name: "Gel komutu",
-    trigger: { type: "chat", pattern: "gel", match: "contains", from: "authorized" },
-    actions: [
-      { type: "goto", player: "{player}" },
-      { type: "panel_notify", message: "{player} için gel", level: "info" }
-    ],
-    cooldownMs: 2000
-  },
-  {
-    name: "Takip et komutu",
-    trigger: { type: "chat", pattern: "takip", match: "contains", from: "authorized" },
-    actions: [{ type: "follow", player: "{player}", distance: 3 }],
-    cooldownMs: 2000
-  },
-  {
-    name: "Beni koru",
-    trigger: { type: "chat", pattern: "koru", match: "contains", from: "authorized" },
-    actions: [
-      { type: "defend_self", mode: "all" },
-      { type: "panel_notify", message: "Savunma: hepsi", level: "success" }
-    ]
-  },
-  {
-    name: "Saldırıya karşılık",
-    trigger: { type: "attacked", source: "player" },
-    actions: [
-      { type: "attack", player: "{attacker}" },
-      { type: "panel_notify", message: "{attacker} saldırdı — karşılık", level: "warn" }
-    ],
-    cooldownMs: 5000
-  },
-  {
-    name: "Mob saldırısında kaç",
-    trigger: { type: "attacked", source: "mob" },
-    conditions: [{ type: "health_below", threshold: 10 }],
-    actions: [{ type: "flee" }, { type: "panel_notify", message: "Mob saldırısı — kaçış", level: "warn" }],
-    cooldownMs: 8000
-  },
-  {
-    name: "Oduncu",
-    trigger: { type: "interval", everyMs: 120_000 },
-    conditions: [{ type: "task_idle" }, { type: "online" }],
-    actions: [{ type: "collect", count: 32, block: "oak_log" }]
-  },
-  {
-    name: "Demir madencisi",
-    trigger: { type: "interval", everyMs: 180_000 },
-    conditions: [{ type: "task_idle" }],
-    actions: [{ type: "mine", ore: "iron", count: 16, mode: "legit" }]
-  },
-  {
-    name: "Odun azsa topla",
-    trigger: { type: "item_count", item: "oak_log", comparison: "lt", threshold: 16 },
-    conditions: [{ type: "task_idle" }],
-    actions: [{ type: "collect", count: 32, block: "oak_log" }],
-    cooldownMs: 60_000
-  },
-  {
-    name: "Yemek nöbetçisi",
-    trigger: { type: "food_below", threshold: 10 },
-    actions: [{ type: "eat" }, { type: "acquire_food" }],
-    cooldownMs: 15_000
-  },
-  {
-    name: "Can kritik — kaç",
-    trigger: { type: "health_below", threshold: 6 },
-    actions: [{ type: "flee" }, { type: "panel_notify", message: "Can kritik", level: "error" }],
-    cooldownMs: 10_000
-  },
-  {
-    name: "Yakındaki yetkiliye selam",
-    trigger: { type: "player_nearby", radius: 8, from: "authorized" },
-    actions: [{ type: "send_chat", text: "sa {player}" }],
-    cooldownMs: 120_000,
-    maxTriggersPerMinute: 2
-  },
-  {
-    name: "Envanter dolu uyarısı",
-    trigger: { type: "inventory_full" },
-    actions: [
-      { type: "panel_notify", message: "Envanter doldu", level: "warn" },
-      { type: "deposit" }
-    ],
-    cooldownMs: 30_000
-  },
-  {
-    name: "Hoş geldin",
-    trigger: { type: "chat", pattern: "sa", match: "contains", from: "anyone" },
-    actions: [{ type: "send_chat", text: "as {player}" }],
-    cooldownMs: 10_000,
-    maxTriggersPerMinute: 3
-  },
-  {
-    name: "Belirli kişi: gel",
-    trigger: { type: "chat", pattern: "gel", match: "contains", from: "anyone", player: "" },
-    actions: [{ type: "goto", player: "{player}" }],
-    cooldownMs: 2000
-  },
-  {
-    name: "Giriş yapanı karşılama",
-    trigger: { type: "player_joined" },
-    actions: [{ type: "send_chat", text: "hoş geldin {player}" }],
-    cooldownMs: 5000,
-    maxTriggersPerMinute: 6
-  },
-  {
-    name: "Stick üret (azsa)",
-    trigger: { type: "item_count", item: "stick", comparison: "lt", threshold: 8 },
-    conditions: [{ type: "task_idle" }],
-    actions: [{ type: "craft", item: "stick", count: 16 }],
-    cooldownMs: 45_000
-  }
-];
+/** Geriye uyum: isim = blueprint adı */
+export const RULE_TEMPLATES: Array<Partial<AutomationRule> & { name: string }> = RULE_BLUEPRINTS.map((b) => ({
+  ...b.rule,
+  name: b.name
+}));
 
-export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: string[] }> = [
-  { type: "chat", label: "Sohbet mesajı", fields: ["pattern", "match", "from", "player"] },
-  { type: "attacked", label: "Saldırıya uğradı", fields: ["source", "player"] },
-  { type: "player_nearby", label: "Yakında oyuncu", fields: ["radius", "player"] },
+export { RULE_BLUEPRINTS, findBlueprint };
+export type { RuleBlueprint };
+
+export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: string[]; hint?: string }> = [
+  {
+    type: "chat",
+    label: "Sohbet / komut",
+    fields: ["pattern", "match", "from", "player", "commandPrefix"],
+    hint: "match=command → /gel Steve (arg0). startsWith, contains, exact, regex."
+  },
+  { type: "attacked", label: "Bot saldırıya uğradı", fields: ["source", "player"], hint: "mob | player | all" },
+  { type: "player_nearby", label: "Yakında oyuncu", fields: ["radius", "player", "from"] },
   { type: "player_joined", label: "Oyuncu girdi (tab)", fields: [] },
   { type: "player_left", label: "Oyuncu çıktı (tab)", fields: [] },
   { type: "health_below", label: "Can eşiğin altında", fields: ["threshold"] },
   { type: "food_below", label: "Açlık eşiğin altında", fields: ["threshold"] },
-  { type: "item_count", label: "Eşya adedi", fields: ["item", "comparison", "threshold"] },
+  {
+    type: "item_count",
+    label: "Eşya adedi (eşik)",
+    fields: ["item", "comparison", "threshold"],
+    hint: "Örn. oak_log < 16 → topla"
+  },
+  {
+    type: "item_gained",
+    label: "Eşya envantere geldi / arttı",
+    fields: ["item", "threshold"],
+    hint: "Toplama/loot/craft sonrası adet artınca. item boş = herhangi; threshold = min artım"
+  },
   { type: "inventory_full", label: "Envanter doldu", fields: [] },
   { type: "interval", label: "Zamanlayıcı", fields: ["everyMs"] },
   { type: "bot_spawned", label: "Bot spawn oldu", fields: [] },
   { type: "bot_died", label: "Bot öldü", fields: [] },
-  { type: "task_done", label: "Görev bitti", fields: ["taskType"] },
+  {
+    type: "task_done",
+    label: "Görev başarıyla bitti",
+    fields: ["taskType"],
+    hint: "collect-wood, mine, craft, gather… taskType boş = hepsi"
+  },
   { type: "task_failed", label: "Görev başarısız", fields: ["taskType"] }
 ];
 
-export const ACTION_META: Array<{ type: string; label: string; fields: string[] }> = [
-  { type: "send_chat", label: "Sohbete yaz", fields: ["text"] },
-  { type: "goto", label: "Git (oyuncu/waypoint/xyz)", fields: ["player", "waypoint", "x", "y", "z"] },
-  { type: "follow", label: "Takip et", fields: ["player", "distance"] },
-  { type: "attack", label: "Saldır", fields: ["player"] },
-  { type: "clear-mobs", label: "Mob temizle", fields: ["radius"] },
-  { type: "flee", label: "Kaç", fields: [] },
-  { type: "defend_self", label: "Savunma aç", fields: ["mode"] },
-  { type: "eat", label: "Ye", fields: [] },
-  { type: "hunt", label: "Avlan", fields: ["radius"] },
-  { type: "cook", label: "Pişir", fields: [] },
-  { type: "acquire_food", label: "Yemek edin", fields: [] },
-  { type: "collect", label: "Odun/blok topla", fields: ["block", "count"] },
-  { type: "mine", label: "Maden topla", fields: ["ore", "count", "mode"] },
-  { type: "craft", label: "Üret", fields: ["item", "count"] },
-  { type: "collect_drops", label: "Yerdeki eşya", fields: ["filter", "radius"] },
-  { type: "deposit", label: "Depoya bırak", fields: ["filter"] },
-  { type: "withdraw", label: "Depodan al", fields: ["item", "count"] },
-  { type: "stop_tasks", label: "Görevleri durdur", fields: [] },
-  { type: "stop", label: "Hareket/dövüş stop", fields: [] },
-  { type: "wait", label: "Bekle (sn)", fields: ["seconds"] },
-  { type: "panel_notify", label: "Panel bildirimi", fields: ["message", "level"] }
+export const CONDITION_META: Array<{ type: RuleCondition["type"]; label: string; fields: string[] }> = [
+  { type: "online", label: "Bot online", fields: [] },
+  { type: "offline", label: "Bot offline", fields: [] },
+  { type: "task_idle", label: "Görev yok (boşta)", fields: [] },
+  { type: "task_busy", label: "Görev çalışıyor", fields: [] },
+  { type: "health_below", label: "Can ≤ eşik", fields: ["threshold"] },
+  { type: "health_above", label: "Can ≥ eşik", fields: ["threshold"] },
+  { type: "food_below", label: "Açlık ≤ eşik", fields: ["threshold"] },
+  { type: "food_above", label: "Açlık ≥ eşik", fields: ["threshold"] },
+  { type: "has_item", label: "Eşya var", fields: ["item"] },
+  { type: "not_has_item", label: "Eşya yok", fields: ["item"] },
+  { type: "item_count", label: "Eşya adedi", fields: ["item", "comparison", "threshold"] },
+  { type: "player_near", label: "Oyuncu yakında", fields: ["player", "radius"] },
+  { type: "in_dimension", label: "Boyut", fields: ["dimension"] },
+  { type: "time_day", label: "Gündüz", fields: [] },
+  { type: "time_night", label: "Gece", fields: [] }
+];
+
+export const ACTION_META: Array<{ type: string; label: string; fields: string[]; category?: string }> = [
+  { type: "send_chat", label: "Sohbete yaz", fields: ["text"], category: "Sohbet" },
+  { type: "panel_notify", label: "Panel bildirimi", fields: ["message", "level"], category: "Sohbet" },
+  { type: "goto", label: "Git (oyuncu/waypoint/xyz)", fields: ["player", "waypoint", "x", "y", "z"], category: "Hareket" },
+  { type: "follow", label: "Takip et", fields: ["player", "distance"], category: "Hareket" },
+  { type: "social-follow", label: "Takip (toggle companion)", fields: ["player", "distance"], category: "Hareket" },
+  { type: "stop", label: "Hareket/dövüş stop", fields: [], category: "Hareket" },
+  { type: "reset-work", label: "Tüm işleri sıfırla", fields: [], category: "Hareket" },
+  { type: "stop_tasks", label: "Görev kuyruğunu temizle", fields: [], category: "Hareket" },
+  { type: "wait", label: "Bekle (sn)", fields: ["seconds"], category: "Hareket" },
+  { type: "attack", label: "Saldır", fields: ["player"], category: "Dövüş" },
+  { type: "social-attack", label: "Saldır (toggle)", fields: ["player"], category: "Dövüş" },
+  { type: "clear-mobs", label: "Mob temizle", fields: ["radius"], category: "Dövüş" },
+  { type: "flee", label: "Kaç", fields: [], category: "Dövüş" },
+  { type: "protect", label: "Koru (eşlik)", fields: ["player"], category: "Dövüş" },
+  { type: "defend_self", label: "Öz savunma modu", fields: ["mode"], category: "Dövüş" },
+  { type: "set_defend", label: "Savunma ayarla", fields: ["mode"], category: "Dövüş" },
+  { type: "equip_best", label: "En iyi silahı kuşan", fields: [], category: "Dövüş" },
+  { type: "loot_death", label: "Ölüm loot noktasına git", fields: [], category: "Dövüş" },
+  { type: "eat", label: "Ye", fields: [], category: "Yaşam" },
+  { type: "hunt", label: "Avlan", fields: ["radius"], category: "Yaşam" },
+  { type: "cook", label: "Pişir", fields: [], category: "Yaşam" },
+  { type: "acquire_food", label: "Yemek edin", fields: [], category: "Yaşam" },
+  {
+    type: "collect",
+    label: "Eşya/blok topla (dünya)",
+    fields: ["item", "block", "count"],
+    category: "İş"
+  },
+  {
+    type: "collect_item",
+    label: "Belirli eşyayı topla",
+    fields: ["item", "count"],
+    category: "İş"
+  },
+  { type: "mine", label: "Maden topla", fields: ["ore", "count", "mode"], category: "İş" },
+  { type: "craft", label: "Üret", fields: ["item", "count"], category: "İş" },
+  { type: "collect_drops", label: "Yerdeki eşya", fields: ["filter", "radius"], category: "İş" },
+  { type: "deposit", label: "Depoya bırak", fields: ["filter"], category: "İş" },
+  { type: "withdraw", label: "Depodan al", fields: ["item", "count"], category: "İş" }
 ];

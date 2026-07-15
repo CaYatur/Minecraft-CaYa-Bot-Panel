@@ -1,6 +1,13 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { BotManager, PanelError } from "../core/BotManager";
-import { ACTION_META, RULE_TEMPLATES, TRIGGER_META } from "../modules/automation/RuleEngine";
+import {
+  ACTION_META,
+  CONDITION_META,
+  findBlueprint,
+  RULE_BLUEPRINTS,
+  RULE_TEMPLATES,
+  TRIGGER_META
+} from "../modules/automation/RuleEngine";
 import {
   addCayaJsonSchematic,
   addSchematicFromBase64,
@@ -335,9 +342,17 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/rules/templates/:name",
     h((req, res) => {
-      const tpl = RULE_TEMPLATES.find((t) => t.name === req.params.name);
-      if (!tpl) throw new PanelError("Şablon bulunamadı", 404);
-      res.json(manager.rules.create({ ...tpl, botIds: req.body?.botIds ?? "all" }));
+      const name = decodeURIComponent(String(req.params.name ?? ""));
+      const bp = findBlueprint(name);
+      const tpl = bp?.rule ?? RULE_TEMPLATES.find((t) => t.name === name);
+      if (!tpl) throw new PanelError("Şablon/blueprint bulunamadı", 404);
+      res.json(
+        manager.rules.create({
+          ...tpl,
+          name: bp?.name ?? tpl.name,
+          botIds: req.body?.botIds ?? "all"
+        })
+      );
     })
   );
 
@@ -370,7 +385,29 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       res.json({
         triggers: TRIGGER_META,
         actions: ACTION_META,
-        templates: RULE_TEMPLATES.map((t) => t.name).filter(Boolean)
+        conditions: CONDITION_META,
+        templates: RULE_TEMPLATES.map((t) => t.name).filter(Boolean),
+        blueprints: RULE_BLUEPRINTS.map((b) => ({
+          id: b.id,
+          name: b.name,
+          category: b.category,
+          description: b.description
+        })),
+        vars: [
+          "{player}",
+          "{attacker}",
+          "{text}",
+          "{item}",
+          "{count}",
+          "{delta}",
+          "{gained}",
+          "{command}",
+          "{arg}",
+          "{arg0}",
+          "{arg1}",
+          "{label}",
+          "{taskType}"
+        ]
       });
     })
   );

@@ -16,58 +16,98 @@ interface Rule {
   maxTriggersPerMinute: number;
 }
 
+interface MetaField {
+  type: string;
+  label: string;
+  fields: string[];
+  hint?: string;
+  category?: string;
+}
+
+interface Blueprint {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+}
+
 interface Meta {
-  triggers: Array<{ type: string; label: string; fields: string[] }>;
-  actions: Array<{ type: string; label: string; fields: string[] }>;
+  triggers: MetaField[];
+  actions: MetaField[];
+  conditions?: MetaField[];
   templates: string[];
+  blueprints?: Blueprint[];
+  vars?: string[];
 }
 
 const fieldCls =
   "rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
 
-const emptyForm = () => ({
-  name: "Yeni kural",
-  botIds: "all" as string | "all",
-  triggerType: "chat",
-  pattern: "gel",
-  match: "contains",
-  from: "authorized",
-  player: "",
-  threshold: 10,
-  everyMs: 60000,
-  radius: 16,
-  source: "all",
-  item: "oak_log",
-  ore: "iron",
-  comparison: "lt",
-  actionType: "goto",
-  actionPlayer: "{player}",
-  actionText: "as {player}",
-  actionCount: 16,
-  actionMode: "legit",
-  actionMessage: "kural tetiklendi",
-  cooldownMs: 3000
-});
+type CondRow = { type: string; item?: string; threshold?: number; player?: string; radius?: number; comparison?: string; dimension?: string };
+type ActRow = {
+  type: string;
+  player?: string;
+  text?: string;
+  message?: string;
+  level?: string;
+  item?: string;
+  block?: string;
+  ore?: string;
+  count?: number | string;
+  radius?: number;
+  distance?: number;
+  mode?: string;
+  filter?: string;
+  seconds?: number;
+  waypoint?: string;
+};
+
+const emptyCond = (): CondRow => ({ type: "task_idle" });
+const emptyAct = (): ActRow => ({ type: "panel_notify", message: "kural tetiklendi", level: "info" });
 
 export function Automations() {
   const bots = useAppStore((s) => s.bots);
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
+
   const [rules, setRules] = useState<Rule[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
-  const [form, setForm] = useState(emptyForm);
   const [showBuilder, setShowBuilder] = useState(true);
+  const [bpCat, setBpCat] = useState<string>("all");
+
+  // ── Blueprint form state ──
+  const [name, setName] = useState("Yeni kural");
+  const [botIds, setBotIds] = useState<string>("all");
+  const [cooldownMs, setCooldownMs] = useState(3000);
+  const [maxPerMin, setMaxPerMin] = useState(10);
+
+  const [triggerType, setTriggerType] = useState("chat");
+  const [pattern, setPattern] = useState("gel");
+  const [match, setMatch] = useState("command");
+  const [from, setFrom] = useState("authorized");
+  const [player, setPlayer] = useState("");
+  const [commandPrefix, setCommandPrefix] = useState("/");
+  const [threshold, setThreshold] = useState(10);
+  const [everyMs, setEveryMs] = useState(60_000);
+  const [radius, setRadius] = useState(16);
+  const [source, setSource] = useState("all");
+  const [item, setItem] = useState("oak_log");
+  const [comparison, setComparison] = useState("lt");
+  const [taskType, setTaskType] = useState("");
+
+  const [conditions, setConditions] = useState<CondRow[]>([]);
+  const [actions, setActions] = useState<ActRow[]>([emptyAct()]);
 
   const botList = Object.values(bots);
   const catalogVersion = useMemo(() => {
-    if (form.botIds !== "all" && form.botIds) {
-      const b = bots[form.botIds];
+    if (botIds !== "all" && botIds) {
+      const b = bots[botIds];
       const srv = servers.find((s) => s.id === b?.config.serverId);
       return srv?.version ?? "auto";
     }
     return servers[0]?.version ?? "auto";
-  }, [form.botIds, bots, servers]);
+  }, [botIds, bots, servers]);
 
   const load = async () => {
     const [list, m] = await Promise.all([
@@ -82,72 +122,100 @@ export function Automations() {
     void load().catch(() => {});
   }, []);
 
-  const setF = <K extends keyof ReturnType<typeof emptyForm>>(k: K, v: ReturnType<typeof emptyForm>[K]) =>
-    setForm((f) => ({ ...f, [k]: v }));
+  const blueprints = meta?.blueprints ?? [];
+  const categories = useMemo(() => {
+    const set = new Set(blueprints.map((b) => b.category));
+    return ["all", ...[...set].sort()];
+  }, [blueprints]);
+
+  const filteredBp = blueprints.filter((b) => bpCat === "all" || b.category === bpCat);
+
+  const triggers = meta?.triggers ?? [
+    { type: "chat", label: "Sohbet / komut", fields: [] },
+    { type: "item_gained", label: "Eşya geldi", fields: [] },
+    { type: "item_count", label: "Eşya adedi", fields: [] },
+    { type: "attacked", label: "Saldırı", fields: [] }
+  ];
+  const actionMeta = meta?.actions ?? [{ type: "goto", label: "Git", fields: [] }];
+  const conditionMeta = meta?.conditions ?? [
+    { type: "task_idle", label: "Boşta", fields: [] },
+    { type: "online", label: "Online", fields: [] }
+  ];
 
   const buildPayload = (): Partial<Rule> => {
-    const trigger: Record<string, unknown> = { type: form.triggerType };
-    if (form.triggerType === "chat") {
-      trigger.pattern = form.pattern;
-      trigger.match = form.match;
-      trigger.from = form.from === "list" && form.player ? [form.player] : form.from;
-      if (form.player && form.from !== "list") trigger.player = form.player;
+    const trigger: Record<string, unknown> = { type: triggerType };
+    if (triggerType === "chat") {
+      trigger.pattern = pattern;
+      trigger.match = match;
+      trigger.from = from === "list" && player ? [player] : from;
+      if (player && from !== "list") trigger.player = player;
+      if (match === "command") trigger.commandPrefix = commandPrefix || "/";
     }
-    if (form.triggerType === "attacked") {
-      trigger.source = form.source;
-      if (form.player) trigger.player = form.player;
+    if (triggerType === "attacked") {
+      trigger.source = source;
+      if (player) trigger.player = player;
     }
-    if (form.triggerType === "player_nearby") {
-      trigger.radius = form.radius;
-      if (form.player) trigger.player = form.player;
-      if (form.from === "authorized") trigger.from = "authorized";
+    if (triggerType === "player_nearby") {
+      trigger.radius = radius;
+      if (player) trigger.player = player;
+      if (from === "authorized") trigger.from = "authorized";
     }
-    if (form.triggerType === "health_below" || form.triggerType === "food_below") {
-      trigger.threshold = form.threshold;
+    if (triggerType === "health_below" || triggerType === "food_below") {
+      trigger.threshold = threshold;
     }
-    if (form.triggerType === "interval") trigger.everyMs = form.everyMs;
-    if (form.triggerType === "item_count") {
-      trigger.item = form.item;
-      trigger.comparison = form.comparison;
-      trigger.threshold = form.threshold;
+    if (triggerType === "interval") trigger.everyMs = everyMs;
+    if (triggerType === "item_count") {
+      trigger.item = item;
+      trigger.comparison = comparison;
+      trigger.threshold = threshold;
+    }
+    if (triggerType === "item_gained") {
+      if (item) trigger.item = item;
+      trigger.threshold = threshold || 1;
+    }
+    if (triggerType === "task_done" || triggerType === "task_failed") {
+      if (taskType) trigger.taskType = taskType;
     }
 
-    const action: Record<string, unknown> = { type: form.actionType };
-    if (["goto", "follow", "attack"].includes(form.actionType)) {
-      action.player = form.actionPlayer || "{player}";
-    }
-    if (form.actionType === "send_chat") action.text = form.actionText;
-    if (form.actionType === "panel_notify") {
-      action.message = form.actionMessage;
-      action.level = "info";
-    }
-    if (form.actionType === "collect" || form.actionType === "collect_wood") {
-      action.count = form.actionCount;
-      action.block = form.item;
-    }
-    if (form.actionType === "mine") {
-      action.ore = form.ore;
-      action.count = form.actionCount;
-      action.mode = form.actionMode;
-    }
-    if (form.actionType === "craft") {
-      action.item = form.item;
-      action.count = form.actionCount;
-    }
-    if (form.actionType === "hunt" || form.actionType === "clear-mobs" || form.actionType === "clear_mobs") {
-      action.radius = form.radius;
-    }
-    if (form.actionType === "follow") action.distance = 3;
+    const conds = conditions.map((c) => {
+      const o: Record<string, unknown> = { type: c.type };
+      if (c.item) o.item = c.item;
+      if (c.threshold != null) o.threshold = c.threshold;
+      if (c.player) o.player = c.player;
+      if (c.radius != null) o.radius = c.radius;
+      if (c.comparison) o.comparison = c.comparison;
+      if (c.dimension) o.dimension = c.dimension;
+      return o;
+    });
+
+    const acts = actions.map((a) => {
+      const o: Record<string, unknown> = { type: a.type };
+      if (a.player != null && a.player !== "") o.player = a.player;
+      if (a.text != null) o.text = a.text;
+      if (a.message != null) o.message = a.message;
+      if (a.level != null) o.level = a.level;
+      if (a.item != null && a.item !== "") o.item = a.item;
+      if (a.block != null && a.block !== "") o.block = a.block;
+      if (a.ore != null) o.ore = a.ore;
+      if (a.count != null && a.count !== "") o.count = a.count;
+      if (a.radius != null) o.radius = a.radius;
+      if (a.distance != null) o.distance = a.distance;
+      if (a.mode != null) o.mode = a.mode;
+      if (a.filter != null) o.filter = a.filter;
+      if (a.seconds != null) o.seconds = a.seconds;
+      if (a.waypoint != null) o.waypoint = a.waypoint;
+      return o;
+    });
 
     return {
-      name: form.name,
+      name,
       enabled: true,
-      botIds: form.botIds === "all" ? "all" : [form.botIds],
-      trigger: trigger as Rule["trigger"],
-      conditions: form.triggerType === "interval" ? [{ type: "task_idle" }, { type: "online" }] : [],
-      actions: [action],
-      cooldownMs: form.cooldownMs,
-      maxTriggersPerMinute: 10
+      botIds: botIds === "all" ? "all" : [botIds],
+      trigger,
+      conditions: conds,
+      actions: acts.length ? acts : [{ type: "panel_notify", message: "kural", level: "info" }],
+      cooldownMs,
+      maxTriggersPerMinute: maxPerMin
     };
   };
 
@@ -156,21 +224,29 @@ export function Automations() {
       await api.post("/api/rules", buildPayload());
       await load();
       toast("success", "Kural eklendi");
-      setForm(emptyForm());
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
   };
 
-  const addTemplate = async (tpl: string) => {
+  const addBlueprint = async (bp: Blueprint) => {
     try {
-      await api.post(`/api/rules/templates/${encodeURIComponent(tpl)}`, {
-        botIds: form.botIds === "all" ? "all" : [form.botIds]
+      await api.post(`/api/rules/templates/${encodeURIComponent(bp.id)}`, {
+        botIds: botIds === "all" ? "all" : [botIds]
       });
       await load();
-      toast("success", `Şablon: ${tpl}`);
+      toast("success", `Blueprint: ${bp.name}`);
     } catch (e) {
-      toast("error", e instanceof Error ? e.message : String(e));
+      // id fail → isim dene
+      try {
+        await api.post(`/api/rules/templates/${encodeURIComponent(bp.name)}`, {
+          botIds: botIds === "all" ? "all" : [botIds]
+        });
+        await load();
+        toast("success", `Blueprint: ${bp.name}`);
+      } catch (e2) {
+        toast("error", e2 instanceof Error ? e2.message : String(e2));
+      }
     }
   };
 
@@ -186,7 +262,7 @@ export function Automations() {
   };
 
   const test = async (r: Rule) => {
-    const id = form.botIds === "all" ? Object.keys(bots)[0] : form.botIds;
+    const id = botIds === "all" ? Object.keys(bots)[0] : botIds;
     if (!id) {
       toast("error", "Test için bot gerekli");
       return;
@@ -199,46 +275,96 @@ export function Automations() {
     }
   };
 
-  const templates = meta?.templates?.length
-    ? meta.templates
-    : ["Gel komutu", "Beni koru", "Oduncu", "Yemek nöbetçisi", "Hoş geldin"];
+  const updateCond = (i: number, patch: Partial<CondRow>) =>
+    setConditions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const updateAct = (i: number, patch: Partial<ActRow>) =>
+    setActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
-  const triggerNeedsItem = form.triggerType === "item_count";
-  const actionNeedsItem = ["craft", "collect", "collect_wood", "withdraw"].includes(form.actionType);
-  const actionNeedsOre = form.actionType === "mine";
+  const summaryTrigger = () => {
+    if (triggerType === "chat") {
+      if (match === "command") return `${commandPrefix || "/"}${pattern}`;
+      return `"${pattern}" (${match})`;
+    }
+    if (triggerType === "item_gained") return `+${item || "herhangi"} (≥${threshold || 1})`;
+    if (triggerType === "item_count") return `${item} ${comparison} ${threshold}`;
+    if (triggerType === "attacked") return `saldırı · ${source}`;
+    return triggerType;
+  };
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-6">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-bold text-zinc-100">{t("automations.title")}</h1>
         <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">
-          {rules.length} kural · katalog {catalogVersion}
+          {rules.length} kural · {blueprints.length} blueprint
         </span>
         <button
           onClick={() => void load()}
           className="ml-auto rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
         >
-          Yenile
+          {t("common.refresh")}
         </button>
         <button
           onClick={() => setShowBuilder((v) => !v)}
-          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+          className="rounded-lg bg-indigo-600/80 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
         >
-          {showBuilder ? "Formu gizle" : "Yeni kural formu"}
+          {showBuilder ? "Blueprint gizle" : "Blueprint oluşturucu"}
         </button>
       </div>
 
+      {/* ── Blueprint galerisi ── */}
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Blueprint şablonlar</div>
+          <div className="flex flex-wrap gap-1">
+            {categories.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setBpCat(c)}
+                className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium ${
+                  bpCat === c ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {c === "all" ? "Tümü" : c}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="mb-3 text-[11px] text-zinc-500">
+          Tek tıkla kural ekle: sohbet komutu, saldırı, eşya geldi/azaldı, toplama başarısı…
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {filteredBp.map((bp) => (
+            <button
+              key={bp.id}
+              type="button"
+              onClick={() => void addBlueprint(bp)}
+              className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-left transition hover:border-indigo-700/60 hover:bg-indigo-950/20"
+            >
+              <div className="text-[10px] font-medium tracking-wide text-indigo-400/80 uppercase">{bp.category}</div>
+              <div className="mt-0.5 text-sm font-semibold text-zinc-200">{bp.name}</div>
+              <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-zinc-500">{bp.description}</p>
+              <div className="mt-2 text-[10px] text-indigo-400">+ Ekle</div>
+            </button>
+          ))}
+          {filteredBp.length === 0 && (
+            <p className="col-span-full text-sm text-zinc-600 italic">Blueprint yüklenemedi — sunucu meta?</p>
+          )}
+        </div>
+      </section>
+
+      {/* ── WHEN → IF → THEN builder ── */}
       {showBuilder && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-          <div className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Kural oluşturucu</div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="flex flex-col gap-1 text-sm">
+        <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-sm">
               <span className="text-zinc-400">Kural adı</span>
-              <input value={form.name} onChange={(e) => setF("name", e.target.value)} className={fieldCls} />
+              <input value={name} onChange={(e) => setName(e.target.value)} className={fieldCls} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-zinc-400">Bot</span>
-              <select value={form.botIds} onChange={(e) => setF("botIds", e.target.value)} className={fieldCls}>
+              <select value={botIds} onChange={(e) => setBotIds(e.target.value)} className={fieldCls}>
                 <option value="all">Tümü</option>
                 {botList.map((b) => (
                   <option key={b.config.id} value={b.config.id}>
@@ -247,267 +373,443 @@ export function Automations() {
                 ))}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Soğuma (ms)</span>
+            <label className="flex w-28 flex-col gap-1 text-sm">
+              <span className="text-zinc-400">Soğuma ms</span>
               <input
                 type="number"
-                value={form.cooldownMs}
-                onChange={(e) => setF("cooldownMs", Number(e.target.value) || 0)}
+                value={cooldownMs}
+                onChange={(e) => setCooldownMs(Number(e.target.value) || 0)}
                 className={fieldCls}
               />
             </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Tetikleyici</span>
-              <select value={form.triggerType} onChange={(e) => setF("triggerType", e.target.value)} className={fieldCls}>
-                {(meta?.triggers ?? [
-                  { type: "chat", label: "Sohbet" },
-                  { type: "attacked", label: "Saldırıya uğradı" },
-                  { type: "player_nearby", label: "Yakında oyuncu" },
-                  { type: "health_below", label: "Can düşük" },
-                  { type: "food_below", label: "Açlık düşük" },
-                  { type: "item_count", label: "Eşya adedi" },
-                  { type: "interval", label: "Zamanlayıcı" },
-                  { type: "inventory_full", label: "Envanter dolu" },
-                  { type: "player_joined", label: "Oyuncu girdi" },
-                  { type: "bot_died", label: "Bot öldü" }
-                ]).map((t) => (
-                  <option key={t.type} value={t.type}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+            <label className="flex w-28 flex-col gap-1 text-sm">
+              <span className="text-zinc-400">Max/dk</span>
+              <input
+                type="number"
+                value={maxPerMin}
+                onChange={(e) => setMaxPerMin(Number(e.target.value) || 1)}
+                className={fieldCls}
+              />
             </label>
+          </div>
 
-            {form.triggerType === "chat" && (
-              <>
+          {/* Pipeline visual */}
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-2 text-xs">
+            <span className="rounded bg-amber-950/50 px-2 py-1 font-semibold text-amber-300">WHEN</span>
+            <span className="mono text-zinc-300">{summaryTrigger()}</span>
+            <span className="text-zinc-600">→</span>
+            <span className="rounded bg-sky-950/50 px-2 py-1 font-semibold text-sky-300">IF</span>
+            <span className="text-zinc-400">{conditions.length ? conditions.map((c) => c.type).join(" · ") : "—"}</span>
+            <span className="text-zinc-600">→</span>
+            <span className="rounded bg-emerald-950/50 px-2 py-1 font-semibold text-emerald-300">THEN</span>
+            <span className="text-zinc-400">{actions.map((a) => a.type).join(" · ")}</span>
+          </div>
+
+          {/* WHEN */}
+          <div className="rounded-lg border border-amber-900/40 bg-amber-950/10 p-3">
+            <div className="mb-2 text-[10px] font-semibold tracking-wide text-amber-400/90 uppercase">
+              1 · WHEN — Tetikleyici
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-zinc-400">Tür</span>
+                <select value={triggerType} onChange={(e) => setTriggerType(e.target.value)} className={fieldCls}>
+                  {triggers.map((tr) => (
+                    <option key={tr.type} value={tr.type}>
+                      {tr.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {triggerType === "chat" && (
+                <>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-zinc-400">Desen / komut adı</span>
+                    <input
+                      value={pattern}
+                      onChange={(e) => setPattern(e.target.value)}
+                      placeholder="gel | topla"
+                      className={fieldCls}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-zinc-400">Eşleşme</span>
+                    <select value={match} onChange={(e) => setMatch(e.target.value)} className={fieldCls}>
+                      <option value="command">komut (/slash)</option>
+                      <option value="startsWith">ile başlar</option>
+                      <option value="contains">içerir</option>
+                      <option value="exact">tam eşit</option>
+                      <option value="regex">regex</option>
+                    </select>
+                  </label>
+                  {match === "command" && (
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-zinc-400">Komut öneki</span>
+                      <input
+                        value={commandPrefix}
+                        onChange={(e) => setCommandPrefix(e.target.value)}
+                        placeholder="/"
+                        className={fieldCls}
+                      />
+                    </label>
+                  )}
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-zinc-400">Kimden</span>
+                    <select value={from} onChange={(e) => setFrom(e.target.value)} className={fieldCls}>
+                      <option value="authorized">Yetkililer (İ3)</option>
+                      <option value="anyone">Herkes</option>
+                      <option value="list">Belirli kişi</option>
+                    </select>
+                  </label>
+                </>
+              )}
+
+              {(triggerType === "chat" ||
+                triggerType === "attacked" ||
+                triggerType === "player_nearby" ||
+                from === "list") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Desen (mesaj)</span>
-                  <input value={form.pattern} onChange={(e) => setF("pattern", e.target.value)} className={fieldCls} />
+                  <span className="text-zinc-400">Belirli oyuncu</span>
+                  <input
+                    value={player}
+                    onChange={(e) => setPlayer(e.target.value)}
+                    placeholder="opsiyonel isim"
+                    className={fieldCls}
+                  />
                 </label>
+              )}
+
+              {triggerType === "attacked" && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Eşleşme</span>
-                  <select value={form.match} onChange={(e) => setF("match", e.target.value)} className={fieldCls}>
-                    <option value="contains">içerir</option>
-                    <option value="exact">tam</option>
-                    <option value="regex">regex</option>
+                  <span className="text-zinc-400">Kaynak</span>
+                  <select value={source} onChange={(e) => setSource(e.target.value)} className={fieldCls}>
+                    <option value="all">Hepsi</option>
+                    <option value="player">Oyuncu</option>
+                    <option value="mob">Mob</option>
                   </select>
                 </label>
+              )}
+
+              {(triggerType === "item_count" || triggerType === "item_gained") && (
+                <>
+                  <div className="flex flex-col gap-1 text-sm">
+                    <span className="text-zinc-400">
+                      {triggerType === "item_gained" ? "Eşya (boş = herhangi)" : "Eşya"}
+                    </span>
+                    <ItemPicker version={catalogVersion} kind="items" value={item} onChange={setItem} />
+                  </div>
+                  {triggerType === "item_count" && (
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-zinc-400">Karşılaştırma</span>
+                      <select value={comparison} onChange={(e) => setComparison(e.target.value)} className={fieldCls}>
+                        <option value="lt">&lt; azsa</option>
+                        <option value="lte">≤</option>
+                        <option value="gt">&gt; fazlaysa</option>
+                        <option value="gte">≥</option>
+                        <option value="eq">=</option>
+                      </select>
+                    </label>
+                  )}
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span className="text-zinc-400">
+                      {triggerType === "item_gained" ? "Min artım" : "Eşik adet"}
+                    </span>
+                    <input
+                      type="number"
+                      value={threshold}
+                      onChange={(e) => setThreshold(Number(e.target.value))}
+                      className={fieldCls}
+                    />
+                  </label>
+                </>
+              )}
+
+              {(triggerType === "health_below" || triggerType === "food_below") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Kimden</span>
-                  <select value={form.from} onChange={(e) => setF("from", e.target.value)} className={fieldCls}>
-                    <option value="authorized">Yetkililer (İ3)</option>
-                    <option value="anyone">Herkes</option>
-                    <option value="list">Belirli kişi</option>
-                  </select>
+                  <span className="text-zinc-400">Eşik</span>
+                  <input
+                    type="number"
+                    value={threshold}
+                    onChange={(e) => setThreshold(Number(e.target.value))}
+                    className={fieldCls}
+                  />
                 </label>
-              </>
-            )}
+              )}
 
-            {(form.triggerType === "chat" ||
-              form.triggerType === "attacked" ||
-              form.triggerType === "player_nearby" ||
-              form.from === "list") && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Belirli oyuncu (opsiyonel)</span>
-                <input
-                  value={form.player}
-                  onChange={(e) => setF("player", e.target.value)}
-                  placeholder="CaYatur"
-                  className={fieldCls}
-                />
-              </label>
-            )}
+              {triggerType === "interval" && (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-zinc-400">Her (ms)</span>
+                  <input
+                    type="number"
+                    value={everyMs}
+                    onChange={(e) => setEveryMs(Number(e.target.value))}
+                    className={fieldCls}
+                  />
+                </label>
+              )}
 
-            {(form.triggerType === "health_below" ||
-              form.triggerType === "food_below" ||
-              form.triggerType === "item_count") && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Eşik</span>
-                <input
-                  type="number"
-                  value={form.threshold}
-                  onChange={(e) => setF("threshold", Number(e.target.value))}
-                  className={fieldCls}
-                />
-              </label>
-            )}
+              {triggerType === "player_nearby" && (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-zinc-400">Yarıçap</span>
+                  <input
+                    type="number"
+                    value={radius}
+                    onChange={(e) => setRadius(Number(e.target.value))}
+                    className={fieldCls}
+                  />
+                </label>
+              )}
 
-            {form.triggerType === "interval" && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Her (ms)</span>
-                <input
-                  type="number"
-                  value={form.everyMs}
-                  onChange={(e) => setF("everyMs", Number(e.target.value))}
-                  className={fieldCls}
-                />
-              </label>
-            )}
-
-            {(form.triggerType === "player_nearby" || form.actionType === "hunt") && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Yarıçap</span>
-                <input
-                  type="number"
-                  value={form.radius}
-                  onChange={(e) => setF("radius", Number(e.target.value))}
-                  className={fieldCls}
-                />
-              </label>
-            )}
-
-            {form.triggerType === "attacked" && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Kaynak</span>
-                <select value={form.source} onChange={(e) => setF("source", e.target.value)} className={fieldCls}>
-                  <option value="all">Hepsi</option>
-                  <option value="player">Oyuncu</option>
-                  <option value="mob">Mob</option>
-                </select>
-              </label>
-            )}
-
-            {triggerNeedsItem && (
-              <div className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Eşya (katalog)</span>
-                <ItemPicker version={catalogVersion} kind="items" value={form.item} onChange={(n) => setF("item", n)} />
-              </div>
-            )}
-
-            {form.triggerType === "item_count" && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Karşılaştırma</span>
-                <select value={form.comparison} onChange={(e) => setF("comparison", e.target.value)} className={fieldCls}>
-                  <option value="lt">&lt;</option>
-                  <option value="lte">≤</option>
-                  <option value="gt">&gt;</option>
-                  <option value="gte">≥</option>
-                  <option value="eq">=</option>
-                </select>
-              </label>
-            )}
-
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Aksiyon</span>
-              <select value={form.actionType} onChange={(e) => setF("actionType", e.target.value)} className={fieldCls}>
-                {(meta?.actions ?? [
-                  { type: "goto", label: "Git (oyuncu)" },
-                  { type: "follow", label: "Takip" },
-                  { type: "attack", label: "Saldır" },
-                  { type: "mine", label: "Maden" },
-                  { type: "collect", label: "Odun topla" },
-                  { type: "craft", label: "Üret" },
-                  { type: "send_chat", label: "Sohbet" },
-                  { type: "eat", label: "Ye" },
-                  { type: "flee", label: "Kaç" },
-                  { type: "panel_notify", label: "Panel bildir" }
-                ]).map((a) => (
-                  <option key={a.type} value={a.type}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {["goto", "follow", "attack"].includes(form.actionType) && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Hedef oyuncu</span>
-                <input
-                  value={form.actionPlayer}
-                  onChange={(e) => setF("actionPlayer", e.target.value)}
-                  placeholder="{player} veya isim"
-                  className={fieldCls}
-                />
-              </label>
-            )}
-
-            {form.actionType === "send_chat" && (
-              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
-                <span className="text-zinc-400">Mesaj</span>
-                <input value={form.actionText} onChange={(e) => setF("actionText", e.target.value)} className={fieldCls} />
-              </label>
-            )}
-
-            {actionNeedsOre && (
-              <div className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Maden (katalog)</span>
-                <ItemPicker version={catalogVersion} kind="ores" value={form.ore} onChange={(n) => setF("ore", n.replace(/_ore$/, ""))} />
-              </div>
-            )}
-
-            {actionNeedsItem && (
-              <div className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Eşya / blok (katalog)</span>
-                <ItemPicker
-                  version={catalogVersion}
-                  kind={form.actionType === "collect" || form.actionType === "collect_wood" ? "blocks" : "items"}
-                  value={form.item}
-                  onChange={(n) => setF("item", n)}
-                />
-              </div>
-            )}
-
-            {["mine", "collect", "craft", "collect_wood"].includes(form.actionType) && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Adet</span>
-                <input
-                  type="number"
-                  value={form.actionCount}
-                  onChange={(e) => setF("actionCount", Number(e.target.value) || 1)}
-                  className={fieldCls}
-                />
-              </label>
-            )}
-
-            {form.actionType === "mine" && (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Mod</span>
-                <select value={form.actionMode} onChange={(e) => setF("actionMode", e.target.value)} className={fieldCls}>
-                  <option value="legit">legit</option>
-                  <option value="utility">utility</option>
-                </select>
-              </label>
+              {(triggerType === "task_done" || triggerType === "task_failed") && (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-zinc-400">Görev tipi (opsiyonel)</span>
+                  <input
+                    value={taskType}
+                    onChange={(e) => setTaskType(e.target.value)}
+                    placeholder="collect-wood | mine | craft"
+                    className={fieldCls}
+                  />
+                </label>
+              )}
+            </div>
+            {match === "command" && triggerType === "chat" && (
+              <p className="mt-2 text-[10px] text-amber-600/90">
+                Örn. <span className="mono text-amber-400">/topla cobblestone 32</span> → pattern{" "}
+                <span className="mono">topla</span>, aksiyonda item={"{arg0}"} count={"{arg1}"}
+              </p>
             )}
           </div>
 
-          <p className="mt-3 text-[11px] text-zinc-500">
-            Özet: <span className="text-zinc-300">{form.triggerType}</span>
-            {form.pattern ? ` “${form.pattern}”` : ""} → <span className="text-zinc-300">{form.actionType}</span>
-            {form.actionPlayer ? ` (${form.actionPlayer})` : ""} · değişkenler: {"{player}"} {"{attacker}"} {"{item}"}
-          </p>
+          {/* IF */}
+          <div className="rounded-lg border border-sky-900/40 bg-sky-950/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div className="text-[10px] font-semibold tracking-wide text-sky-400/90 uppercase">
+                2 · IF — Koşullar (hepsi doğru olmalı)
+              </div>
+              <button
+                type="button"
+                onClick={() => setConditions((c) => [...c, emptyCond()])}
+                className="ml-auto rounded bg-sky-900/40 px-2 py-0.5 text-[10px] text-sky-200 hover:bg-sky-900/60"
+              >
+                + Koşul
+              </button>
+            </div>
+            {conditions.length === 0 && (
+              <p className="text-[11px] text-zinc-600 italic">Koşul yok — tetik her zaman aksiyon çalıştırır.</p>
+            )}
+            <div className="space-y-2">
+              {conditions.map((c, i) => (
+                <div key={i} className="flex flex-wrap items-end gap-2 rounded border border-zinc-800/80 bg-zinc-950/40 p-2">
+                  <label className="flex min-w-[10rem] flex-col gap-0.5 text-xs">
+                    <span className="text-zinc-500">Tür</span>
+                    <select
+                      value={c.type}
+                      onChange={(e) => updateCond(i, { type: e.target.value })}
+                      className={fieldCls}
+                    >
+                      {conditionMeta.map((m) => (
+                        <option key={m.type} value={m.type}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {(c.type === "has_item" ||
+                    c.type === "not_has_item" ||
+                    c.type === "item_count") && (
+                    <div className="min-w-[10rem] flex-1">
+                      <ItemPicker
+                        version={catalogVersion}
+                        kind="items"
+                        value={c.item ?? "stick"}
+                        onChange={(n) => updateCond(i, { item: n })}
+                      />
+                    </div>
+                  )}
+                  {(c.type === "health_below" ||
+                    c.type === "health_above" ||
+                    c.type === "food_below" ||
+                    c.type === "food_above" ||
+                    c.type === "item_count") && (
+                    <label className="flex w-20 flex-col gap-0.5 text-xs">
+                      <span className="text-zinc-500">Eşik</span>
+                      <input
+                        type="number"
+                        value={c.threshold ?? 10}
+                        onChange={(e) => updateCond(i, { threshold: Number(e.target.value) })}
+                        className={fieldCls}
+                      />
+                    </label>
+                  )}
+                  {c.type === "player_near" && (
+                    <>
+                      <input
+                        value={c.player ?? ""}
+                        onChange={(e) => updateCond(i, { player: e.target.value })}
+                        placeholder="oyuncu"
+                        className={`${fieldCls} w-28`}
+                      />
+                      <input
+                        type="number"
+                        value={c.radius ?? 16}
+                        onChange={(e) => updateCond(i, { radius: Number(e.target.value) })}
+                        className={`${fieldCls} w-20`}
+                      />
+                    </>
+                  )}
+                  {c.type === "in_dimension" && (
+                    <input
+                      value={c.dimension ?? "overworld"}
+                      onChange={(e) => updateCond(i, { dimension: e.target.value })}
+                      className={`${fieldCls} w-32`}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setConditions((rows) => rows.filter((_, j) => j !== i))}
+                    className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          {/* THEN */}
+          <div className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div className="text-[10px] font-semibold tracking-wide text-emerald-400/90 uppercase">
+                3 · THEN — Aksiyonlar (sırayla)
+              </div>
+              <button
+                type="button"
+                onClick={() => setActions((a) => [...a, emptyAct()])}
+                className="ml-auto rounded bg-emerald-900/40 px-2 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-900/60"
+              >
+                + Aksiyon
+              </button>
+            </div>
+            <div className="space-y-2">
+              {actions.map((a, i) => (
+                <div key={i} className="flex flex-wrap items-end gap-2 rounded border border-zinc-800/80 bg-zinc-950/40 p-2">
+                  <span className="self-center text-[10px] text-zinc-600">{i + 1}.</span>
+                  <label className="flex min-w-[11rem] flex-col gap-0.5 text-xs">
+                    <span className="text-zinc-500">Aksiyon</span>
+                    <select
+                      value={a.type}
+                      onChange={(e) => updateAct(i, { type: e.target.value })}
+                      className={fieldCls}
+                    >
+                      {actionMeta.map((m) => (
+                        <option key={m.type} value={m.type}>
+                          {m.category ? `${m.category}: ` : ""}
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {["goto", "follow", "attack", "protect", "social-follow", "social-attack"].includes(a.type) && (
+                    <input
+                      value={a.player ?? "{player}"}
+                      onChange={(e) => updateAct(i, { player: e.target.value })}
+                      placeholder="{player} / {arg0}"
+                      className={`${fieldCls} w-36`}
+                    />
+                  )}
+                  {a.type === "send_chat" && (
+                    <input
+                      value={a.text ?? ""}
+                      onChange={(e) => updateAct(i, { text: e.target.value })}
+                      placeholder="mesaj"
+                      className={`${fieldCls} min-w-[12rem] flex-1`}
+                    />
+                  )}
+                  {a.type === "panel_notify" && (
+                    <input
+                      value={a.message ?? ""}
+                      onChange={(e) => updateAct(i, { message: e.target.value })}
+                      placeholder="bildirim"
+                      className={`${fieldCls} min-w-[12rem] flex-1`}
+                    />
+                  )}
+                  {["collect", "collect_item", "craft", "withdraw", "mine"].includes(a.type) && (
+                    <>
+                      {a.type === "mine" ? (
+                        <ItemPicker
+                          version={catalogVersion}
+                          kind="ores"
+                          value={String(a.ore ?? "iron")}
+                          onChange={(n) => updateAct(i, { ore: n.replace(/_ore$/, "") })}
+                        />
+                      ) : (
+                        <ItemPicker
+                          version={catalogVersion}
+                          kind={a.type === "collect" || a.type === "collect_item" ? "blocks" : "items"}
+                          value={String(a.item ?? a.block ?? "oak_log")}
+                          onChange={(n) => updateAct(i, { item: n, block: n })}
+                        />
+                      )}
+                      <input
+                        value={a.count ?? 16}
+                        onChange={(e) => updateAct(i, { count: e.target.value })}
+                        placeholder="adet / {arg1}"
+                        className={`${fieldCls} w-24`}
+                      />
+                    </>
+                  )}
+                  {["clear-mobs", "hunt", "collect_drops"].includes(a.type) && (
+                    <input
+                      type="number"
+                      value={a.radius ?? 16}
+                      onChange={(e) => updateAct(i, { radius: Number(e.target.value) })}
+                      className={`${fieldCls} w-20`}
+                      title="yarıçap"
+                    />
+                  )}
+                  {a.type === "wait" && (
+                    <input
+                      type="number"
+                      value={a.seconds ?? 1}
+                      onChange={(e) => updateAct(i, { seconds: Number(e.target.value) })}
+                      className={`${fieldCls} w-20`}
+                      title="saniye"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setActions((rows) => rows.filter((_, j) => j !== i))}
+                    className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
+              type="button"
               onClick={() => void create()}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
             >
               Kuralı kaydet
             </button>
+            <p className="text-[10px] text-zinc-600">
+              Değişkenler: {(meta?.vars ?? ["{player}", "{arg0}", "{item}", "{delta}"]).join(" ")}
+            </p>
           </div>
-
-          <div className="mt-4 border-t border-zinc-800 pt-3">
-            <div className="mb-2 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Hazır şablonlar</div>
-            <div className="flex flex-wrap gap-1.5">
-              {templates.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => void addTemplate(t!)}
-                  className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
-                >
-                  + {t}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        </section>
       )}
 
+      {/* ── Mevcut kurallar ── */}
       <div className="space-y-2">
         {rules.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-800 py-12 text-zinc-500">
             <span className="text-3xl">⚙️</span>
-            <p className="text-sm">Henüz kural yok. Formdan oluştur veya şablon ekle.</p>
+            <p className="text-sm">Henüz kural yok. Blueprint ekle veya oluşturucu kullan.</p>
           </div>
         )}
         {rules.map((r) => (
@@ -517,32 +819,29 @@ export function Automations() {
           >
             <button
               onClick={() => void toggle(r)}
-              className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-                r.enabled ? "bg-emerald-500/10 text-emerald-300" : "bg-zinc-800 text-zinc-500"
+              className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium ${
+                r.enabled ? "bg-emerald-950/60 text-emerald-300" : "bg-zinc-800 text-zinc-500"
               }`}
             >
-              {r.enabled ? "Açık" : "Kapalı"}
+              {r.enabled ? "AÇIK" : "KAPALI"}
             </button>
             <div className="min-w-0 flex-1">
-              <div className="font-medium text-zinc-100">{r.name}</div>
-              <div className="mono text-[11px] text-zinc-500">
-                {String(r.trigger?.type ?? "?")}
-                {r.trigger?.pattern ? ` · ${String(r.trigger.pattern)}` : ""}
-                {r.trigger?.player ? ` · kişi:${String(r.trigger.player)}` : ""}
-                {r.trigger?.ore ? ` · ore:${String(r.trigger.ore)}` : ""}
-                {" · "}
-                {r.actions.map((a) => String(a.type)).join(" → ")}
+              <div className="font-medium text-zinc-200">{r.name}</div>
+              <div className="mono mt-0.5 truncate text-[11px] text-zinc-500">
+                WHEN {(r.trigger as { type?: string }).type}
+                {r.conditions?.length ? ` · IF ${r.conditions.length}` : ""}
+                {` · THEN ${r.actions?.map((a) => (a as { type?: string }).type).join(", ")}`}
               </div>
             </div>
             <button
               onClick={() => void test(r)}
-              className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-amber-300 hover:bg-zinc-700"
+              className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200"
             >
               Test
             </button>
             <button
               onClick={() => void remove(r)}
-              className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-red-300 hover:bg-zinc-700"
+              className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-red-400 hover:bg-red-950/40"
             >
               Sil
             </button>
