@@ -21,7 +21,7 @@ const defaultFg = {
   enabled: true,
   minDamageHp: 4,
   lethalHealthMargin: 2,
-  mlgTriggerBlocks: 3.2,
+  mlgTriggerBlocks: 5.5,
   onlyWhenDangerous: true
 };
 
@@ -278,7 +278,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               defaultValue={fg.mlgTriggerBlocks}
               onBlur={(e) =>
                 void patch({
-                  fallGuard: { ...fg, mlgTriggerBlocks: Math.max(1, Number(e.target.value) || 3.2) }
+                  fallGuard: { ...fg, mlgTriggerBlocks: Math.max(1, Number(e.target.value) || 5.5) }
                 })
               }
               className="mono w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
