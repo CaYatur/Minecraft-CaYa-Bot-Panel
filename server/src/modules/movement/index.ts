@@ -6,6 +6,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
+import { installWaterMovementAssist } from "./water";
 
 /**
  * HAREKET ÇEKİRDEĞİ — tek altın kural (TODO §12'ye de yazıldı):
@@ -67,6 +68,8 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   const bot = requireBot(instance);
   const anyBot = bot as unknown as { pathfinder?: unknown };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
+  // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
+  installWaterMovementAssist(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
