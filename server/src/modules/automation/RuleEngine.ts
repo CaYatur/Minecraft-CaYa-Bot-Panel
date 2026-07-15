@@ -1380,23 +1380,31 @@ export class RuleEngine {
       return;
     }
     if (type === "follow") {
-      const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
-      if (p && this.isOwnUsername(botId, p)) {
+      const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx).trim();
+      if (!p || p.startsWith("{")) {
+        log.warn("follow ignored: empty player after interpolate");
+        return;
+      }
+      if (this.isOwnUsername(botId, p)) {
         log.warn("follow ignored: bot cannot follow self", p);
         return;
       }
-      if (p) inst.enqueueAction({ type: "follow", player: p, distance: Number(action.distance ?? 3) });
+      inst.enqueueAction({ type: "follow", player: p, distance: Number(action.distance ?? 3) });
       return;
     }
     if (type === "goto") {
       if (action.waypoint) {
         // resolved in REST only — try manager waypoints by name
-        const name = interpolate(String(action.waypoint), ctx);
+        const name = interpolate(String(action.waypoint), ctx).trim();
         const list = this.manager.waypoints.forServer(inst.config.serverId);
         const wp = list.find((w) => w.name.toLowerCase() === name.toLowerCase() || w.id === name);
         if (wp) inst.enqueueAction({ type: "goto", x: wp.x, y: wp.y, z: wp.z, label: `waypoint: ${wp.name}` });
       } else if (action.player || ctx.player) {
-        const p = interpolate(String(action.player ?? ctx.player), ctx);
+        const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx).trim();
+        if (!p || p.startsWith("{")) {
+          log.warn("goto-player ignored: empty player after interpolate");
+          return;
+        }
         if (this.isOwnUsername(botId, p)) {
           log.warn("goto-player ignored: target is the bot itself", p);
           return;
