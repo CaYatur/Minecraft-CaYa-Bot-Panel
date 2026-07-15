@@ -3,7 +3,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { BotDetail } from "./pages/BotDetail";
 import { Dashboard } from "./pages/Dashboard";
-import { Automations, Settings } from "./pages/Placeholders";
+import { Automations } from "./pages/Automations";
+import { Settings } from "./pages/Settings";
 import { Servers } from "./pages/Servers";
 
 export default function App() {

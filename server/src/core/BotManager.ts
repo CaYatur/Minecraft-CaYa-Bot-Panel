@@ -1,4 +1,6 @@
 import { EventEmitter } from "events";
+import { RuleEngine } from "../modules/automation/RuleEngine";
+import { WorldMemory } from "../modules/world/memory";
 import { loadJson, saveJson } from "../persistence/store";
 import type { BotConfig, ServerProfile, StateSnapshot, Waypoint } from "../types";
 import { USERNAME_RE, defaultBotConfig, mergeConfig, newId } from "../types";
@@ -27,11 +29,15 @@ export interface CreateBotInput {
 export class BotManager extends EventEmitter {
   readonly bots = new Map<string, BotInstance>();
   readonly waypoints = new WaypointStore();
+  readonly worldMemory = new WorldMemory();
+  readonly rules = new RuleEngine(this);
   servers: ServerProfile[] = [];
   private readonly log = createLogger("manager");
 
   boot() {
     this.waypoints.load();
+    this.worldMemory.load();
+    this.rules.load();
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
     for (const cfg of configs) this.instantiate(cfg);
@@ -214,7 +220,12 @@ export class BotManager extends EventEmitter {
       servers: this.servers,
       bots: [...this.bots.values()].map((b) => b.getSnapshot()),
       waypoints,
-      supportedVersions
+      supportedVersions,
+      rules: this.rules.list(),
+      worldMemory: {
+        chests: this.servers.flatMap((s) => this.worldMemory.chestsFor(s.id)),
+        ores: this.servers.flatMap((s) => this.worldMemory.oresFor(s.id))
+      }
     };
   }
 
@@ -246,11 +257,17 @@ export class BotManager extends EventEmitter {
   // ---- internals --------------------------------------------------------------
 
   private instantiate(cfg: BotConfig): BotInstance {
-    const inst = new BotInstance(cfg, (sid) => this.getServer(sid));
+    // eski bots.json şema eksiklerini varsayılanlarla doldur (migrasyon)
+    const merged = mergeConfig(defaultBotConfig(cfg.username || "bot", cfg.serverId || ""), cfg);
+    merged.id = cfg.id || merged.id;
+    merged.username = cfg.username || merged.username;
+    merged.serverId = cfg.serverId || merged.serverId;
+    const inst = new BotInstance(merged, (sid) => this.getServer(sid));
     // Faz 6: ölüm konumu → sunucu bazlı "ölüm-<bot>" waypoint (loot için)
     inst.on(
       "deathAt",
       (info: {
+        botId?: string;
         username: string;
         serverId: string;
         x: number;
@@ -280,6 +297,28 @@ export class BotManager extends EventEmitter {
         } catch (err) {
           this.log.warn("Ölüm waypoint yazılamadı", err instanceof Error ? err.message : String(err));
         }
+        if (info.botId) this.rules.onBotEvent(info.botId, "died");
+      }
+    );
+    inst.on("chatParsed", (entry: { botId: string; username?: string; text: string; kind: string }) => {
+      if (entry.kind === "player" || entry.kind === "whisper") {
+        this.rules.onChat(entry.botId, entry.username, entry.text);
+      }
+    });
+    inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
+    inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
+    inst.on(
+      "chestOpened",
+      (info: {
+        serverId: string;
+        x: number;
+        y: number;
+        z: number;
+        dimension: string;
+        items: { name: string; count: number }[];
+      }) => {
+        this.worldMemory.upsertChest(info);
+        this.emit("changed");
       }
     );
     this.bots.set(cfg.id, inst);

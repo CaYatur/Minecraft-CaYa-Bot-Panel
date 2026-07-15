@@ -5,7 +5,7 @@ import type { TaskSummary, Waypoint } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
 const CMD_HELP =
-  "goto x y z · follow isim · yanina isim · wp isim · wpkaydet isim · say metin · attack isim · mobtemizle [r] · kac · loot · stop";
+  "goto · follow · yanina · wp · say · attack · mobtemizle · kac · loot · ye · av · odun [n] · maden ore n · uret item · stop";
 
 // zustand kuralı: seçici içinde yeni dizi/obje ÜRETME (sonsuz render döngüsü yapar).
 // Boş varsayılanlar modül sabiti olarak dışarıda tutulur.
@@ -73,6 +73,16 @@ export function TasksPanel({ botId }: { botId: string }) {
         await act({ type: "flee" });
       } else if (verb === "loot" || verb === "olum" || verb === "ölüm") {
         await act({ type: "loot-death" });
+      } else if (verb === "ye" || verb === "eat") {
+        await act({ type: "eat" });
+      } else if (verb === "av" || verb === "hunt") {
+        await act({ type: "hunt", radius: parts[1] ? Number(parts[1]) : 32 });
+      } else if (verb === "odun" || verb === "wood") {
+        await act({ type: "collect-wood", count: parts[1] ? Number(parts[1]) : 16 });
+      } else if (verb === "maden" || verb === "mine") {
+        await act({ type: "mine", ore: parts[1] || "iron", count: parts[2] ? Number(parts[2]) : 8 });
+      } else if (verb === "uret" || verb === "üret" || verb === "craft") {
+        await act({ type: "craft", item: parts[1] || "stick", count: parts[2] ? Number(parts[2]) : 1 });
       } else if (verb === "stop" || verb === "dur") {
         await act({ type: "stop" }, "Hareket/dövüş durduruldu");
       } else {
@@ -227,14 +237,28 @@ export function TasksPanel({ botId }: { botId: string }) {
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 flex items-center">
           <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Görev Kuyruğu</span>
-          {(tasks.current || tasks.queue.length > 0) && (
+          <div className="ml-auto flex gap-1.5">
             <button
-              onClick={() => api.post(`/api/bots/${botId}/tasks/cancel-all`).catch(() => {})}
-              className="ml-auto rounded bg-zinc-800 px-2 py-0.5 text-xs text-red-300 hover:bg-zinc-700"
+              onClick={() => api.post(`/api/bots/${botId}/tasks/pause`).catch(() => {})}
+              className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-amber-300 hover:bg-zinc-700"
             >
-              Tümünü İptal
+              Duraklat
             </button>
-          )}
+            <button
+              onClick={() => api.post(`/api/bots/${botId}/tasks/resume`).catch(() => {})}
+              className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-emerald-300 hover:bg-zinc-700"
+            >
+              Devam
+            </button>
+            {(tasks.current || tasks.queue.length > 0) && (
+              <button
+                onClick={() => api.post(`/api/bots/${botId}/tasks/cancel-all`).catch(() => {})}
+                className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-red-300 hover:bg-zinc-700"
+              >
+                Tümünü İptal
+              </button>
+            )}
+          </div>
         </div>
 
         {tasks.current ? (

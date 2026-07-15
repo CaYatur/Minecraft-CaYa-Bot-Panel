@@ -55,7 +55,7 @@ export function hasLineOfSight(bot: Bot, entity: Entity): boolean {
       const bx = from.x + dx * t;
       const by = from.y + dy * t;
       const bz = from.z + dz * t;
-      const block = bot.blockAt(from.offset(dx * t, dy * t, dz * t) as Vec3, false);
+      const block = bot.blockAt(from.offset(dx * t, dy * t, dz * t));
       if (block && block.boundingBox === "block") {
         // ignore if sample is past/inside target hitbox volume
         if (t + 0.3 < dist) return false;

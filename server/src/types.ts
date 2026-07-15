@@ -172,6 +172,8 @@ export interface StateSnapshot {
   bots: BotSnapshot[];
   waypoints: Record<string, Waypoint[]>;
   supportedVersions: string[];
+  rules?: unknown[];
+  worldMemory?: { chests: unknown[]; ores: unknown[] };
 }
 
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;

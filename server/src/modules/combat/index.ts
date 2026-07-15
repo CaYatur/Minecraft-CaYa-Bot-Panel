@@ -3,8 +3,8 @@ import type { Entity } from "prismarine-entity";
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, DeathRecord } from "../../types";
-import { ensureMovement, runGoto } from "../movement";
 import { goals } from "mineflayer-pathfinder";
+import { ensureMovement, runGoto } from "../movement";
 import { CREEPER_SAFE_RANGE, isHostileMob, isPlayerEntity } from "./mobs";
 import {
   distanceEyeToEntity,
@@ -456,7 +456,12 @@ export class CombatService {
       botId: this.instance.config.id,
       username: this.instance.config.username,
       serverId: this.instance.config.serverId,
-      ...this.lastDeath
+      x: this.lastDeath.x,
+      y: this.lastDeath.y,
+      z: this.lastDeath.z,
+      dimension: this.lastDeath.dimension,
+      ts: this.lastDeath.ts,
+      lootUntil: this.lastDeath.lootUntil
     });
     this.emitCombat();
   }

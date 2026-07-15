@@ -5,8 +5,11 @@ import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import { parseChatMessage } from "../modules/chat/parse";
 import { CombatService } from "../modules/combat";
+import { CraftService } from "../modules/craft";
+import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { runFollow, runGoto, runGotoPlayer, stopMovement } from "../modules/movement";
+import { SurvivalService } from "../modules/survival";
 import type {
   BotConfig,
   BotRuntimeState,
@@ -40,6 +43,10 @@ export class BotInstance extends EventEmitter {
 
   bot: Bot | null = null;
   readonly combat: CombatService;
+  readonly survival: SurvivalService;
+  readonly gather: GatherService;
+  readonly craft: CraftService;
+  private foodWatchTimer: NodeJS.Timeout | null = null;
   private wantsRunning = false;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -59,6 +66,9 @@ export class BotInstance extends EventEmitter {
     super();
     this.log = createLogger("bot", config.id);
     this.combat = new CombatService(this);
+    this.survival = new SurvivalService(this);
+    this.gather = new GatherService(this);
+    this.craft = new CraftService(this);
     this.limiter = new ChatRateLimiter(
       (text) => {
         if (this.bot && this.status === "online") {
@@ -203,9 +213,149 @@ export class BotInstance extends EventEmitter {
         this.combat.stopCombat("panel");
         this.tasks.cancelAll("dövüş bırakıldı");
         return null;
+      // ---- Faz 7 survival ------------------------------------------------------
+      case "eat":
+        return this.survival.enqueueEatNow();
+      case "hunt":
+        return this.survival.enqueueHunt(Number(action.radius ?? 32));
+      case "cook":
+        return this.survival.enqueueCook();
+      case "acquire-food":
+        return this.survival.enqueueAcquireFood();
+      // ---- Faz 8 gather --------------------------------------------------------
+      case "collect-wood":
+      case "odun-topla":
+        return this.gather.enqueueCollectWood(Number(action.count ?? 16), action.logType ? String(action.logType) : undefined);
+      case "collect-drops":
+      case "eşya-topla":
+        return this.gather.enqueueCollectDrops(action.filter ? String(action.filter) : undefined, Number(action.radius ?? 16));
+      case "mine":
+      case "maden-topla":
+        return this.gather.enqueueMine(String(action.ore ?? "iron"), Number(action.count ?? 8), action.mode === "utility" ? "utility" : "legit");
+      // ---- Faz 9 craft ---------------------------------------------------------
+      case "craft":
+      case "üret":
+        return this.craft.enqueueCraft(String(action.item ?? action.name ?? ""), Number(action.count ?? 1));
+      // ---- Faz 10 depo ---------------------------------------------------------
+      case "deposit":
+      case "depoya-bırak":
+        return this.enqueueDeposit(String(action.filter ?? ""));
+      case "withdraw":
+      case "depodan-al":
+        return this.enqueueWithdraw(String(action.item ?? ""), Number(action.count ?? 1));
+      case "fetch":
+      case "getir":
+        return this.enqueueFetch(String(action.item ?? ""), Number(action.count ?? 1), String(action.player ?? action.kime ?? ""));
       default:
         throw new Error(`Bilinmeyen aksiyon tipi: ${type || "(boş)"}`);
     }
+  }
+
+  private enqueueDeposit(filter: string) {
+    return this.tasks.enqueue(
+      { type: "deposit", label: `depoya bırak${filter ? `: ${filter}` : ""}`, priority: PRIORITY.USER, params: { filter }, requeueOnPreempt: true },
+      () => async (token, report) => {
+        const bot = this.bot;
+        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
+        report({ done: 0, total: 1, label: "sandık aranıyor" });
+        const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "trapped_chest" || b.name === "barrel", maxDistance: 32 });
+        if (!chest) throw new Error("Yakında sandık yok — önce sandık açarak world-memory'ye kaydedin");
+        await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
+        if (token.cancelled) throw new Error(token.reason ?? "iptal");
+        const win = await bot.openContainer(chest);
+        const keep = this.config.inventory.keepItems;
+        const items = bot.inventory.items().filter((i) => !keep.includes(i.name) && (!filter || i.name.includes(filter)));
+        for (const it of items) {
+          if (token.cancelled) break;
+          try {
+            // chest window deposit API varies — best-effort
+            const w = win as unknown as { deposit?: (t: number, m: null, c: number) => Promise<void>; close: () => void; containerItems?: () => Array<{ name: string; count: number }> };
+            if (w.deposit) await w.deposit(it.type, null, it.count);
+          } catch {
+            /* full */
+          }
+        }
+        const w2 = win as unknown as { containerItems?: () => Array<{ name: string; count: number }>; close: () => void };
+        this.emit("chestOpened", {
+          serverId: this.config.serverId,
+          x: chest.position.x,
+          y: chest.position.y,
+          z: chest.position.z,
+          dimension: this.runtime.dimension,
+          items: w2.containerItems?.().map((i) => ({ name: i.name, count: i.count })) ?? []
+        });
+        win.close();
+        report({ done: 1, total: 1, label: "depozito bitti" });
+      }
+    );
+  }
+
+  private enqueueWithdraw(item: string, count: number) {
+    return this.tasks.enqueue(
+      { type: "withdraw", label: `depodan al: ${item}×${count}`, priority: PRIORITY.USER, params: { item, count }, requeueOnPreempt: true },
+      () => async (token, report) => {
+        const bot = this.bot;
+        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
+        report({ done: 0, total: 1, label: "sandık" });
+        const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "barrel", maxDistance: 32 });
+        if (!chest) throw new Error("Yakında sandık yok");
+        await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
+        const win = await bot.openContainer(chest);
+        try {
+          const id = bot.registry.itemsByName[item]?.id;
+          if (id == null) throw new Error(`Eşya yok: ${item}`);
+          const w = win as unknown as { withdraw?: (t: number, m: null, c: number) => Promise<void> };
+          if (w.withdraw) await w.withdraw(id, null, count);
+          else throw new Error("Sandık withdraw API yok");
+        } finally {
+          win.close();
+        }
+        report({ done: 1, total: 1, label: "alındı" });
+      }
+    );
+  }
+
+  private enqueueFetch(item: string, count: number, player: string) {
+    return this.tasks.enqueue(
+      { type: "fetch", label: `getir: ${item}×${count} → ${player || "?"}`, priority: PRIORITY.USER, params: { item, count, player }, requeueOnPreempt: true },
+      () => async (token, report) => {
+        report({ done: 0, total: 3, label: "temin" });
+        const bot = this.bot;
+        if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
+        const have = bot.inventory.items().filter((i) => i.name.includes(item)).reduce((s, i) => s + i.count, 0);
+        if (have < count) {
+          try {
+            this.enqueueWithdraw(item, count - have);
+          } catch {
+            /* */
+          }
+          // try craft or mine
+          try {
+            await this.craft.enqueueCraft(item, count);
+          } catch {
+            try {
+              this.gather.enqueueMine(item.replace("_ingot", ""), count);
+            } catch {
+              /* */
+            }
+          }
+        }
+        report({ done: 1, total: 3, label: "oyuncuya git" });
+        if (player) {
+          await runGotoPlayer(this, player, 2, token, report);
+        }
+        report({ done: 2, total: 3, label: "bırak" });
+        const stack = bot.inventory.items().find((i) => i.name.includes(item));
+        if (stack) {
+          try {
+            await bot.toss(stack.type, null, Math.min(count, stack.count));
+          } catch (e) {
+            throw new Error(`Toss başarısız: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        report({ done: 3, total: 3, label: "getir bitti" });
+      }
+    );
   }
 
   // ---- connection -----------------------------------------------------------
@@ -272,8 +422,12 @@ export class BotInstance extends EventEmitter {
         this.hookInventory(bot);
         if (this.config.inventory.autoBestGear) this.loadArmorManager(bot);
         this.combat.attach(bot);
+        this.survival.attach(bot);
+        if (this.foodWatchTimer) clearInterval(this.foodWatchTimer);
+        this.foodWatchTimer = setInterval(() => this.survival.tickFoodWatch(), 15_000);
       }
       this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
+      this.emit("spawned", { botId: this.config.id });
     });
 
     bot.on("respawn", () => {
@@ -358,6 +512,8 @@ export class BotInstance extends EventEmitter {
         ansi
       };
       this.pushChat(entry);
+      // otomasyon motoru (Faz 11) — BotManager dinler
+      this.emit("chatParsed", entry);
     });
   }
 
@@ -371,6 +527,11 @@ export class BotInstance extends EventEmitter {
       this.invTimer = null;
     }
     this.combat.detach();
+    this.survival.detach();
+    if (this.foodWatchTimer) {
+      clearInterval(this.foodWatchTimer);
+      this.foodWatchTimer = null;
+    }
     const bot = this.bot;
     this.bot = null;
     if (bot) {

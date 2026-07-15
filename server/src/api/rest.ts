@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { BotManager, PanelError } from "../core/BotManager";
+import { RULE_TEMPLATES } from "../modules/automation/RuleEngine";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
 
@@ -247,6 +248,100 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       const botId = req.query.botId ? String(req.query.botId) : undefined;
       const limit = Math.max(1, Math.min(1000, Number(req.query.limit) || 300));
       res.json(logHub.recent(botId, limit));
+    })
+  );
+
+  // ---- tasks pause/resume (Faz 10) -----------------------------------------------
+  r.post(
+    "/bots/:id/tasks/pause",
+    h((req, res) => {
+      const ok = manager.mustGet(req.params.id!).tasks.pause("panelden duraklatıldı");
+      res.json({ ok });
+    })
+  );
+  r.post(
+    "/bots/:id/tasks/resume",
+    h((req, res) => {
+      const ok = manager.mustGet(req.params.id!).tasks.resume();
+      res.json({ ok });
+    })
+  );
+  r.get(
+    "/bots/:id/tasks/history",
+    h((req, res) => {
+      res.json(manager.mustGet(req.params.id!).tasks.historySummaries);
+    })
+  );
+
+  // ---- craft plan (Faz 9) --------------------------------------------------------
+  r.get(
+    "/bots/:id/craft-plan",
+    h((req, res) => {
+      const item = String(req.query.item ?? "");
+      const count = Math.max(1, Number(req.query.count) || 1);
+      if (!item) throw new PanelError("item sorgu parametresi gerekli");
+      res.json({ plan: manager.mustGet(req.params.id!).craft.previewPlan(item, count) });
+    })
+  );
+
+  // ---- rules (Faz 11) ------------------------------------------------------------
+  r.get(
+    "/rules",
+    h((_req, res) => {
+      res.json(manager.rules.list());
+    })
+  );
+  r.post(
+    "/rules",
+    h((req, res) => {
+      res.json(manager.rules.create(req.body ?? {}));
+    })
+  );
+  r.patch(
+    "/rules/:id",
+    h((req, res) => {
+      try {
+        res.json(manager.rules.update(req.params.id!, req.body ?? {}));
+      } catch (e) {
+        throw new PanelError(e instanceof Error ? e.message : String(e), 404);
+      }
+    })
+  );
+  r.delete(
+    "/rules/:id",
+    h((req, res) => {
+      manager.rules.remove(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+  r.post(
+    "/rules/:id/test",
+    h(async (req, res) => {
+      const botId = String(req.body?.botId ?? "");
+      if (!botId) throw new PanelError("botId gerekli");
+      await manager.rules.testRule(req.params.id!, botId);
+      res.json({ ok: true });
+    })
+  );
+  r.post(
+    "/rules/templates/:name",
+    h((req, res) => {
+      const tpl = RULE_TEMPLATES.find((t) => t.name === req.params.name);
+      if (!tpl) throw new PanelError("Şablon bulunamadı", 404);
+      res.json(manager.rules.create({ ...tpl, botIds: req.body?.botIds ?? "all" }));
+    })
+  );
+
+  // ---- world memory (Faz 10) -----------------------------------------------------
+  r.get(
+    "/world-memory",
+    h((req, res) => {
+      const serverId = String(req.query.serverId ?? "");
+      if (!serverId) throw new PanelError("serverId gerekli");
+      res.json({
+        chests: manager.worldMemory.chestsFor(serverId),
+        ores: manager.worldMemory.oresFor(serverId)
+      });
     })
   );
 

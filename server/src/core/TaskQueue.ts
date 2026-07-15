@@ -109,6 +109,38 @@ export class TaskQueue extends EventEmitter {
     this.emitUpdate();
   }
 
+  /** Faz 10: çalışan görevi pause et — token cancel + requeue with same def (context = params) */
+  pause(reason = "duraklatıldı"): boolean {
+    const cur = this.current;
+    if (!cur) return false;
+    cur.token.cancelled = true;
+    cur.token.reason = reason;
+    cur.state = "paused";
+    if (cur.def.requeueOnPreempt !== false) {
+      const clone: InternalTask = {
+        id: newId(),
+        seq: this.seq++,
+        def: { ...cur.def, params: { ...cur.def.params, _pausedFrom: cur.id } },
+        state: "queued",
+        token: { cancelled: false },
+        makeRunner: cur.makeRunner
+      };
+      // paused tasks go front after sort by keeping high seq? put at front of same priority via lower seq
+      clone.seq = -1;
+      this.queue.unshift(clone);
+    }
+    this.emitUpdate();
+    return true;
+  }
+
+  /** resume: no-op if already queued via pause requeue; pump continues */
+  resume(): boolean {
+    // paused clones already in queue — ensure pump
+    void this.pump();
+    this.emitUpdate();
+    return this.queue.length > 0 || this.current != null;
+  }
+
   get currentSummary(): TaskSummary | null {
     return this.current ? this.summarize(this.current) : null;
   }

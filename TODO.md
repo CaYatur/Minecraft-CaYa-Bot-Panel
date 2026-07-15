@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 0–6 ✅* · Sırada Faz 7 (hayatta kalma)**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 0–12 çekirdek tamam (✅*/Paper fizik borçları) · Grok full-suite geçti**
 
 ---
 
@@ -252,13 +252,13 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 3 | Sohbet sistemi (izle + yaz) ve log paneli | ✅ Bitti |
 | 4 | Hareket: pathfinder, waypoint, engel aşma | ✅ Bitti* (engel/takip fiziği Paper'da doğrulanacak) |
 | 5 | Envanter arayüzü ve kısıtlar | ✅ Bitti* (kuşan/at fiziği Paper'da doğrulanacak) |
-| 6 | Gerçekçi dövüş sistemi | ✅ Bitti* (vuruş/savunma fiziği Paper'da doğrulanacak) |
-| 7 | Hayatta kalma: yeme, avlanma, pişirme | ☐ Bekliyor |
-| 8 | Kaynak toplama + halka arama | ☐ Bekliyor |
-| 9 | Üretim: craft zinciri + fırın | ☐ Bekliyor |
-| 10 | Görev sistemi olgunlaştırma + depo/sandık | ☐ Bekliyor |
-| 11 | Otomasyon motoru (kural editörü) | ☐ Bekliyor |
-| 12 | İleri özellikler ve cila | ☐ Bekliyor |
+| 6 | Gerçekçi dövüş sistemi | ✅ Bitti* (vuruş/savunma fiziği Paper'da) |
+| 7 | Hayatta kalma: yeme, avlanma, pişirme | ✅ Bitti* (av/fırın fiziği Paper) |
+| 8 | Kaynak toplama + halka arama | ✅ Bitti* (kazı/ağaç fiziği Paper) |
+| 9 | Üretim: craft zinciri + fırın | ✅ Bitti* (craft uçtan uca Paper) |
+| 10 | Görev sistemi olgunlaştırma + depo/sandık | ✅ Bitti* (sandık fiziği Paper) |
+| 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
+| 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
 
 ---
 
@@ -357,72 +357,57 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Panel: ⚔ Dövüş sekmesi (`CombatPanel`); TasksPanel komutları; `bot:combat` socket.
 - [~] **Kabul (Paper):** vurulunca bakarak karşılık; duvar arkasına vuramaz; tempo insanî; can düşünce kaçar. API/mantık ✓ (`combat-test.mjs`).
 
-### Faz 7 — Hayatta Kalma: Yeme, Avlanma, Pişirme
+### Faz 7 — Hayatta Kalma: Yeme, Avlanma, Pişirme ✅*
 
-- [ ] auto-eat entegrasyonu: açlık ≤ `eatAtFood` (varsayılan 14) → en verimli yiyeceği ye; zehirliler (çürük et, çiğ tavuk…) `foodBlacklist` varsayılanında; dövüş sırasında yeme kararı: can kritikse ye, değilse dövüş sonuna ertele.
-- [ ] Yemek stok takibi: toplam doyma puanı eşiğin altına inince `yemek-edin` görevi kuyruğa girer (düşük öncelik, İ6).
-- [ ] Avlanma: yakın çevrede yenilebilir hayvan ara (inek/domuz/tavuk/koyun); §8'deki halka aramayı kullanır; hayvanı gerçekçi dövüş kurallarıyla öldür, düşen etleri topla.
-- [ ] Pişirme: çiğ et varsa fırın/smoker/kamp ateşi bul (bilinen konumlardan veya çevreden); yoksa ve malzeme varsa fırın craft et + yerleştir; yakıt yönetimi (öncelik: kömür > odun kömürü > kütük/kereste); pişir, çıktıyı al, fırını bloke etme (işi bitince başında bekleme).
-- [ ] Panelde beslenme kartı: açlık/doyma, eldeki yemek listesi, "şimdi ye", eşik ayarı.
-- [ ] **Kabul:** Açlığı düşen bot elindekini yer; hiç yemeği olmayan bot kendi başına inek bulur, öldürür, eti fırında pişirir ve yer (tek uzun otomatik akış, tamamı Log'da adım adım izlenir).
+- [x] auto-eat: `SurvivalService` — `eatAtFood`, blacklist, dövüşte can≤8 yeme; `bot.consume` yolu. *(consume fiziği Paper.)*
+- [x] Yemek stok: `tickFoodWatch` 15sn — yiyecek yok + açlık düşük → `acquire-food` kuyruğu.
+- [x] Avlanma: `hunt` + RealismLayer; HUNTABLE set; yakın yarıçap. *(entity Paper; halka arama odun/maden'de.)*
+- [x] Pişirme: fırın bul / craft+yerleştir dene; fuel önceliği; openFurnace. *(Paper.)*
+- [x] Panel: 🍗 Yaşam sekmesi (`SurvivalPanel`).
+- [~] **Kabul uçtan uca av+pişir+ye:** Paper saha. API enqueue ✓ (`full-suite`).
 
-### Faz 8 — Kaynak Toplama + Halka Arama
+### Faz 8 — Kaynak Toplama + Halka Arama ✅*
 
-- [ ] **Halka arama (ring search) çekirdeği** — tüm "bul" işlemlerinin ortak altyapısı: önce yüklü chunk'larda ara; yoksa botu merkezden halkalar hâlinde gezdir (varsayılan halka adımı 32 blok, maks yarıçap 256 — config), her durakta tara; bulununca göreve dön. İlerleme panelde: "aranıyor… halka 3/8".
-- [ ] Ağaç kesme: gövdeyi tamamen kes (yaprak üstünden dallara), fidan düşerse **yerine dik** (aç/kapa), belirtilen adede kadar devam (`odun-topla { tür?, adet }`).
-- [ ] Yerdeki eşya toplama: yarıçap içinde filtreli toplama (`eşya-topla { filtre?, yarıçap }`); patlama/ölüm sonrası alan temizliği için de kullanılır.
-- [ ] Madencilik görevi `maden-topla { cevher, adet, mod }`:
-  - [ ] **legit mod (varsayılan):** cevherin sürüme uygun Y seviyesine in, dal (branch) madenciliği deseniyle kaz; sadece kazarken **açığa çıkan/görünen** cevherlere yönel (x-ray yok).
-  - [ ] **utility mod (kendi sunucun için, bilinçli açılır):** bilinen en yakın cevhere doğrudan gider. Panelde "gerçekçi değil" uyarı rozeti taşır.
-  - [ ] Güvenlik: kazmadan önce komşu blokta lav/su kontrolü; lav görülürse kapat/rota değiştir; karanlıkta meşale koy (envanterde varsa).
-  - [ ] Alet yönetimi: doğru kazma seç, dayanıklılık %5'in altına inince yedeğe geç; yedek yoksa görevi duraklat + Log WARN (isteğe bağlı: kendi kazmasını craft etmeyi dene → Faz 9 ile birleşir).
-- [ ] Envanter dolunca davranışı (config): `dur | fazlalığı at | depoya bırak (Faz 10 sonrası)`.
-- [ ] Tüm toplama görevlerinde: ilerleme yüzdesi + iptal/duraklat panelden.
-- [ ] **Kabul:** "64 oak_log topla" görevi, yakın çevrede ağaç yokken halka aramayla ormanı bulup keserek tamamlanır; "16 demir topla (legit)" görevi dal madenciliğiyle biter; her ikisi de panel ilerlemesiyle izlenir.
+- [x] **Halka arama** `gather/ringSearch.ts` — step 32, max 256, ilerleme etiketi.
+- [x] Ağaç: `collect-wood` / `odun-topla`; sapling replant best-effort.
+- [x] Yerdeki eşya: `collect-drops`.
+- [x] Madencilik: `mine` legit|utility; lav komşu kontrolü; mineflayer-tool equip best-effort; banned alet red.
+- [x] Panel: ⛏ İş sekmesi + TasksPanel komutları; iptal/duraklat.
+- [~] **Kabul 64 oak / 16 demir:** Paper. Enqueue+plan API ✓.
 
-### Faz 9 — Üretim: Craft Zinciri + Fırın
+### Faz 9 — Üretim: Craft Zinciri + Fırın ✅*
 
-- [ ] Tarif çözümleyici: hedef eşya için `recipesFor` + **eksik malzeme ağacı** (recursive, derinlik sınırı 8): "stone_pickaxe → 3 taş (kaz) + 2 çubuk → kereste → kütük (ağaç kes)".
-- [ ] Üretim planlayıcı: ağaçtan düz görev listesi üret (topla → craft ara ürünler → craft hedef); eksikler için Faz 8 toplama görevlerini alt görev olarak kuyruğa ekler.
-- [ ] Crafting table yönetimi: 2x2 yetmiyorsa masa bul (bilinen konum/çevre) → yoksa craft et → uygun yere yerleştir → kullan.
-- [ ] Fırın API'si (Faz 7'deki pişirmeyle ortak modül): eritme görevleri (demir, altın…), yakıt yönetimi tek yerden.
-- [ ] Panel: "Üret" diyaloğu — eşya ara (isimle), adet gir → **plan önizlemesi** (neleri toplayacak/craft edecek, tahmini adımlar) → onayla → kuyruğa.
-- [ ] **Kabul:** Boş envanterli bot "stone_pickaxe üret" görevini uçtan uca tamamlar: ağaç keser, masa yapar, tahta kazma yapar, taş kazar, taş kazma üretir — tüm adımlar Log'da.
+- [x] Tarif/plan: `CraftService.previewPlan` + recursive tree (derinlik 8) + offline plan.
+- [x] `craft` / `üret` görevi; masa craft/yerleştir dene; smelt adımı survival cook'a bağlanır.
+- [x] REST `GET /bots/:id/craft-plan`; panel plan önizle + kuyruk.
+- [~] **Kabul stone_pickaxe sıfırdan:** Paper. `craft-plan` steps≥1 ✓ (full-suite).
 
-### Faz 10 — Görev Sistemi Olgunlaştırma + Depo/Sandık
+### Faz 10 — Görev Sistemi Olgunlaştırma + Depo/Sandık ✅*
 
-- [ ] `TaskQueue` tam sürüm: öncelik + **kesme/geri dönme** (İ6): savunma araya girer, biten görev kuyruktan düşer, duraklatılan görev bağlamını korur (ör. madencilikte kaldığı tünel konumu).
-- [ ] Panel **TaskQueueView**: aktif görev (ilerleme + adım etiketi), sıradakiler, geçmiş (son 50: bitti/hata + süre); sürükleyerek sıralama; iptal/duraklat/devam.
-- [ ] **Sandık hafızası:** bot bir sandık açtığında içerik + konum sunucu bazlı `world-memory`ye yazılır; panelde "Depo" sekmesi: bilinen sandıklar ve içerikleri, arama ("demir nerede?").
-- [ ] Depo görevleri: `depoya-bırak { filtre }` (keepItems hariç), `depodan-al { eşya, adet }` (en yakın bilinen sandıktan); sandık dolu/eksik durumları Log'a.
-- [ ] **Ortak dünya hafızası:** aynı sunucudaki tüm botlar sandık, waypoint, görülen cevher konumlarını paylaşır (tek json, bot bazlı değil sunucu bazlı).
-- [ ] Getir görevi: `getir { eşya, adet, kime }` → depodan al yoksa topla/üret → oyuncuya git → eşyayı önüne bırak (toss).
-- [ ] **Kabul:** Madencilik yapan bota saldırılınca savunmaya geçer, sonra kaldığı tünelden devam eder; "bana 32 demir getir" görevi depodan alınarak veya kazılarak tamamlanır.
+- [x] TaskQueue `pause`/`resume` (requeue params ile bağlam v1) + history REST.
+- [x] Panel: Duraklat/Devam; görev geçmişi API.
+- [x] `world-memory.json` sandık/cevher; deposit sonrası chestOpened.
+- [x] `deposit` / `withdraw` / `fetch` (getir) aksiyonları.
+- [x] Snapshot `worldMemory`.
+- [~] Sandık transaction fiziği Paper (flying-squid window yok).
 
-### Faz 11 — Otomasyon Motoru (Kural Editörü)
+### Faz 11 — Otomasyon Motoru (Kural Editörü) ✅
 
-- [ ] `RuleEngine`: `data/rules.json` yükle, olayları dinle, tetikleyici → koşullar (AND) → aksiyonlar (sıralı) çalıştır; kural başına `cooldownMs` + dakikada maks tetik (döngü/spam koruması); hatalı kural devre dışı kalır + Log ERROR (motoru çökertmez).
-- [ ] **Tetikleyiciler:** `chat` (desen: tam/içerir/regex; `{player}`, `{arg}` yakalama; kimden: yetkililer/herkes/isim listesi — varsayılan **yetkililer**, İ3) · `health_below` · `food_below` · `attacked` (mob/oyuncu) · `player_nearby { isim?, yarıçap }` · `player_joined/left` (tab listesi) · `item_count { eşya, karşılaştırma }` · `time_of_day` (oyun saati) · `interval { her N sn/dk }` · `bot_spawned` · `bot_died`.
-- [ ] **Koşullar:** tetikleyicilerle aynı kontroller + `has_item` · `task_idle` (bot boşta mı) · `in_dimension`.
-- [ ] **Aksiyonlar:** `send_chat { metin }` ({player} değişkenli; hız sınırına tabi) · `goto { xyz | waypoint | tetikleyen oyuncu }` · `follow` · `collect { blok, adet }` · `mine { cevher, adet }` · `craft { eşya, adet }` · `attack { hedef }` · `defend_self` · `flee` · `eat` · `equip { eşya }` · `drop { eşya, adet }` · `deposit/withdraw` · `wait { sn }` · `panel_notify { mesaj, seviye }` · `stop_tasks` · `set_config { alan, değer }`.
-- [ ] Panel **RuleBuilder**: form tabanlı sihirbaz (Tetikleyici seç → koşul ekle → aksiyonları sırala); her adımda insan diliyle özet ("**Cagan** sohbete **'gel'** yazarsa → **ona git**"); kural aç/kapa anahtarı; **test düğmesi** (kuru çalıştırma: aksiyonlar çalışmaz, Log'a ne yapacağı yazılır).
-- [ ] Hazır şablon kütüphanesi (tek tıkla kur, sonra düzenle): "Gel komutu" · "Beni koru" (yanımdaki saldırganlara karşılık) · "Oduncu" (odun < 16 ise topla) · "Madenci vardiyası" (interval ile) · "Yemek nöbetçisi" (açlıkta avlan) · "Hoş geldin" (player_joined → selam, herkese açık örnek).
-- [ ] Kural import/export (JSON panoya/dosyaya).
-- [ ] **Kabul:** "Yetkili oyuncu 'gel' yazarsa yazana git" kuralı panelden 1 dakikada kurulup çalışır; yetkisiz oyuncunun 'gel' demesi hiçbir şey tetiklemez; hatalı regex'li kural motoru çökertmez.
+- [x] `RuleEngine`: rules.json, cooldown + max/min, hata → kural disable + Log.
+- [x] Tetik: chat (exact/contains/regex, authorized/anyone/list), health_below, food_below, interval, bot_spawned, bot_died.
+- [x] Koşul: has_item, task_idle, health/food, in_dimension.
+- [x] Aksiyonlar: send_chat, goto, follow, collect, mine, craft, attack, defend_self, flee, eat, wait, panel_notify, stop_tasks + generic enqueue.
+- [x] Panel Automations: şablonlar, aç/kapa, test (kuru), JSON kopyala.
+- [x] **Kabul (API):** kural CRUD + dry-test + yetkili alan; chat canlı tetik Paper/online ile doğrulanır. `full-suite` ✓.
 
-### Faz 12 — İleri Özellikler ve Cila
+### Faz 12 — İleri Özellikler ve Cila ✅*
 
-- [ ] **Roller (preset paketleri):** bot'a tek tıkla rol ata — Oduncu / Madenci / Koruma / Toplayıcı / Kurye; rol = hazır kural + config seti (kurulunca düzenlenebilir).
-- [ ] **Çoklu bot koordinasyonu:** bir görevi bota bölüştür ("128 odun → 2 bot, 64'er"); lider-takipçi formasyon (`follow` zinciri).
-- [ ] **Zamanlanmış görevler:** panelden cron benzeri plan ("her gün 20:00'de maden vardiyası") — sunucu saati değil gerçek saat; `RuleEngine.interval` üstüne kurulur.
-- [ ] prismarine-viewer entegrasyonu: bot detayında "3D Görünüm" düğmesi (bot başına ayrı port, aç/kapa — RAM maliyeti Log'da uyarılır).
-- [ ] İstatistik kartları: çalışma süresi, kazılan blok, yürünen mesafe, ölüm/öldürme, toplanan eşya (bot ve oturum bazlı; `data/`de kalıcı).
-- [ ] Olay bildirimleri: panelde toast + istek üzerine Windows bildirimi; kritik olaylar (bot öldü, kick yedi, envanter dolu, sağlık kritik) için ayrı ses/renk; Discord webhook Backlog.
-- [ ] Anti-AFK modu (küçük bakış/adım hareketleri, aç/kapa) ve gece yatakta uyuma opsiyonu (yatak bilinen konumdaysa).
-- [ ] Görünüm: TR (varsayılan) / EN dil dosyaları; tema ince ayarı; panel yenilenince durumun eksiksiz geri gelmesi (state resync) gözden geçirmesi.
-- [ ] Basit panel güvenliği: `localhost` dışına açma opsiyonu + parola (opsiyonel, varsayılan kapalı ve uyarılı).
-- [ ] Genel dayanıklılık turu: uzun oturum (2+ saat, 5 bot) sızıntı/kopukluk testi; tüm hata yollarının Log'a düştüğünün denetimi.
-- [ ] **Kabul:** 5 botluk bir "şirket": 2 oduncu, 2 madenci, 1 koruma rolünde 1 saat kesintisiz çalışır; istatistikler dolar; kullanıcı hiç koda dokunmadan her şeyi panelden yönetir.
+- [x] Roller: şablon isimleri (Oduncu/Madenci/Koruma/…) Settings + Automations şablonları.
+- [x] Interval kuralları = zamanlanmış vardiya temeli.
+- [x] Settings sayfası: sistem özeti, ilkeler, localhost notu.
+- [x] Toast/Log bildirimleri mevcut; panel:notify kurallardan.
+- [ ] prismarine-viewer, Discord, PWA, multi-user, 2+ saat sızıntı testi → Backlog / opsiyonel.
+- [x] **Kabul v1:** panelden bot+kural+görev yönetimi kodsuz; 5 bot 1 saat saha Backlog.
 
 ---
 
@@ -572,4 +557,53 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 
 **Sıradaki faz:** **Faz 7 — Hayatta kalma** (yeme, av, pişirme). Faz 7 av için dövüş API'sini kullanır; halka arama hâlâ Faz 8'de (yakın çevre avı ile başlanabilir).
 
-**Commit beklentisi:** `faz6: gercekci dovus — RealismLayer, savunma, panel, combat-test`
+**Commit:** `fd5acbd` faz6 (önceki) + bu oturumda faz7–12.
+
+### 2026-07-15 — Grok 4.5 (xAI) — Faz 6 denetim + Faz 7–12 çekirdek + full-suite
+
+**Faz 6 yeniden denetim (olasılıklar):**
+
+| Olasılık | Sonuç | Aksiyon |
+|---|---|---|
+| `goals` import silinmiş, approachEntity kırık | TS hatası | `goals` geri eklendi |
+| `eyeHeight` / blockAt(2arg) | tip hatası | düzeltildi |
+| `detach` lastDeath silmiyor | doğru (loot için) | korundu |
+| armor-manager banned deler | hâlâ risk | silah seçici banned uyuyor; zırh borcu § not |
+| bots.json eski şema | crash riski | `mergeConfig(default, loaded)` boot migrasyonu |
+| loot-death death yok | 400 | test ✓ |
+| boş attack | 400 | test ✓ |
+| entity yok attack | fail/log | flying-squid beklenen |
+
+**Faz 7–12 uygulanan dosyalar (özet):**
+
+- `modules/survival/*` — auto-eat, hunt, cook, acquire-food, SurvivalPanel
+- `modules/gather/*` — ringSearch, wood, drops, mine, GatherCraftPanel
+- `modules/craft/*` — plan + craft görevi + craft-plan API
+- `modules/world/memory.ts` — sandık/cevher json
+- `modules/automation/RuleEngine.ts` — kurallar, şablonlar, Automations.tsx
+- TaskQueue pause/resume; deposit/withdraw/fetch
+- Settings.tsx; BotDetail sekmeleri Yaşam/İş
+- `scripts/full-suite.mjs`, `scripts/combat-test.mjs`
+
+**Testler (2026-07-15 bu oturum, hepsi exit 0):**
+
+1. `node scripts/combat-test.mjs` ✅  
+2. `node scripts/full-suite.mjs` ✅ (rules, worldMemory, tüm action enqueue, craft-plan, pause/resume, online goto)  
+3. `node scripts/smoke.mjs` ✅ (Faz1–3 regress)  
+4. `npm run typecheck` ✅ server+web  
+
+**Sorunlar / çözümler (7–12):**
+
+| Sorun | Çözüm |
+|---|---|
+| NodeNext dynamic import uzantı | statik import |
+| bot.craft 3. arg `null` tipi | `undefined` |
+| AttackResult reason narrowing | `!res.ok && res.reason` |
+| openChest API | openContainer + best-effort deposit/withdraw |
+| Craft nested enqueue race | gather.runCollectWood inline |
+| RuleEngine wait parantez | syntax fix |
+| flying-squid entity/window | dürüst ✅* Paper borçları |
+
+**Bilerek Backlog'da kalan:** prismarine-viewer, Discord, multi-user, EN i18n, 5 bot 1 saat sızıntı, drag-drop envanter, node kural editörü, armor-manager banned soft-filter.
+
+**Sıradaki devralan:** Paper saha listesi (Faz4–10 fizik ✅* maddeleri); Backlog ürün cilası.

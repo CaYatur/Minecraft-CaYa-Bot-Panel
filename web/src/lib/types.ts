@@ -136,4 +136,6 @@ export interface StateSnapshot {
   bots: BotSnapshot[];
   waypoints: Record<string, Waypoint[]>;
   supportedVersions: string[];
+  rules?: unknown[];
+  worldMemory?: { chests: unknown[]; ores: unknown[] };
 }

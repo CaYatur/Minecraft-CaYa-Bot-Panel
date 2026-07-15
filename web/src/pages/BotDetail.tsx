@@ -3,23 +3,27 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
 import { CombatPanel } from "../components/CombatPanel";
+import { GatherCraftPanel } from "../components/GatherCraftPanel";
 import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
+import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
 import { api } from "../lib/api";
 import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat";
+type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "💬 Sohbet" },
   { id: "logs", label: "📋 Loglar" },
   { id: "inventory", label: "🎒 Envanter" },
   { id: "tasks", label: "📌 Görevler" },
-  { id: "combat", label: "⚔ Dövüş" }
+  { id: "combat", label: "⚔ Dövüş" },
+  { id: "survival", label: "🍗 Yaşam" },
+  { id: "work", label: "⛏ İş" }
 ];
 
 export function BotDetail() {
@@ -147,6 +151,8 @@ export function BotDetail() {
         {tab === "inventory" && <InventoryPanel botId={id} />}
         {tab === "tasks" && <TasksPanel botId={id} />}
         {tab === "combat" && <CombatPanel botId={id} />}
+        {tab === "survival" && <SurvivalPanel botId={id} />}
+        {tab === "work" && <GatherCraftPanel botId={id} />}
       </div>
     </div>
   );
