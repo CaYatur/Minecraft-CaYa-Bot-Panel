@@ -5,7 +5,7 @@ import { goals } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken } from "../../core/TaskQueue";
 import { ensureMovement } from "../movement";
-import { pickScaffoldItem, type ScaffoldTracker } from "./scaffold";
+import { equipBestToolForBlock, pickScaffoldItem, type ScaffoldTracker } from "./scaffold";
 import { v3 } from "./vec3util";
 
 const FACES: [number, number, number][] = [
@@ -126,18 +126,18 @@ async function placeBlockAtOnce(
   const target = v3(Math.floor(x), Math.floor(y), Math.floor(z));
   const name = String(blockName).replace(/^minecraft:/, "");
 
-  const existing = bot.blockAt(target);
+  let existing = bot.blockAt(target);
   if (existing && (existing.name === name || namesMatch(existing.name, name))) return "skipped";
-  if (
-    existing &&
-    existing.name !== "air" &&
-    existing.name !== "cave_air" &&
-    existing.name !== "void_air" &&
-    existing.name !== "water" &&
-    existing.name !== "lava" &&
-    existing.name !== name
-  ) {
-    return "skipped";
+
+  // Yanlış blok (başka oyuncu / eski yapı / hatalı path) → kır, sonra doğru koy
+  if (existing && !isReplaceableBlock(existing.name) && !namesMatch(existing.name, name)) {
+    const cleared = await clearBlockAt(instance, target, token);
+    if (!cleared) return "failed";
+    existing = bot.blockAt(target);
+    // hâlâ dolu ve yanlışsa
+    if (existing && !isReplaceableBlock(existing.name) && !namesMatch(existing.name, name)) {
+      return "failed";
+    }
   }
 
   const itemNames = itemNameForBlock(name);
@@ -235,6 +235,102 @@ function namesMatch(a: string, b: string): boolean {
   const x = a.replace(/^minecraft:/, "");
   const y = b.replace(/^minecraft:/, "");
   return x === y || x.replace(/_block$/, "") === y.replace(/_block$/, "");
+}
+
+function isReplaceableBlock(name: string): boolean {
+  const n = name.replace(/^minecraft:/, "");
+  return (
+    n === "air" ||
+    n === "cave_air" ||
+    n === "void_air" ||
+    n === "water" ||
+    n === "lava" ||
+    n === "flowing_water" ||
+    n === "flowing_lava" ||
+    n === "bubble_column" ||
+    n === "short_grass" ||
+    n === "tall_grass" ||
+    n === "grass" ||
+    n === "fern" ||
+    n === "large_fern" ||
+    n === "dead_bush" ||
+    n === "snow" ||
+    n.includes("fire")
+  );
+}
+
+function isUnbreakable(name: string): boolean {
+  const n = name.replace(/^minecraft:/, "");
+  return (
+    n === "bedrock" ||
+    n === "barrier" ||
+    n === "command_block" ||
+    n === "chain_command_block" ||
+    n === "repeating_command_block" ||
+    n === "structure_block" ||
+    n === "jigsaw" ||
+    n === "end_portal" ||
+    n === "end_portal_frame" ||
+    n === "nether_portal"
+  );
+}
+
+/**
+ * Hedefteki yanlış bloğu kır (kazma/kürek ile).
+ * Başka oyuncunun koyduğu / hatalı path / eski blok.
+ */
+async function clearBlockAt(
+  instance: BotInstance,
+  target: Vec3,
+  token: TaskToken
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot) return false;
+  const b = bot.blockAt(target);
+  if (!b || isReplaceableBlock(b.name)) return true;
+  if (isUnbreakable(b.name)) return false;
+
+  // ayak altını kırma — önce kaymaya çalış
+  const feet = bot.entity.position;
+  const onFeet =
+    Math.floor(feet.x) === target.x && Math.floor(feet.y) === target.y && Math.floor(feet.z) === target.z;
+  if (onFeet) {
+    try {
+      bot.setControlState("back", true);
+      await sleep(200);
+      bot.setControlState("back", false);
+      await sleep(50);
+    } catch {
+      /* */
+    }
+    const feet2 = bot.entity.position;
+    if (Math.floor(feet2.x) === target.x && Math.floor(feet2.y) === target.y && Math.floor(feet2.z) === target.z) {
+      return false;
+    }
+  }
+
+  const tx = target.x + 0.5;
+  const ty = target.y + 0.5;
+  const tz = target.z + 0.5;
+  if (dist3(bot, tx, ty, tz) > PLACE_REACH) {
+    await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
+  }
+  if (token.cancelled) throw new Error(token.reason ?? "iptal");
+
+  const live = bot.blockAt(target);
+  if (!live || isReplaceableBlock(live.name)) return true;
+  if (!bot.canDigBlock(live)) return false;
+
+  try {
+    await equipBestToolForBlock(bot, live);
+    await bot.lookAt(live.position.offset(0.5, 0.5, 0.5), true);
+    await bot.dig(live, true);
+    await sleep(40);
+    const after = bot.blockAt(target);
+    return !after || isReplaceableBlock(after.name);
+  } catch {
+    return false;
+  }
 }
 
 function findReference(bot: Bot, target: Vec3): { block: Block; face: Vec3 } | null {

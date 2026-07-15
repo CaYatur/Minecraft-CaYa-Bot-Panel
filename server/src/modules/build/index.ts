@@ -297,7 +297,8 @@ export class BuildService {
         if (skipReason) {
           res = "skipped";
         } else {
-          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 1 });
+          // retries=2: yanlış blok kır + koy; path hatasında bir daha dene
+          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 2 });
         }
         if (res === "placed") {
           this.scaffolds.protectStructure(wx, wy, wz);
