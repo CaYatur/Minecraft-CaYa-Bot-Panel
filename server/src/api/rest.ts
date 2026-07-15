@@ -393,7 +393,19 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         blueprints: [] as Array<{ id: string; name: string; category: string; description: string }>,
         vars: CONTEXT_VARS_ALL,
         varsByTrigger: CONTEXT_VARS_BY_TRIGGER,
-        varsCommon: CONTEXT_VARS_COMMON
+        varsCommon: CONTEXT_VARS_COMMON,
+        flow: {
+          version: 2,
+          nodeTypes: ["action", "if", "set", "wait", "repeat", "stop_flow"],
+          conditionGroups: ["all", "any", "not"],
+          compareOperators: [
+            "eq", "neq", "contains", "not_contains", "starts_with", "ends_with", "regex",
+            "gt", "gte", "lt", "lte", "exists", "not_exists", "truthy", "falsy"
+          ],
+          taskResultFields: [
+            "status", "taskId", "taskType", "label", "error", "progressDone", "progressTotal"
+          ]
+        }
       });
     })
   );

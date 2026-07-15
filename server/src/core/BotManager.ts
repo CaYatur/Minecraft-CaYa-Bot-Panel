@@ -318,9 +318,26 @@ export class BotManager extends EventEmitter {
     });
     inst.on("tabPlayers", (p: { botId: string; names: string[] }) => this.rules.onTabPlayers(p.botId, p.names));
     inst.on("inventoryFull", (p: { botId: string }) => this.rules.onInventoryFull(p.botId));
-    inst.on("taskEvent", (p: { botId: string; kind: "done" | "failed"; taskType: string; label: string }) => {
-      this.rules.onTaskEvent(p.botId, p.kind, p.taskType, p.label);
-    });
+    inst.on(
+      "taskEvent",
+      (p: {
+        botId: string;
+        kind: "done" | "failed";
+        taskId: string;
+        taskType: string;
+        label: string;
+        state: string;
+        error?: string;
+        progress?: { done: number; total: number; label?: string };
+      }) => {
+        this.rules.onTaskEvent(p.botId, p.kind, p.taskType, p.label, {
+          taskId: p.taskId,
+          state: p.state,
+          error: p.error,
+          progress: p.progress
+        });
+      }
+    );
     inst.on(
       "chestOpened",
       (info: {

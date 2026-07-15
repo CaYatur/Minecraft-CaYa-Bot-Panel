@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { ItemPicker } from "../components/ItemPicker";
+import {
+  AdvancedFlowBuilder,
+  countFlowNodes,
+  legacyRuleToFlow,
+  type FlowNode
+} from "../components/automation/AdvancedFlowBuilder";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
@@ -14,6 +20,9 @@ interface Rule {
   actions: Array<Record<string, unknown>>;
   elseActions?: Array<Record<string, unknown>>;
   onErrorActions?: Array<Record<string, unknown>>;
+  flow?: FlowNode[] | null;
+  variables?: Record<string, string | number | boolean | null>;
+  runPolicy?: { concurrency?: "skip" | "parallel"; maxRuntimeMs?: number; maxSteps?: number };
   cooldownMs: number;
   maxTriggersPerMinute: number;
 }
@@ -128,6 +137,12 @@ export function Automations() {
   const [elseActions, setElseActions] = useState<ActRow[]>([]);
   /** ON ERROR: THEN hata verirse (tek blok) */
   const [onErrorActions, setOnErrorActions] = useState<ActRow[]>([]);
+  const [editorMode, setEditorMode] = useState<"simple" | "advanced">("simple");
+  const [flow, setFlow] = useState<FlowNode[]>([]);
+  const [variablesJson, setVariablesJson] = useState("{}");
+  const [concurrency, setConcurrency] = useState<"skip" | "parallel">("skip");
+  const [maxRuntimeMs, setMaxRuntimeMs] = useState(600_000);
+  const [maxSteps, setMaxSteps] = useState(500);
 
   // dil değişince varsayılan isim/bildirim (form boşken)
   useEffect(() => {
@@ -316,6 +331,14 @@ export function Automations() {
       });
 
     const acts = mapActs(actions);
+    let variables: Record<string, string | number | boolean | null> = {};
+    if (editorMode === "advanced") {
+      const parsed = JSON.parse(variablesJson || "{}");
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+        throw new Error(t("automations.advanced.variablesObjectError"));
+      }
+      variables = parsed as Record<string, string | number | boolean | null>;
+    }
 
     return {
       name,
@@ -326,6 +349,12 @@ export function Automations() {
       actions: acts.length ? acts : [{ type: "panel_notify", message: t("automations.defaultNotify"), level: "info" }],
       elseActions: mapActs(elseActions),
       onErrorActions: mapActs(onErrorActions),
+      flow: editorMode === "advanced" ? flow : null,
+      variables: editorMode === "advanced" ? variables : {},
+      runPolicy:
+        editorMode === "advanced"
+          ? { concurrency, maxRuntimeMs, maxSteps }
+          : { concurrency: "skip", maxRuntimeMs: 600_000, maxSteps: 500 },
       cooldownMs,
       maxTriggersPerMinute: maxPerMin
     };
@@ -355,6 +384,12 @@ export function Automations() {
     setActions([emptyAct()]);
     setElseActions([]);
     setOnErrorActions([]);
+    setEditorMode("simple");
+    setFlow([]);
+    setVariablesJson("{}");
+    setConcurrency("skip");
+    setMaxRuntimeMs(600_000);
+    setMaxSteps(500);
   };
 
   const parseActs = (raw: Array<Record<string, unknown>> | undefined): ActRow[] =>
@@ -427,6 +462,13 @@ export function Automations() {
     setActions(acts.length ? acts : [emptyAct()]);
     setElseActions(parseActs(r.elseActions as Array<Record<string, unknown>> | undefined));
     setOnErrorActions(parseActs(r.onErrorActions as Array<Record<string, unknown>> | undefined));
+    const advancedFlow = Array.isArray(r.flow) ? r.flow : [];
+    setEditorMode(advancedFlow.length > 0 ? "advanced" : "simple");
+    setFlow(advancedFlow);
+    setVariablesJson(JSON.stringify(r.variables ?? {}, null, 2));
+    setConcurrency(r.runPolicy?.concurrency ?? "skip");
+    setMaxRuntimeMs(r.runPolicy?.maxRuntimeMs ?? 600_000);
+    setMaxSteps(r.runPolicy?.maxSteps ?? 500);
   };
 
   const save = async () => {
@@ -480,6 +522,19 @@ export function Automations() {
     setElseActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const updateOnError = (i: number, patch: Partial<ActRow>) =>
     setOnErrorActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const enableAdvancedMode = () => {
+    if (flow.length === 0) {
+      setFlow(
+        legacyRuleToFlow(
+          conditions.map((condition) => ({ ...condition })) as Array<Record<string, unknown> & { type: string }>,
+          actions.map((action) => ({ ...action })) as Array<Record<string, unknown> & { type: string }>,
+          elseActions.map((action) => ({ ...action })) as Array<Record<string, unknown> & { type: string }>
+        )
+      );
+    }
+    setEditorMode("advanced");
+  };
 
   /** Tek satır aksiyon editörü (THEN / ELSE / ON ERROR) */
   const renderActRow = (
@@ -711,37 +766,105 @@ export function Automations() {
             </label>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2">
+            <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+              {t("automations.advanced.editorMode")}
+            </span>
+            <button
+              type="button"
+              onClick={() => setEditorMode("simple")}
+              className={`rounded px-2.5 py-1 text-xs ${
+                editorMode === "simple" ? "bg-zinc-200 text-zinc-950" : "bg-zinc-800 text-zinc-400"
+              }`}
+            >
+              {t("automations.advanced.simpleMode")}
+            </button>
+            <button
+              type="button"
+              onClick={enableAdvancedMode}
+              className={`rounded px-2.5 py-1 text-xs ${
+                editorMode === "advanced" ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400"
+              }`}
+            >
+              {t("automations.advanced.advancedMode")}
+            </button>
+            <span className="text-[10px] text-zinc-600">{t("automations.advanced.modeHint")}</span>
+          </div>
+
+          {editorMode === "advanced" && (
+            <div className="grid gap-2 rounded-lg border border-indigo-900/40 bg-indigo-950/10 p-3 md:grid-cols-3">
+              <label className="flex flex-col gap-1 text-xs text-zinc-500">
+                {t("automations.advanced.concurrency")}
+                <select value={concurrency} onChange={(e) => setConcurrency(e.target.value as "skip" | "parallel")} className={fieldCls}>
+                  <option value="skip">{t("automations.advanced.concurrencySkip")}</option>
+                  <option value="parallel">{t("automations.advanced.concurrencyParallel")}</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-zinc-500">
+                {t("automations.advanced.maxRuntimeMs")}
+                <input type="number" value={maxRuntimeMs} onChange={(e) => setMaxRuntimeMs(Number(e.target.value))} className={fieldCls} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-zinc-500">
+                {t("automations.advanced.maxSteps")}
+                <input type="number" value={maxSteps} onChange={(e) => setMaxSteps(Number(e.target.value))} className={fieldCls} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-zinc-500 md:col-span-3">
+                {t("automations.advanced.initialVariables")}
+                <textarea
+                  value={variablesJson}
+                  onChange={(e) => setVariablesJson(e.target.value)}
+                  className={`${fieldCls} mono min-h-20`}
+                  placeholder={'{"targetCount": 16, "ore": "iron"}'}
+                />
+              </label>
+            </div>
+          )}
+
           {/* Pipeline visual */}
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-2 text-xs">
             <span className="rounded bg-amber-950/50 px-2 py-1 font-semibold text-amber-300">
               {t("automations.pipelineWhen")}
             </span>
             <span className="mono text-zinc-300">{summaryTrigger()}</span>
-            <span className="text-zinc-600">→</span>
-            <span className="rounded bg-sky-950/50 px-2 py-1 font-semibold text-sky-300">
-              {t("automations.pipelineIf")}
-            </span>
-            <span className="text-zinc-400">
-              {conditions.length
-                ? conditions.map((c) => metaLabel("conditions", c.type, c.type)).join(" · ")
-                : "—"}
-            </span>
-            <span className="text-zinc-600">→</span>
-            <span className="rounded bg-emerald-950/50 px-2 py-1 font-semibold text-emerald-300">
-              {t("automations.pipelineThen")}
-            </span>
-            <span className="text-zinc-400">
-              {actions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
-            </span>
-            {elseActions.length > 0 && (
+            {editorMode === "advanced" ? (
               <>
-                <span className="text-zinc-600">/</span>
-                <span className="rounded bg-violet-950/50 px-2 py-1 font-semibold text-violet-300">
-                  {t("automations.pipelineElse")}
+                <span className="text-zinc-600">→</span>
+                <span className="rounded bg-indigo-950/60 px-2 py-1 font-semibold text-indigo-300">
+                  {t("automations.advanced.advancedMode")}
                 </span>
                 <span className="text-zinc-400">
-                  {elseActions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+                  {t("automations.advanced.nodeCount", { n: countFlowNodes(flow) })}
                 </span>
+              </>
+            ) : (
+              <>
+                <span className="text-zinc-600">→</span>
+                <span className="rounded bg-sky-950/50 px-2 py-1 font-semibold text-sky-300">
+                  {t("automations.pipelineIf")}
+                </span>
+                <span className="text-zinc-400">
+                  {conditions.length
+                    ? conditions.map((c) => metaLabel("conditions", c.type, c.type)).join(" · ")
+                    : "—"}
+                </span>
+                <span className="text-zinc-600">→</span>
+                <span className="rounded bg-emerald-950/50 px-2 py-1 font-semibold text-emerald-300">
+                  {t("automations.pipelineThen")}
+                </span>
+                <span className="text-zinc-400">
+                  {actions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+                </span>
+                {elseActions.length > 0 && (
+                  <>
+                    <span className="text-zinc-600">/</span>
+                    <span className="rounded bg-violet-950/50 px-2 py-1 font-semibold text-violet-300">
+                      {t("automations.pipelineElse")}
+                    </span>
+                    <span className="text-zinc-400">
+                      {elseActions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+                    </span>
+                  </>
+                )}
               </>
             )}
             {onErrorActions.length > 0 && (
@@ -1012,6 +1135,8 @@ export function Automations() {
             </div>
           </div>
 
+          {editorMode === "simple" ? (
+            <>
           {/* IF */}
           <div className="rounded-lg border border-sky-900/40 bg-sky-950/10 p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1255,6 +1380,20 @@ export function Automations() {
               </div>
             )}
           </div>
+
+            </>
+          ) : (
+            <AdvancedFlowBuilder
+              value={flow}
+              onChange={setFlow}
+              actionMeta={actionMeta}
+              conditionMeta={conditionMeta}
+              catalogVersion={catalogVersion}
+              t={t}
+              metaLabel={(kind, type, fallback) => metaLabel(kind, type, fallback)}
+              catLabel={catLabel}
+            />
+          )}
 
           {/* ON ERROR — tek blok */}
           <div className="rounded-lg border border-red-900/40 bg-red-950/10 p-3">

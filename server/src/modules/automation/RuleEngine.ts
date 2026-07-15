@@ -1,11 +1,45 @@
 import { loadJson, saveJson } from "../../persistence/store";
 import type { BotManager } from "../../core/BotManager";
 import { createLogger } from "../../utils/logger";
-import { newId } from "../../types";
+import { newId, type TaskSummary } from "../../types";
 import { findBlueprint, RULE_BLUEPRINTS, type RuleBlueprint } from "./blueprints";
+import {
+  defaultConditionGroup,
+  newFlowNodeId,
+  type AutomationActionNode,
+  type AutomationConditionGroup,
+  type AutomationConditionNode,
+  type AutomationNode,
+  type AutomationPrimitive,
+  type AutomationRunPolicy
+} from "./flow.js";
 
 const FILE = "rules.json";
 const log = createLogger("rules");
+
+type AutomationContext = Record<string, unknown>;
+
+interface AutomationActionResult {
+  ok: boolean;
+  actionType: string;
+  status: "completed" | "queued" | "done" | "failed" | "cancelled" | "timeout";
+  taskId?: string;
+  taskType?: string;
+  label?: string;
+  error?: string;
+  progressDone?: number;
+  progressTotal?: number;
+}
+
+interface FlowRunState {
+  startedAt: number;
+  deadline: number;
+  maxSteps: number;
+  steps: number;
+  stopped: boolean;
+  stopResult?: "success" | "failed";
+  stopMessage?: string;
+}
 
 export type TriggerType =
   | "chat"
@@ -126,6 +160,11 @@ export interface AutomationRule {
    * ctx.error ile hata mesajı gelir.
    */
   onErrorActions?: RuleAction[];
+  /** Gelişmiş, iç içe akış. Varsa legacy conditions/actions yerine çalışır. */
+  flow?: AutomationNode[];
+  /** Her çalışmanın başında context'e eklenen kullanıcı değişkenleri. */
+  variables?: Record<string, AutomationPrimitive>;
+  runPolicy?: AutomationRunPolicy;
   cooldownMs: number;
   maxTriggersPerMinute: number;
 }
@@ -139,11 +178,13 @@ export class RuleEngine {
   private knownPlayers = new Map<string, Set<string>>(); // botId -> names
   /** item_gained: botId -> itemName -> last count */
   private itemSnapshots = new Map<string, Map<string, number>>();
+  /** ruleId:botId -> çalışan gelişmiş akış sayısı */
+  private activeRuns = new Map<string, number>();
 
   constructor(private readonly manager: BotManager) {}
 
   load() {
-    this.rules = loadJson<AutomationRule[]>(FILE, []);
+    this.rules = loadJson<AutomationRule[]>(FILE, []).map(normalizeAutomationRule);
     this.rewireIntervals();
     log.info(`${this.rules.length} otomasyon kuralı yüklendi`);
   }
@@ -167,6 +208,9 @@ export class RuleEngine {
       actions: partial.actions ?? [{ type: "panel_notify", message: "Rule triggered", level: "info" }],
       elseActions: partial.elseActions ?? [],
       onErrorActions: partial.onErrorActions ?? [],
+      flow: partial.flow ? prepareFlow(partial.flow) : undefined,
+      variables: partial.variables ?? {},
+      runPolicy: partial.runPolicy ?? { concurrency: "skip", maxRuntimeMs: 600_000, maxSteps: 500 },
       cooldownMs: partial.cooldownMs ?? 3000,
       maxTriggersPerMinute: partial.maxTriggersPerMinute ?? 10
     };
@@ -180,7 +224,11 @@ export class RuleEngine {
   update(id: string, patch: Partial<AutomationRule>): AutomationRule {
     const r = this.rules.find((x) => x.id === id);
     if (!r) throw new Error("Kural bulunamadı");
-    Object.assign(r, patch, { id: r.id });
+    const normalizedPatch: Partial<AutomationRule> & { flow?: AutomationNode[] } = { ...patch };
+    const rawFlow = (patch as Partial<AutomationRule> & { flow?: AutomationNode[] | null }).flow;
+    if (Array.isArray(rawFlow)) normalizedPatch.flow = prepareFlow(rawFlow);
+    else if (rawFlow === null) normalizedPatch.flow = undefined;
+    Object.assign(r, normalizedPatch, { id: r.id });
     this.persist();
     this.rewireIntervals();
     this.manager.emit("changed");
@@ -303,7 +351,18 @@ export class RuleEngine {
     this.fireMatching(botId, "inventory_full", {}, (rule) => rule.trigger.type === "inventory_full");
   }
 
-  onTaskEvent(botId: string, kind: "done" | "failed", taskType: string, label: string) {
+  onTaskEvent(
+    botId: string,
+    kind: "done" | "failed",
+    taskType: string,
+    label: string,
+    result?: {
+      taskId?: string;
+      state?: string;
+      error?: string;
+      progress?: { done: number; total: number; label?: string };
+    }
+  ) {
     const t = kind === "done" ? "task_done" : "task_failed";
     this.fireMatching(
       botId,
@@ -313,7 +372,13 @@ export class RuleEngine {
         label,
         task: taskType,
         taskLabel: label,
-        status: kind
+        status: kind,
+        taskStatus: result?.state ?? kind,
+        taskId: result?.taskId ?? "",
+        taskError: result?.error ?? "",
+        taskProgressDone: String(result?.progress?.done ?? 0),
+        taskProgressTotal: String(result?.progress?.total ?? 0),
+        taskProgressLabel: result?.progress?.label ?? ""
       },
       (rule) => {
         if (rule.trigger.type !== t) return false;
@@ -427,12 +492,22 @@ export class RuleEngine {
    */
   private tryFire(rule: AutomationRule, botId: string, ctx: Record<string, string>) {
     if (!this.rateOk(rule)) return;
-    const full = { ...this.liveBotContext(botId), ...ctx };
-    const ok = this.conditionsOk(rule, botId);
+    const full: AutomationContext = {
+      ...this.liveBotContext(botId),
+      ...(rule.variables ?? {}),
+      ...ctx
+    };
+
+    if (rule.flow && rule.flow.length > 0) {
+      void this.executeFlow(rule, botId, full);
+      return;
+    }
+
+    const ok = this.conditionsOk(rule, botId, full);
     if (ok) {
-      void this.execute(rule, botId, { ...full, branch: "then" }, "then");
+      void this.execute(rule, botId, stringifyContext({ ...full, branch: "then" }), "then");
     } else if (rule.elseActions && rule.elseActions.length > 0) {
-      void this.execute(rule, botId, { ...full, branch: "else" }, "else");
+      void this.execute(rule, botId, stringifyContext({ ...full, branch: "else" }), "else");
     }
   }
 
@@ -713,97 +788,373 @@ export class RuleEngine {
     return true;
   }
 
-  private conditionsOk(rule: AutomationRule, botId: string): boolean {
+  private conditionsOk(rule: AutomationRule, botId: string, ctx: AutomationContext = {}): boolean {
+    return (rule.conditions ?? []).every((condition) => this.conditionOk(condition, botId, ctx));
+  }
+
+  private conditionOk(c: RuleCondition, botId: string, ctx: AutomationContext): boolean {
     const inst = this.manager.get(botId);
     if (!inst) return false;
-    for (const c of rule.conditions ?? []) {
-      if (c.type === "online" && inst.status !== "online") return false;
-      if (c.type === "offline" && inst.status === "online") return false;
-      if (c.type === "task_idle" && inst.tasks.currentSummary) return false;
-      if (c.type === "task_busy" && !inst.tasks.currentSummary) return false;
-      // Görev tipi: task_is — value/taskType = "mine" veya "mine|gather|craft", match=eq|neq|contains…
-      if (c.type === "task_is") {
-        const cur = inst.tasks.currentSummary;
-        const actual = cur?.type ?? "none";
-        const expected = String(c.taskType ?? c.value ?? c.item ?? "").trim();
-        if (!expected) return false;
-        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+    if (c.type === "online") return inst.status === "online";
+    if (c.type === "offline") return inst.status !== "online";
+    if (c.type === "task_idle") return !inst.tasks.currentSummary;
+    if (c.type === "task_busy") return Boolean(inst.tasks.currentSummary);
+    if (c.type === "task_is") {
+      const actual = inst.tasks.currentSummary?.type ?? "none";
+      const expected = String(c.taskType ?? c.value ?? c.item ?? "").trim();
+      return Boolean(expected) && stringMatches(actual, interpolateValue(expected, ctx), c.match ?? "eq");
+    }
+    if (c.type === "task_label_is") {
+      const actual = inst.tasks.currentSummary?.label ?? "";
+      const expected = String(c.value ?? c.taskType ?? c.item ?? "").trim();
+      return Boolean(expected) && stringMatches(actual, interpolateValue(expected, ctx), c.match ?? "contains");
+    }
+    if (c.type === "combat_mode_is") {
+      const actual = String(inst.combat.getRuntime().mode ?? "idle");
+      const expected = String(c.value ?? c.taskType ?? "").trim();
+      return Boolean(expected) && stringMatches(actual, interpolateValue(expected, ctx), c.match ?? "eq");
+    }
+    if (c.type === "follow_player_is") {
+      const actual = String(inst.combat.getRuntime().companion?.followPlayer ?? "");
+      const expected = String(c.player ?? c.value ?? "").trim();
+      return Boolean(expected) && stringMatches(actual, interpolateValue(expected, ctx), c.match ?? "eq");
+    }
+    if (c.type === "status_is") {
+      const actual = String(inst.status ?? "");
+      const expected = String(c.value ?? c.taskType ?? "").trim();
+      return Boolean(expected) && stringMatches(actual, interpolateValue(expected, ctx), c.match ?? "eq");
+    }
+    if (c.type === "health_below") return inst.runtime.health <= (c.threshold ?? 10);
+    if (c.type === "health_above") return inst.runtime.health >= (c.threshold ?? 10);
+    if (c.type === "food_below") return inst.runtime.food <= (c.threshold ?? 10);
+    if (c.type === "food_above") return inst.runtime.food >= (c.threshold ?? 10);
+    if (c.type === "in_dimension") {
+      return !c.dimension || inst.runtime.dimension === interpolateValue(c.dimension, ctx);
+    }
+    if (c.type === "has_item") {
+      const item = interpolateValue(String(c.item ?? ""), ctx);
+      return Boolean(item) && countItem(inst, item) > 0;
+    }
+    if (c.type === "not_has_item") {
+      const item = interpolateValue(String(c.item ?? ""), ctx);
+      return Boolean(item) && countItem(inst, item) <= 0;
+    }
+    if (c.type === "item_count") {
+      const item = interpolateValue(String(c.item ?? ""), ctx);
+      return Boolean(item) && compare(countItem(inst, item), c.comparison ?? "gte", c.threshold ?? 1);
+    }
+    if (c.type === "player_near" || c.type === "player_far") {
+      const rawName = c.player?.trim() || inst.combat.getRuntime().companion?.followPlayer || "";
+      const name = interpolateValue(rawName, ctx);
+      if (!name) return false;
+      const distance = this.getPlayerDistance(botId, name);
+      const limit = c.radius ?? 16;
+      return c.type === "player_near"
+        ? distance != null && distance <= limit
+        : distance == null || distance > limit;
+    }
+    if (c.type === "following") return this.isFollowing(botId);
+    if (c.type === "not_following") return !this.isFollowing(botId);
+    if (c.type === "time_day" || c.type === "time_night") {
+      const bot = inst.bot;
+      if (!bot) return false;
+      const time = ((bot.time?.timeOfDay ?? 0) % 24000 + 24000) % 24000;
+      const isDay = time >= 0 && time < 12000;
+      return c.type === "time_day" ? isDay : !isDay;
+    }
+    return false;
+  }
+
+  private conditionGroupOk(group: AutomationConditionGroup, botId: string, ctx: AutomationContext): boolean {
+    const values = group.items.map((item) => this.conditionNodeOk(item, botId, ctx));
+    if (group.operator === "any") return values.some(Boolean);
+    if (group.operator === "not") return !values.every(Boolean);
+    return values.every(Boolean);
+  }
+
+  private conditionNodeOk(node: AutomationConditionNode, botId: string, ctx: AutomationContext): boolean {
+    if (node.kind === "group") return this.conditionGroupOk(node, botId, ctx);
+    if (node.kind === "bot") return this.conditionOk(node.condition, botId, ctx);
+    return compareContextValues(
+      resolveContextExpression(node.left, ctx),
+      node.operator,
+      resolveContextExpression(node.right, ctx)
+    );
+  }
+
+  private async executeFlow(rule: AutomationRule, botId: string, initial: AutomationContext) {
+    const key = `${rule.id}:${botId}`;
+    const policy = {
+      concurrency: rule.runPolicy?.concurrency ?? "skip",
+      maxRuntimeMs: clampNumber(rule.runPolicy?.maxRuntimeMs, 1_000, 3_600_000, 600_000),
+      maxSteps: clampNumber(rule.runPolicy?.maxSteps, 1, 5_000, 500)
+    } as const;
+    const running = this.activeRuns.get(key) ?? 0;
+    if (policy.concurrency === "skip" && running > 0) {
+      log.warn(`Kural atlandı (halen çalışıyor): ${rule.name}`, `bot=${botId}`);
+      return;
+    }
+    this.activeRuns.set(key, running + 1);
+
+    const ctx: AutomationContext = { ...initial };
+    for (const [name, value] of Object.entries(initial)) ctx[`event.${name}`] = value;
+    ctx.runId = newId();
+    ctx.ruleId = rule.id;
+    ctx.ruleName = rule.name;
+    const state: FlowRunState = {
+      startedAt: Date.now(),
+      deadline: Date.now() + policy.maxRuntimeMs,
+      maxSteps: policy.maxSteps,
+      steps: 0,
+      stopped: false
+    };
+
+    log.info(`Gelişmiş kural tetik: ${rule.name}`, `bot=${botId} · düğüm=${rule.flow?.length ?? 0}`);
+    try {
+      await this.executeNodes(rule.flow ?? [], rule, botId, ctx, state);
+      if (state.stopResult === "failed") throw new Error(state.stopMessage || "Akış başarısız olarak durduruldu");
+      log.success(`Gelişmiş kural tamamlandı: ${rule.name}`, `adım=${state.steps}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.error = message;
+      ctx.failedAction = String(ctx.failedAction ?? ctx.lastAction ?? "flow");
+      log.error(`Gelişmiş kural hata (${rule.name})`, message);
+      if (rule.onErrorActions?.length) {
+        for (const action of rule.onErrorActions) {
+          try {
+            await this.runAction(botId, action, stringifyContext(ctx));
+          } catch (nested) {
+            log.error(
+              `Gelişmiş onError aksiyon hata (${action.type})`,
+              nested instanceof Error ? nested.message : String(nested)
+            );
+          }
+        }
       }
-      // Görev etiketi: "Oak topla" contains "oak" vb.
-      if (c.type === "task_label_is") {
-        const cur = inst.tasks.currentSummary;
-        const actual = cur?.label ?? "";
-        const expected = String(c.value ?? c.taskType ?? c.item ?? "").trim();
-        if (!expected) return false;
-        if (!stringMatches(actual, expected, c.match ?? "contains")) return false;
+    } finally {
+      const left = Math.max(0, (this.activeRuns.get(key) ?? 1) - 1);
+      if (left === 0) this.activeRuns.delete(key);
+      else this.activeRuns.set(key, left);
+    }
+  }
+
+  private async executeNodes(
+    nodes: AutomationNode[],
+    rule: AutomationRule,
+    botId: string,
+    ctx: AutomationContext,
+    state: FlowRunState
+  ): Promise<void> {
+    for (const node of nodes) {
+      if (state.stopped) return;
+      this.assertFlowBudget(state);
+      if (node.disabled) continue;
+      state.steps += 1;
+      ctx.nodeId = node.id;
+      ctx.nodeType = node.type;
+      this.refreshLiveContext(botId, ctx);
+
+      if (node.type === "action") {
+        await this.executeActionNode(node, rule, botId, ctx, state);
+        continue;
       }
-      // Dövüş modu: idle | attacking | following | defending…
-      if (c.type === "combat_mode_is") {
-        const actual = String(inst.combat.getRuntime().mode ?? "idle");
-        const expected = String(c.value ?? c.taskType ?? "").trim();
-        if (!expected) return false;
-        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      if (node.type === "if") {
+        const matched = this.conditionGroupOk(node.condition, botId, ctx);
+        ctx.branch = matched ? "then" : "else";
+        await this.executeNodes(matched ? node.then : node.else ?? [], rule, botId, ctx, state);
+        continue;
       }
-      // Takip edilen oyuncu
-      if (c.type === "follow_player_is") {
-        const actual = String(inst.combat.getRuntime().companion?.followPlayer ?? "");
-        const expected = String(c.player ?? c.value ?? "").trim();
-        if (!expected) return false;
-        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      if (node.type === "set") {
+        const name = normalizeVariableName(node.name);
+        if (!name) throw new Error("Değişken adı boş veya geçersiz");
+        ctx[name] = resolveContextExpression(node.value, ctx);
+        ctx.lastVariable = name;
+        ctx.lastValue = ctx[name];
+        continue;
       }
-      // Bot status: online | stopped | connecting…
-      if (c.type === "status_is") {
-        const actual = String(inst.status ?? "");
-        const expected = String(c.value ?? c.taskType ?? "").trim();
-        if (!expected) return false;
-        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      if (node.type === "wait") {
+        if (node.until) {
+          const timeout = clampNumber(node.timeoutMs, 100, 3_600_000, 30_000);
+          const poll = clampNumber(node.pollMs, 50, 60_000, 250);
+          const deadline = Math.min(state.deadline, Date.now() + timeout);
+          while (!this.conditionGroupOk(node.until, botId, ctx)) {
+            if (Date.now() >= deadline) throw new Error(`Koşul bekleme zaman aşımı (${timeout} ms)`);
+            await sleep(poll);
+            this.assertFlowBudget(state);
+            this.refreshLiveContext(botId, ctx);
+          }
+        } else {
+          const ms = clampNumber(Number(node.seconds ?? 1) * 1000, 0, 3_600_000, 1_000);
+          await sleep(ms);
+        }
+        continue;
       }
-      if (c.type === "health_below" && inst.runtime.health > (c.threshold ?? 10)) return false;
-      if (c.type === "health_above" && inst.runtime.health < (c.threshold ?? 10)) return false;
-      if (c.type === "food_below" && inst.runtime.food > (c.threshold ?? 10)) return false;
-      if (c.type === "food_above" && inst.runtime.food < (c.threshold ?? 10)) return false;
-      if (c.type === "in_dimension" && c.dimension && inst.runtime.dimension !== c.dimension) return false;
-      if (c.type === "has_item" && c.item) {
-        if (countItem(inst, c.item) <= 0) return false;
+      if (node.type === "repeat") {
+        const maxIterations = clampNumber(node.maxIterations, 1, 1_000, 100);
+        const requested = node.times == null
+          ? maxIterations
+          : Number(resolveContextExpression(node.times, ctx));
+        const iterations = Math.min(maxIterations, Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : 0));
+        for (let index = 0; index < iterations; index += 1) {
+          this.assertFlowBudget(state);
+          this.refreshLiveContext(botId, ctx);
+          if (node.while && !this.conditionGroupOk(node.while, botId, ctx)) break;
+          ctx.loopIndex = index;
+          ctx.loopNumber = index + 1;
+          await this.executeNodes(node.body, rule, botId, ctx, state);
+          if (state.stopped) break;
+        }
+        continue;
       }
-      if (c.type === "not_has_item" && c.item) {
-        if (countItem(inst, c.item) > 0) return false;
-      }
-      if (c.type === "item_count" && c.item) {
-        if (!compare(countItem(inst, c.item), c.comparison ?? "gte", c.threshold ?? 1)) return false;
-      }
-      if (c.type === "player_near") {
-        const name =
-          c.player?.trim() ||
-          inst.combat.getRuntime().companion?.followPlayer ||
-          "";
-        if (!name) return false;
-        const d = this.getPlayerDistance(botId, name);
-        if (d == null || d > (c.radius ?? 16)) return false;
-      }
-      if (c.type === "player_far") {
-        const name =
-          c.player?.trim() ||
-          inst.combat.getRuntime().companion?.followPlayer ||
-          "";
-        if (!name) return false;
-        const d = this.getPlayerDistance(botId, name);
-        const limit = c.radius ?? 16;
-        // görünmüyor veya limitten uzak
-        if (!(d == null || d > limit)) return false;
-      }
-      if (c.type === "following" && !this.isFollowing(botId)) return false;
-      if (c.type === "not_following" && this.isFollowing(botId)) return false;
-      if (c.type === "time_day" || c.type === "time_night") {
-        const bot = inst.bot;
-        if (!bot) return false;
-        const t = ((bot.time?.timeOfDay ?? 0) % 24000 + 24000) % 24000;
-        const isDay = t >= 0 && t < 12000;
-        if (c.type === "time_day" && !isDay) return false;
-        if (c.type === "time_night" && isDay) return false;
+      if (node.type === "stop_flow") {
+        state.stopped = true;
+        state.stopResult = node.result ?? "success";
+        state.stopMessage = interpolateValue(String(node.message ?? ""), ctx);
       }
     }
-    return true;
+  }
+
+  private async executeActionNode(
+    node: AutomationActionNode,
+    rule: AutomationRule,
+    botId: string,
+    ctx: AutomationContext,
+    state: FlowRunState
+  ) {
+    const retries = clampNumber(node.retries, 0, 10, 0);
+    const timeoutMs = clampNumber(node.timeoutMs, 100, 3_600_000, 120_000);
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      this.assertFlowBudget(state);
+      ctx.attempt = attempt + 1;
+      try {
+        const action = interpolateRecord(node.action, ctx) as RuleAction;
+        const result = await withTimeout(
+          this.runActionWithResult(botId, action, ctx, node.waitForTask === true, timeoutMs),
+          timeoutMs,
+          `Aksiyon zaman aşımı: ${String(action.type)}`
+        );
+        this.storeActionResult(ctx, node.saveAs, result);
+        if (!result.ok) throw new Error(result.error || `Aksiyon başarısız: ${result.actionType}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.error = message;
+        ctx.failedAction = String(node.action.type);
+        ctx.failedNode = node.id;
+        if (attempt < retries) {
+          await sleep(clampNumber(node.retryDelayMs, 0, 60_000, 500));
+          continue;
+        }
+      }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError ?? "Bilinmeyen aksiyon hatası");
+    const failed: AutomationActionResult = {
+      ok: false,
+      actionType: String(node.action.type),
+      status: "failed",
+      error: message
+    };
+    this.storeActionResult(ctx, node.saveAs, failed);
+    if (node.onError?.length) await this.executeNodes(node.onError, rule, botId, ctx, state);
+    if (!node.continueOnError) throw new Error(message);
+  }
+
+  private async runActionWithResult(
+    botId: string,
+    action: RuleAction,
+    ctx: AutomationContext,
+    waitForTask: boolean,
+    timeoutMs: number
+  ): Promise<AutomationActionResult> {
+    const inst = this.manager.get(botId);
+    if (!inst) throw new Error("Bot bulunamadı");
+    const before = new Set(this.allTaskSummaries(inst).map((task) => task.id));
+    await this.runAction(botId, action, stringifyContext(ctx));
+    const created = this.allTaskSummaries(inst).find((task) => !before.has(task.id));
+    if (!created) {
+      return { ok: true, actionType: String(action.type), status: "completed" };
+    }
+    if (!waitForTask) return this.taskResult(String(action.type), created);
+    const finalTask = await this.waitForTask(inst, created.id, timeoutMs);
+    return this.taskResult(String(action.type), finalTask);
+  }
+
+  private allTaskSummaries(inst: NonNullable<ReturnType<BotManager["get"]>>): TaskSummary[] {
+    return [
+      ...(inst.tasks.currentSummary ? [inst.tasks.currentSummary] : []),
+      ...inst.tasks.queueSummaries,
+      ...inst.tasks.historySummaries.slice().reverse()
+    ];
+  }
+
+  private async waitForTask(
+    inst: NonNullable<ReturnType<BotManager["get"]>>,
+    taskId: string,
+    timeoutMs: number
+  ): Promise<TaskSummary> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const task = this.allTaskSummaries(inst).find((item) => item.id === taskId);
+      if (task && ["done", "failed", "cancelled"].includes(task.state)) return task;
+      await sleep(100);
+    }
+    return { id: taskId, type: "unknown", label: "timeout", state: "failed", error: "timeout" };
+  }
+
+  private taskResult(actionType: string, task: TaskSummary): AutomationActionResult {
+    const status = task.error === "timeout"
+      ? "timeout"
+      : task.state === "done"
+        ? "done"
+        : task.state === "failed"
+          ? "failed"
+          : task.state === "cancelled"
+            ? "cancelled"
+            : "queued";
+    return {
+      ok: status === "done" || status === "queued",
+      actionType,
+      status,
+      taskId: task.id,
+      taskType: task.type,
+      label: task.label,
+      error: task.error,
+      progressDone: task.progress?.done,
+      progressTotal: task.progress?.total
+    };
+  }
+
+  private storeActionResult(ctx: AutomationContext, saveAs: string | undefined, result: AutomationActionResult) {
+    const names = ["last", normalizeVariableName(saveAs ?? "")].filter(Boolean);
+    for (const name of names) {
+      ctx[`${name}.ok`] = result.ok;
+      ctx[`${name}.status`] = result.status;
+      ctx[`${name}.actionType`] = result.actionType;
+      ctx[`${name}.taskId`] = result.taskId ?? "";
+      ctx[`${name}.taskType`] = result.taskType ?? "";
+      ctx[`${name}.label`] = result.label ?? "";
+      ctx[`${name}.error`] = result.error ?? "";
+      ctx[`${name}.progressDone`] = result.progressDone ?? 0;
+      ctx[`${name}.progressTotal`] = result.progressTotal ?? 0;
+    }
+    ctx.lastAction = result.actionType;
+    ctx.lastStatus = result.status;
+    ctx.lastTaskId = result.taskId ?? "";
+  }
+
+  private refreshLiveContext(botId: string, ctx: AutomationContext) {
+    const live = this.liveBotContext(botId);
+    Object.assign(ctx, live);
+    for (const [name, value] of Object.entries(live)) ctx[`live.${name}`] = value;
+  }
+
+  private assertFlowBudget(state: FlowRunState) {
+    if (Date.now() > state.deadline) throw new Error("Otomasyon azami çalışma süresini aştı");
+    if (state.steps >= state.maxSteps) throw new Error("Otomasyon azami adım sayısını aştı");
   }
 
   private async execute(
@@ -1182,8 +1533,231 @@ function stringMatches(
   }
 }
 
+function resolveContextExpression(value: unknown, ctx: AutomationContext): unknown {
+  if (typeof value !== "string") return value;
+  const exact = value.match(/^\{([\w.-]+)\}$/);
+  if (exact) return contextValue(ctx, exact[1]!) ?? "";
+  return interpolateValue(value, ctx);
+}
+
+function contextValue(ctx: AutomationContext, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(ctx, path)) return ctx[path];
+  const parts = path.split(".");
+  let current: unknown = ctx;
+  for (const part of parts) {
+    if (current == null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function interpolateValue(value: string, ctx: AutomationContext): string {
+  return value.replace(/\{([\w.-]+)\}/g, (_match, key: string) => {
+    const resolved = contextValue(ctx, key);
+    if (resolved == null) return "";
+    if (typeof resolved === "object") return JSON.stringify(resolved);
+    return String(resolved);
+  });
+}
+
 function interpolate(s: string, ctx: Record<string, string>) {
-  return s.replace(/\{(\w+)\}/g, (_, k) => ctx[k] ?? "");
+  return interpolateValue(s, ctx);
+}
+
+function interpolateRecord(value: unknown, ctx: AutomationContext): unknown {
+  if (Array.isArray(value)) return value.map((item) => interpolateRecord(item, ctx));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, interpolateRecord(item, ctx)])
+    );
+  }
+  return resolveContextExpression(value, ctx);
+}
+
+function stringifyContext(ctx: AutomationContext): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(ctx).map(([key, value]) => [
+      key,
+      value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value)
+    ])
+  );
+}
+
+function compareContextValues(left: unknown, operator: string, right: unknown): boolean {
+  if (operator === "exists") return left !== undefined && left !== null && left !== "";
+  if (operator === "not_exists") return left === undefined || left === null || left === "";
+  if (operator === "truthy") return toBoolean(left);
+  if (operator === "falsy") return !toBoolean(left);
+
+  const leftNumber = typeof left === "number" ? left : Number(left);
+  const rightNumber = typeof right === "number" ? right : Number(right);
+  if (["gt", "gte", "lt", "lte"].includes(operator) && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    if (operator === "gt") return leftNumber > rightNumber;
+    if (operator === "gte") return leftNumber >= rightNumber;
+    if (operator === "lt") return leftNumber < rightNumber;
+    return leftNumber <= rightNumber;
+  }
+
+  const a = String(left ?? "");
+  const b = String(right ?? "");
+  if (operator === "regex") {
+    try {
+      return new RegExp(b, "i").test(a);
+    } catch {
+      return false;
+    }
+  }
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  if (operator === "neq") return al !== bl;
+  if (operator === "contains") return al.includes(bl);
+  if (operator === "not_contains") return !al.includes(bl);
+  if (operator === "starts_with") return al.startsWith(bl);
+  if (operator === "ends_with") return al.endsWith(bl);
+  return al === bl;
+}
+
+function toBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return !["", "0", "false", "no", "off", "null", "undefined"].includes(normalized);
+}
+
+function normalizeVariableName(value: string): string {
+  return value.trim().replace(/^\{+|\}+$/g, "").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function normalizeAutomationRule(rule: AutomationRule): AutomationRule {
+  return {
+    ...rule,
+    conditions: rule.conditions ?? [],
+    actions: rule.actions ?? [],
+    elseActions: rule.elseActions ?? [],
+    onErrorActions: rule.onErrorActions ?? [],
+    flow: rule.flow ? normalizeFlow(rule.flow) : undefined,
+    variables: rule.variables ?? {},
+    runPolicy: {
+      concurrency: rule.runPolicy?.concurrency ?? "skip",
+      maxRuntimeMs: rule.runPolicy?.maxRuntimeMs ?? 600_000,
+      maxSteps: rule.runPolicy?.maxSteps ?? 500
+    }
+  };
+}
+
+function prepareFlow(nodes: AutomationNode[]): AutomationNode[] {
+  const normalized = normalizeFlow(nodes);
+  validateFlow(normalized);
+  return normalized;
+}
+
+function validateFlow(nodes: AutomationNode[], depth = 0, counter = { count: 0 }) {
+  if (!Array.isArray(nodes)) throw new Error("Gelişmiş akış bir düğüm listesi olmalı");
+  if (depth > 24) throw new Error("Gelişmiş akış iç içe koşul sınırını aştı (24)");
+  for (const node of nodes) {
+    counter.count += 1;
+    if (counter.count > 2_000) throw new Error("Gelişmiş akış düğüm sınırını aştı (2000)");
+    if (!node || typeof node !== "object" || !node.id) throw new Error("Geçersiz otomasyon düğümü");
+    if (node.type === "action") {
+      if (!node.action || typeof node.action.type !== "string" || !node.action.type.trim()) {
+        throw new Error("Aksiyon düğümünde aksiyon tipi gerekli");
+      }
+      validateFlow(node.onError ?? [], depth + 1, counter);
+      continue;
+    }
+    if (node.type === "if") {
+      validateConditionGroup(node.condition, depth + 1);
+      validateFlow(node.then ?? [], depth + 1, counter);
+      validateFlow(node.else ?? [], depth + 1, counter);
+      continue;
+    }
+    if (node.type === "repeat") {
+      if (node.while) validateConditionGroup(node.while, depth + 1);
+      validateFlow(node.body ?? [], depth + 1, counter);
+      continue;
+    }
+    if (node.type === "wait") {
+      if (node.until) validateConditionGroup(node.until, depth + 1);
+      continue;
+    }
+    if (node.type === "set") {
+      if (!normalizeVariableName(node.name)) throw new Error("Değişken düğümünde geçerli bir ad gerekli");
+      continue;
+    }
+    if (node.type !== "stop_flow") throw new Error(`Bilinmeyen otomasyon düğümü: ${String((node as { type?: unknown }).type)}`);
+  }
+}
+
+function validateConditionGroup(group: AutomationConditionGroup, depth: number) {
+  if (!group || group.kind !== "group" || !Array.isArray(group.items)) {
+    throw new Error("Geçersiz koşul grubu");
+  }
+  if (depth > 24) throw new Error("Koşul grubu iç içe sınırını aştı (24)");
+  if (!["all", "any", "not"].includes(group.operator)) throw new Error("Geçersiz koşul grubu operatörü");
+  for (const item of group.items) {
+    if (item.kind === "group") validateConditionGroup(item, depth + 1);
+    else if (item.kind === "bot") {
+      if (!item.condition?.type) throw new Error("Bot koşulu tipi gerekli");
+    } else if (item.kind === "compare") {
+      if (!item.left?.trim()) throw new Error("Değer karşılaştırmasında sol değer gerekli");
+    } else {
+      throw new Error("Bilinmeyen koşul düğümü");
+    }
+  }
+}
+
+function normalizeFlow(nodes: AutomationNode[]): AutomationNode[] {
+  return nodes.map((raw) => {
+    const node = { ...raw, id: raw.id || newFlowNodeId() } as AutomationNode;
+    if (node.type === "if") {
+      node.condition = normalizeConditionGroup(node.condition);
+      node.then = normalizeFlow(node.then ?? []);
+      node.else = normalizeFlow(node.else ?? []);
+    } else if (node.type === "repeat") {
+      node.body = normalizeFlow(node.body ?? []);
+      if (node.while) node.while = normalizeConditionGroup(node.while);
+    } else if (node.type === "wait" && node.until) {
+      node.until = normalizeConditionGroup(node.until);
+    } else if (node.type === "action") {
+      node.onError = normalizeFlow(node.onError ?? []);
+    }
+    return node;
+  });
+}
+
+function normalizeConditionGroup(group: AutomationConditionGroup | undefined): AutomationConditionGroup {
+  const source = group ?? defaultConditionGroup();
+  return {
+    kind: "group",
+    operator: source.operator ?? "all",
+    items: (source.items ?? []).map((item) =>
+      item.kind === "group" ? normalizeConditionGroup(item) : item
+    )
+  };
 }
 
 /** Geriye uyum: isim = blueprint adı */
@@ -1393,7 +1967,16 @@ export const CONTEXT_VARS_COMMON: ContextVarDoc[] = [
   { name: "protectPlayers", desc: "Korunanlar" },
   { name: "branch", desc: "then | else" },
   { name: "error", desc: "ON ERROR: hata mesajı" },
-  { name: "failedAction", desc: "ON ERROR: hata veren aksiyon tipi" }
+  { name: "failedAction", desc: "ON ERROR: hata veren aksiyon tipi" },
+  { name: "runId", desc: "Gelişmiş akış çalışma kimliği" },
+  { name: "last.status", desc: "Son aksiyon: completed | queued | done | failed | cancelled | timeout" },
+  { name: "last.taskId", desc: "Son aksiyonun oluşturduğu görev kimliği" },
+  { name: "last.taskType", desc: "Son aksiyonun görev tipi" },
+  { name: "last.label", desc: "Son aksiyonun görev etiketi" },
+  { name: "last.error", desc: "Son aksiyon hata mesajı" },
+  { name: "loopIndex", desc: "Döngü indeksi (0 tabanlı)" },
+  { name: "loopNumber", desc: "Döngü sırası (1 tabanlı)" },
+  { name: "attempt", desc: "Aksiyon deneme numarası" }
 ];
 
 export const CONTEXT_VARS_BY_TRIGGER: Record<string, ContextVarDoc[]> = {
@@ -1452,14 +2035,25 @@ export const CONTEXT_VARS_BY_TRIGGER: Record<string, ContextVarDoc[]> = {
     { name: "taskType", desc: "Görev tipi: collect-wood, mine, craft…" },
     { name: "label", desc: "Görev etiketi (UI label)" },
     { name: "taskLabel", desc: "label ile aynı" },
-    { name: "status", desc: "done" }
+    { name: "status", desc: "done" },
+    { name: "taskId", desc: "Tamamlanan görevin kimliği" },
+    { name: "taskStatus", desc: "Görev durumu" },
+    { name: "taskProgressDone", desc: "Son ilerleme değeri" },
+    { name: "taskProgressTotal", desc: "Toplam ilerleme değeri" },
+    { name: "taskProgressLabel", desc: "İlerleme etiketi" }
   ],
   task_failed: [
     { name: "task", desc: "Görev tipi" },
     { name: "taskType", desc: "Görev tipi" },
     { name: "label", desc: "Görev etiketi" },
     { name: "taskLabel", desc: "label ile aynı" },
-    { name: "status", desc: "failed" }
+    { name: "status", desc: "failed" },
+    { name: "taskId", desc: "Başarısız görevin kimliği" },
+    { name: "taskStatus", desc: "Görev durumu" },
+    { name: "taskError", desc: "Görev hata mesajı" },
+    { name: "taskProgressDone", desc: "Son ilerleme değeri" },
+    { name: "taskProgressTotal", desc: "Toplam ilerleme değeri" },
+    { name: "taskProgressLabel", desc: "İlerleme etiketi" }
   ],
   inventory_full: [],
   interval: [],

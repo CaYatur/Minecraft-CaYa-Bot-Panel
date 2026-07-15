@@ -111,11 +111,28 @@ export class BotInstance extends EventEmitter {
     });
     this.tasks.on("taskDone", (s: TaskSummary) => {
       this.log.success(`Görev tamamlandı: ${s.label}`);
-      this.emit("taskEvent", { botId: this.config.id, kind: "done" as const, taskType: s.type, label: s.label });
+      this.emit("taskEvent", {
+        botId: this.config.id,
+        kind: "done" as const,
+        taskId: s.id,
+        taskType: s.type,
+        label: s.label,
+        state: s.state,
+        progress: s.progress
+      });
     });
     this.tasks.on("taskFailed", (s: TaskSummary, err: string) => {
       this.log.error(`Görev başarısız: ${s.label}`, err);
-      this.emit("taskEvent", { botId: this.config.id, kind: "failed" as const, taskType: s.type, label: s.label });
+      this.emit("taskEvent", {
+        botId: this.config.id,
+        kind: "failed" as const,
+        taskId: s.id,
+        taskType: s.type,
+        label: s.label,
+        state: s.state,
+        error: err || s.error || "",
+        progress: s.progress
+      });
     });
   }
 
