@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 export function StatBar({
   value,
   max,
@@ -9,12 +11,12 @@ export function StatBar({
   max: number;
   color: string;
   label: string;
-  icon: string;
+  icon: ReactNode;
 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
     <div className="flex items-center gap-2" title={`${label}: ${value}/${max}`}>
-      <span className="w-4 text-center text-xs">{icon}</span>
+      <span className="flex w-4 items-center justify-center">{icon}</span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
         <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
       </div>

@@ -4,9 +4,9 @@ import { newId } from "../types";
 
 /**
  * Öncelikli görev kuyruğu (İ6): hayatta kalma > savunma > kullanıcı > otomasyon > boşta.
- * v1 kesme modeli: daha yüksek öncelikli görev gelirse çalışan görev iptal edilir ve
- * paramlarıyla kuyruğun önüne yeniden eklenir (yeniden başlatılabilir görevler için
- * "kaldığı yerden devam" etkisi — hedef mevcut konumdan yeniden hesaplanır).
+ * v1 kesme modeli: daha yüksek öncelikli görev gelirse çalışan görev cancelled edilir ve
+ * paramlarıyla kuyruğun önüne yeniden eklenir (yeniden başlatılabilir görevler for
+ * "kaldığı yerden devam" etkisi — target mevcut konumdan yeniden hesaplanır).
  * Bağlam koruyan gerçek pause/resume: Faz 10.
  */
 
@@ -71,7 +71,7 @@ export class TaskQueue extends EventEmitter {
     // kesme: çalışan görevden yüksek öncelik geldiyse çalışanı kes (+ yeniden kuyrukla)
     const cur = this.current;
     if (cur && def.priority > cur.def.priority) {
-      this.preempt(cur, `yüksek öncelikli görev geldi: ${def.label}`);
+      this.preempt(cur, `higher-priority task arrived: ${def.label}`);
     }
 
     // İ6: savunma/hayatta-kalma görevleri kullanıcı duraklatmasını deler (bot ölmesin)
@@ -82,7 +82,7 @@ export class TaskQueue extends EventEmitter {
     return this.summarize(task);
   }
 
-  cancel(id: string, reason = "iptal edildi"): boolean {
+  cancel(id: string, reason = "cancelled edildi"): boolean {
     const cur = this.current;
     if (cur && cur.id === id) {
       cur.token.cancelled = true;
@@ -100,7 +100,7 @@ export class TaskQueue extends EventEmitter {
     return false;
   }
 
-  cancelAll(reason = "tümü iptal edildi") {
+  cancelAll(reason = "all cancelled") {
     for (const t of this.queue) {
       t.state = "cancelled";
       this.pushHistory(t);
@@ -117,12 +117,12 @@ export class TaskQueue extends EventEmitter {
   }
 
   /**
-   * Faz 10: duraklat. Çalışan görev iptal edilip paramlarıyla kuyruğun önüne
+   * Faz 10: duraklat. Çalışan görev cancelled edilip paramlarıyla kuyruğun önüne
    * yeniden eklenir; kuyruk `held` ile TUTULUR — resume()'a dek hiçbir görev
-   * başlamaz (önceki sürümde pompa hemen devam ettiği için pause fiilen
+   * başlamaz (önceki sürümde pompa hemen devam ettiği for pause fiilen
    * "yeniden başlat" davranıyordu). Savunma/hayatta-kalma önceliği held'i deler (İ6).
    */
-  pause(reason = "duraklatıldı"): boolean {
+  pause(reason = "paused"): boolean {
     const cur = this.current;
     if (!cur && this.queue.length === 0) return false;
     this.held = true;
@@ -132,7 +132,7 @@ export class TaskQueue extends EventEmitter {
       if (cur.def.requeueOnPreempt !== false) {
         const clone: InternalTask = {
           id: newId(),
-          seq: -1, // aynı öncelikte en öne
+          seq: -1, // front of same priority
           def: cur.def,
           state: "queued",
           token: { cancelled: false },

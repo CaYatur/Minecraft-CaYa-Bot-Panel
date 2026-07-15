@@ -4,8 +4,8 @@ import { Vec3 } from "vec3";
 /**
  * Su hareket asisti.
  *
- * Pathfinder rota/yaw sahibidir. Bu yardımcı yalnızca su fiziğinde eksik kalan
- * dikey yüzme kontrolünü tamamlar ve su içindeyken sprint yüzünden oluşan
+ * Pathfinder rota/yaw sahibidir. Bu yardımcı yalnızca su fiziğinde eksik remaining
+ * dikey yüzme kontrolünü tamamlar ve su fordeyken sprint yüzünden oluşan
  * kararsızlığı engeller. Yön, sağ/sol ve normal ileri hareket kontrollerine
  * dokunmaz.
  */
@@ -180,7 +180,7 @@ export function installWaterMovementAssist(bot: Bot): void {
       return;
     }
 
-    // Su içinde sprint, yüzeyde titreme ve blok kenarında takılmayı artırır.
+    // Su forde sprint, yüzeyde titreme ve blok kenarında takılmayı artırır.
     try {
       bot.setControlState("sprint", false);
     } catch {

@@ -29,14 +29,14 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     broadcastSnapshot();
   });
   manager.on("botRemoved", () => broadcastSnapshot());
-  // sunucu profili CRUD + config değişimleri de tüm panellere anında yansır
+  // server profile CRUD + config değişimleri de tüm panellere anında yansır
   manager.on("changed", () => broadcastSnapshot());
 
   // İ1: tüm loglar canlı olarak panele akar
   logHub.addSink((entry) => io.emit(EV.BOT_LOG, entry));
 
   io.on("connection", (socket) => {
-    log.debug(`Panel bağlandı (${socket.id})`);
+    log.debug(`Panel connected (${socket.id})`);
     socket.emit(EV.STATE_SNAPSHOT, manager.snapshot(supportedVersions));
 
     socket.on(EV.SEND_CHAT, (payload: { botId?: string; text?: string }) => {
@@ -52,10 +52,10 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
       try {
         inst.enqueueAction(payload);
       } catch (err) {
-        log.warn(`Socket aksiyonu çalıştırılamadı (${payload?.type})`, err instanceof Error ? err.message : String(err));
+        log.warn(`Socket action failed (${payload?.type})`, err instanceof Error ? err.message : String(err));
       }
     });
 
-    socket.on("disconnect", () => log.debug(`Panel ayrıldı (${socket.id})`));
+    socket.on("disconnect", () => log.debug(`Panel disconnected (${socket.id})`));
   });
 }

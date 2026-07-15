@@ -25,7 +25,7 @@ export interface CombatConfig {
    * Proaktif tarama: menzilde zombie vb. gelince savunun veya can düşükse kaç.
    */
   defendMode: "off" | "mob" | "player" | "all";
-  /** öz savunma tarama yarıçapı (blok) */
+  /** öz savunma tarama yarıçapı (blocks) */
   defendRange: number;
   reach: number;
   cpsCap: number; // 1.8-style cap; 1.9+ uses weapon charge instead
@@ -37,14 +37,14 @@ export interface CombatConfig {
   chaseDistance: number;
   /**
    * Hedefe kenetlenmişken (saldırı/savunma): menzildeki başka mob / hasar veren oyuncuya
-   * ara vuruş — ana hedef değişmez, çok yakın tehdit de hasar alır.
+   * cleave — main target değişmez, çok yakın tehdit de hasar alır.
    */
   cleaveNearby?: boolean;
-  /** ara vuruş menzili (varsayılan = reach) */
+  /** cleave menzili (varsayılan = reach) */
   cleaveRange?: number;
-  /** yakın hostile mob'lara ara vuruş */
+  /** yakın hostile mob'lara cleave */
   cleaveMobs?: boolean;
-  /** yakın, bize hasar vermiş / tehdit oyunculara ara vuruş */
+  /** yakın, bize hasar vermiş / tehdit oyunculara cleave */
   cleavePlayers?: boolean;
 }
 
@@ -65,7 +65,7 @@ export interface CompanionState {
   followDistance: number;
   attackPlayer: string | null;
   /**
-   * Korunan oyuncular (çoklu). Bot ana kişiyi (`followPlayer`) takip eder;
+   * Korunan oyuncular (çoklu). Bot main kişiyi (`followPlayer`) takip eder;
    * listedekilerden herhangi birinin yanında tehdit olursa müdahale eder.
    */
   protectPlayers: string[];
@@ -79,7 +79,7 @@ export interface CompanionState {
     range: number;
     /**
      * Koruma saldırı politikası:
-     * - threats: korunanın yanındaki saldırgan tehditler (mob + yakın düşman oyuncu)
+     * - threats: korunanın yanındaki saldırgan tehditler (mob + near enemy oyuncu)
      * - non_whitelist: menzilde beyaz listede olmayan tüm oyunculara saldır (+ mob opsiyonel)
      */
     protectAggro: "threats" | "non_whitelist";
@@ -123,7 +123,7 @@ export interface MovementConfig {
   /** 3–4 blokta sprint jump */
   parkourSprint?: boolean;
   /**
-   * Uçurum güvenliği (varsayılan true):
+   * Uçurum safeği (varsayılan true):
    * takip/goto sırasında önündeki boşluğu gör → atla / köprü / geri çek.
    * Düştükten sonra MLG ayrı kalır; amaç hiç düşmemek.
    */
@@ -172,7 +172,7 @@ export interface BotConfig {
       seekLand: boolean;
       landSearchRadius: number;
     };
-    /** ateş / lav / magma kaçış */
+    /** ateş / lav / magma fleeing */
     hazardGuard?: {
       enabled: boolean;
       escapeRadius: number;
@@ -220,7 +220,7 @@ export interface ChatEntry {
   self?: boolean;
   /** mesaj gövdesi (rütbesiz) */
   text: string;
-  /** isimden önce: "[Admin] [VIP] " rütbe/kanal prefix */
+  /** isimden önce: "[Admin] [VIP] " rütbe/kmainl prefix */
   prefix?: string;
   /** isim ile gövde arası: " » " / ": " */
   nameSuffix?: string;
@@ -262,7 +262,7 @@ export interface Waypoint {
 }
 
 export interface InventoryItem {
-  /** pencere slot numarası (oyuncu envanteri: 5-8 zırh, 9-35 ana, 36-44 hotbar, 45 offhand) */
+  /** window slot numarası (oyuncu inventoryi: 5-8 zırh, 9-35 main, 36-44 hotbar, 45 offhand) */
   slot: number;
   name: string;
   displayName: string;
@@ -272,7 +272,7 @@ export interface InventoryItem {
 }
 
 export interface InventorySnapshot {
-  /** 0-45 arası pencere slotları (boş slot = null) */
+  /** 0-45 arası window slotları (boş slot = null) */
   slots: (InventoryItem | null)[];
   /** seçili hotbar slotu (0-8) */
   heldQuickBar: number;
@@ -326,7 +326,7 @@ export interface BuildRuntimeSnapshot {
   };
   placeOrder?: "nearby-first" | "layer-first";
   collectMissing?: boolean;
-  /** anlık iş metni: Toplanıyor / Craft / Kondu… */
+  /** anlık iş metni: Collecting / Craft / Kondu… */
   activity?: string | null;
   /** şu an işlenen malzeme adı (UI highlight) */
   activityMaterial?: string | null;
@@ -390,7 +390,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       jumpCrit: true,
       fleeAtHealth: 6,
       chaseDistance: 24,
-      // opt-in: hedefe kilitliyken yanındaki mob / hasar veren oyuncuya da vur
+      // opt-in: targete kilitliyken yanındaki mob / hasar veren oyuncuya da vur
       cleaveNearby: false,
       cleaveRange: 3.0,
       cleaveMobs: true,
@@ -404,7 +404,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         enabled: true,
         minDamageHp: 4,
         lethalHealthMargin: 2,
-        // taban; gerçek su yerleştirme reach içi dinamik (fallGuard.ts)
+        // taban; gerçek su place reach içi dinamik (fallGuard.ts)
         mlgTriggerBlocks: 5.5,
         onlyWhenDangerous: true,
         autoReclaim: true,

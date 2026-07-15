@@ -27,7 +27,7 @@ export function Servers() {
       await refresh();
       setForm(empty);
       setEditingId(null);
-      toast("success", editingId ? "Profil güncellendi" : "Profil eklendi");
+      toast("success", editingId ? t("servers.profileUpdated") : t("servers.profileAdded"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     } finally {
@@ -36,7 +36,7 @@ export function Servers() {
   };
 
   const remove = async (s: ServerProfile) => {
-    if (!confirm(`"${s.name}" profili silinsin mi?`)) return;
+    if (!confirm(t("servers.deleteConfirm", { name: s.name }))) return;
     try {
       await api.del(`/api/servers/${s.id}`);
       await refresh();
@@ -53,25 +53,25 @@ export function Servers() {
 
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-400">Ad</span>
+          <span className="text-zinc-400">{t("servers.name")}</span>
           <input
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="Benim Sunucum"
+            placeholder={t("servers.namePlaceholder")}
             className="w-44 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-400">IP / adres</span>
+          <span className="text-zinc-400">IP / {t("servers.addressLabel")}</span>
           <input
             value={form.host}
             onChange={(e) => setForm({ ...form, host: e.target.value })}
-            placeholder="oyna.sunucum.com"
+            placeholder={t("servers.hostPlaceholder")}
             className="w-52 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-400">Port</span>
+          <span className="text-zinc-400">{t("servers.port")}</span>
           <input
             type="number"
             value={form.port}
@@ -80,13 +80,13 @@ export function Servers() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-zinc-400">Sürüm</span>
+          <span className="text-zinc-400">{t("servers.version")}</span>
           <select
             value={form.version}
             onChange={(e) => setForm({ ...form, version: e.target.value })}
             className="w-36 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
           >
-            <option value="auto">Otomatik</option>
+            <option value="auto">{t("servers.autoVersion")}</option>
             {supportedVersions.map((v) => (
               <option key={v} value={v}>
                 {v}
@@ -99,7 +99,7 @@ export function Servers() {
           disabled={busy || !form.host.trim()}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         >
-          {editingId ? "Güncelle" : "+ Ekle"}
+          {editingId ? t("servers.update") : t("servers.addShort")}
         </button>
         {editingId && (
           <button
@@ -109,7 +109,7 @@ export function Servers() {
             }}
             className="rounded-lg px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-800"
           >
-            Vazgeç
+            {t("common.cancel")}
           </button>
         )}
       </div>
@@ -118,18 +118,18 @@ export function Servers() {
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-900 text-xs text-zinc-500 uppercase">
             <tr>
-              <th className="px-4 py-2.5">Ad</th>
-              <th className="px-4 py-2.5">Adres</th>
-              <th className="px-4 py-2.5">Sürüm</th>
-              <th className="px-4 py-2.5">Bot</th>
-              <th className="px-4 py-2.5 text-right">İşlem</th>
+              <th className="px-4 py-2.5">{t("servers.name")}</th>
+              <th className="px-4 py-2.5">{t("servers.addressLabel")}</th>
+              <th className="px-4 py-2.5">{t("servers.version")}</th>
+              <th className="px-4 py-2.5">{t("servers.botColumn")}</th>
+              <th className="px-4 py-2.5 text-right">{t("servers.actionsColumn")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/60">
             {servers.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-zinc-600">
-                  Henüz sunucu profili yok
+                  {t("servers.empty")}
                 </td>
               </tr>
             )}
@@ -149,10 +149,10 @@ export function Servers() {
                     }}
                     className="mr-2 text-indigo-400 hover:underline"
                   >
-                    Düzenle
+                    {t("common.edit")}
                   </button>
                   <button onClick={() => remove(s)} className="text-red-400 hover:underline">
-                    Sil
+                    {t("common.delete")}
                   </button>
                 </td>
               </tr>

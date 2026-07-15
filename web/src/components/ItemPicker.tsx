@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 
 export type CatalogKind = "items" | "blocks" | "ores" | "foods" | "tools" | "weapons";
@@ -40,7 +41,7 @@ export function ItemPicker({
   kind = "items",
   value,
   onChange,
-  placeholder = "Ara / seç…",
+  placeholder,
   className = ""
 }: {
   version?: string;
@@ -50,6 +51,8 @@ export function ItemPicker({
   placeholder?: string;
   className?: string;
 }) {
+  const { t } = useI18n();
+  const ph = placeholder ?? t("itemPicker.placeholder");
   const [cat, setCat] = useState<Catalog | null>(null);
   const [q, setQ] = useState(value);
   const [open, setOpen] = useState(false);
@@ -93,12 +96,12 @@ export function ItemPicker({
         }}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 180)}
-        placeholder={placeholder}
+        placeholder={ph}
         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
       />
       {cat && (
         <div className="mt-0.5 text-[10px] text-zinc-600">
-          katalog {cat.resolvedVersion} · {list.length} {kind}
+          {cat.resolvedVersion} · {list.length} {kind}
         </div>
       )}
       {err && <div className="text-[10px] text-red-400">{err}</div>}

@@ -37,6 +37,8 @@ interface FlowRunState {
   maxSteps: number;
   steps: number;
   stopped: boolean;
+  botId: string;
+  cancelGeneration: number;
   stopResult?: "success" | "failed";
   stopMessage?: string;
 }
@@ -49,13 +51,13 @@ export type TriggerType =
   | "bot_spawned"
   | "bot_died"
   | "item_count"
-  /** envantere yeni eşya geldi / adet arttı */
+  /** inventorye yeni eşya geldi / adet arttı */
   | "item_gained"
   | "attacked"
   | "player_nearby"
-  /** oyuncu menzil DIŞINDA (uzak) — radius'tan fazla veya görünmüyor */
+  /** oyuncu menzil DIŞINDA (uzak) — radius'tan fazla veya not visible */
   | "player_far"
-  /** takip edilen oyuncu takip mesafesinin / radius dışına çıktı */
+  /** takip edilen oyuncu takip distancesinin / radius dışına çıktı */
   | "follow_out_of_range"
   | "player_joined"
   | "player_left"
@@ -84,7 +86,7 @@ export interface RuleTrigger {
   /** attacked: mob | player | all */
   source?: "mob" | "player" | "all";
   taskType?: string;
-  /** slash komut öneki (varsayılan "/") — "!gel" için "!" */
+  /** slash komut öneki (varsayılan "/") — "!gel" for "!" */
   commandPrefix?: string;
 }
 
@@ -100,7 +102,7 @@ export interface RuleCondition {
     | "task_label_is"
     /** Dövüş / companion modu: idle | attacking | following… */
     | "combat_mode_is"
-    /** Takip edilen oyuncu adı eşleşmesi */
+    /** Followed player adı eşleşmesi */
     | "follow_player_is"
     /** Bot bağlantı durumu: online | stopped… */
     | "status_is"
@@ -126,12 +128,12 @@ export interface RuleCondition {
   comparison?: "lt" | "lte" | "gt" | "gte" | "eq";
   /** task_is / task_done tarzı: görev tipi (mine, craft, none…) — | ile VEYA listesi */
   taskType?: string;
-  /** Genel string hedef (etiket, mod, status…) — taskType yoksa burası */
+  /** Genel string target (etiket, mod, status…) — taskType yoksa burası */
   value?: string;
   /**
    * String eşleşme:
    * eq (varsayılan) | neq | contains | startsWith | regex
-   * eq/neq/contains/startsWith: value içinde | ile VEYA (mine|gather)
+   * eq/neq/contains/startsWith: value forde | ile VEYA (mine|gather)
    */
   match?: "eq" | "neq" | "contains" | "startsWith" | "regex";
 }
@@ -180,13 +182,17 @@ export class RuleEngine {
   private itemSnapshots = new Map<string, Map<string, number>>();
   /** ruleId:botId -> çalışan gelişmiş akış sayısı */
   private activeRuns = new Map<string, number>();
+  /** Her bot for aktif otomasyon akışlarını topluca geçersiz kılan nesil sayacı. */
+  private botCancelGeneration = new Map<string, number>();
+  /** Kullanıcı "tümünü cancelled" dediğinde aynı kuralın anında yeniden görev üretmesini engeller. */
+  private automationSuppressedUntil = new Map<string, number>();
 
   constructor(private readonly manager: BotManager) {}
 
   load() {
     this.rules = loadJson<AutomationRule[]>(FILE, []).map(normalizeAutomationRule);
     this.rewireIntervals();
-    log.info(`${this.rules.length} otomasyon kuralı yüklendi`);
+    log.info(`${this.rules.length} automation rule(s) loaded`);
   }
 
   private persist() {
@@ -223,7 +229,7 @@ export class RuleEngine {
 
   update(id: string, patch: Partial<AutomationRule>): AutomationRule {
     const r = this.rules.find((x) => x.id === id);
-    if (!r) throw new Error("Kural bulunamadı");
+    if (!r) throw new Error("Rule not found");
     const normalizedPatch: Partial<AutomationRule> & { flow?: AutomationNode[] } = { ...patch };
     const rawFlow = (patch as Partial<AutomationRule> & { flow?: AutomationNode[] | null }).flow;
     if (Array.isArray(rawFlow)) normalizedPatch.flow = prepareFlow(rawFlow);
@@ -248,7 +254,7 @@ export class RuleEngine {
 
   async testRule(id: string, botId: string) {
     const rule = this.rules.find((r) => r.id === id);
-    if (!rule) throw new Error("Kural bulunamadı");
+    if (!rule) throw new Error("Rule not found");
     const prev = this.dryRun;
     this.dryRun = true;
     try {
@@ -259,12 +265,7 @@ export class RuleEngine {
   }
 
   onChat(botId: string, username: string | undefined, text: string) {
-    // Kendi mesajını yoksay — bot sohbete yazınca kural kelimesi geçerse tekrar tetiklenmesin
-    if (this.isOwnUsername(botId, username)) {
-      log.debug(`Sohbet yoksayıldı (kendi mesajı)`, `bot=${botId} · ${username}: ${text.slice(0, 80)}`);
-      return;
-    }
-    // komut argümanları (arg0, arg…) için özel yol
+    // komut argümanları (arg0, arg…) for özel yol
     for (const rule of this.rules) {
       if (!rule.enabled) continue;
       if (!this.appliesToBot(rule, botId)) continue;
@@ -274,28 +275,11 @@ export class RuleEngine {
         if (!hit) continue;
         this.tryFire(rule, botId, { player: username ?? "", text, ...hit });
       } catch (e) {
-        log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        log.error(`Rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
         rule.enabled = false;
         this.persist();
       }
     }
-  }
-
-  /** Bot kendi kullanıcı adını mı söylüyor / hedef mi? */
-  private isOwnUsername(botId: string, name: string | undefined | null): boolean {
-    if (!name?.trim()) return false;
-    const inst = this.manager.get(botId);
-    if (!inst) return false;
-    const n = name.trim().toLowerCase();
-    const cfg = inst.config.username?.toLowerCase();
-    if (cfg && n === cfg) return true;
-    try {
-      const live = inst.bot?.username?.toLowerCase();
-      if (live && n === live) return true;
-    } catch {
-      /* */
-    }
-    return false;
   }
 
   onVitals(botId: string, health: number, food: number) {
@@ -334,8 +318,6 @@ export class RuleEngine {
 
   onNearby(botId: string, players: Array<{ username: string; distance: number }>) {
     for (const p of players) {
-      // kendi entity'si yakında listesine sızarsa yoksay
-      if (this.isOwnUsername(botId, p.username)) continue;
       this.fireMatching(botId, "player_nearby", { player: p.username, distance: String(Math.round(p.distance)) }, (rule) => {
         if (rule.trigger.type !== "player_nearby") return false;
         const r = rule.trigger.radius ?? 16;
@@ -429,15 +411,15 @@ export class RuleEngine {
         if (!compare(count, rule.trigger.comparison ?? "lte", rule.trigger.threshold ?? 0)) continue;
         this.tryFire(rule, botId, { item, count: String(count) });
       } catch (e) {
-        log.error(`item_count kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        log.error(`item_count rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
       }
     }
-    // envantere yeni eşya / adet artışı
+    // inventorye yeni eşya / adet artışı
     this.onItemGainedTick(botId);
   }
 
   /**
-   * Envanterde belirli eşyanın adedi arttıysa (toplama/loot/craft sonucu).
+   * Inventory has insufficient belirli eşyanın adedi arttıysa (toplama/loot/craft sonucu).
    * trigger.item opsiyonel: boşsa herhangi bir artış; doluysa o eşya (includes match).
    * trigger.threshold: minimum artım (varsayılan 1).
    */
@@ -460,7 +442,7 @@ export class RuleEngine {
       if (count > before) gains.push({ item: name, delta: count - before, count });
     }
     this.itemSnapshots.set(botId, nowMap);
-    // ilk snapshot — tetikleme (yanlış “hepsini aldı” spam’i olmasın)
+    // ilk snapshot — tetikleme (yanlış “allni aldı” spam’i olmasın)
     if (prev.size === 0) return;
     if (!gains.length) return;
 
@@ -484,7 +466,7 @@ export class RuleEngine {
           gained: hit.item
         });
       } catch (e) {
-        log.error(`item_gained kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        log.error(`item_gained rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
       }
     }
   }
@@ -502,7 +484,7 @@ export class RuleEngine {
         if (!match(rule)) continue;
         this.tryFire(rule, botId, ctx);
       } catch (e) {
-        log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        log.error(`Rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
         rule.enabled = false;
         this.persist();
       }
@@ -537,7 +519,7 @@ export class RuleEngine {
 
   /**
    * Her kural çalışmasında kullanılabilir anlık bot durumu.
-   * Sohbet “bot durum” + IF task_busy → THEN “Görev: {task} {label}” gibi senaryolar için.
+   * Sohbet “bot durum” + IF task_busy → THEN “Görev: {task} {label}” gibi senaryolar for.
    */
   private liveBotContext(botId: string): Record<string, string> {
     const inst = this.manager.get(botId);
@@ -597,7 +579,7 @@ export class RuleEngine {
         pos != null
           ? `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
           : "",
-      // dövüş / companion
+      // combat / companion
       combatMode: combat.mode ?? "idle",
       mode: combat.mode ?? "idle",
       activeTarget: combat.activeTarget ?? "",
@@ -621,7 +603,7 @@ export class RuleEngine {
           try {
             this.tryFire(rule, botId, {});
           } catch (e) {
-            log.error(`Interval kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+            log.error(`Interval rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
           }
         }
       }, ms);
@@ -643,7 +625,7 @@ export class RuleEngine {
 
   /**
    * player_far + follow_out_of_range tetikleri.
-   * player boş veya @follow → companion takip hedefi.
+   * player boş veya @follow → companion takip targeti.
    */
   onDistanceTick(botId: string) {
     const inst = this.manager.get(botId);
@@ -674,7 +656,7 @@ export class RuleEngine {
 
         const dist = this.getPlayerDistance(botId, playerName);
         const followDist = Math.max(1, Number(companion?.followDistance ?? 3));
-        // radius yoksa: takip mesafesi + 4 blok tolerans
+        // radius yoksa: takip distancesi + 4 blok tolerans
         const limit =
           rule.trigger.radius != null
             ? Number(rule.trigger.radius)
@@ -682,7 +664,7 @@ export class RuleEngine {
               ? followDist + 4
               : 24;
 
-        // görünmüyor veya limitten uzak = far
+        // not visible veya limitten uzak = far
         const isFar = dist == null || dist > limit;
         if (!isFar) continue;
 
@@ -693,12 +675,12 @@ export class RuleEngine {
           followDistance: String(followDist)
         });
       } catch (e) {
-        log.error(`Mesafe kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+        log.error(`Distance rule error (${rule.name})`, e instanceof Error ? e.message : String(e));
       }
     }
   }
 
-  /** Oyuncu mesafesi; entity yoksa null (chunk dışı / çok uzak) */
+  /** Oyuncu distancesi; entity yoksa null (chunk dışı / çok uzak) */
   private getPlayerDistance(botId: string, playerName: string): number | null {
     const inst = this.manager.get(botId);
     const bot = inst?.bot;
@@ -726,7 +708,26 @@ export class RuleEngine {
     return Boolean(c?.followPlayer);
   }
 
+  /** Aktif gelişmiş/legacy otomasyon akışlarını cancelled eder ve kısa süre yeni tetikleri susturur. */
+  cancelRunsForBot(botId: string, reason = "otomasyon cancelled edildi", suppressMs = 5_000) {
+    this.botCancelGeneration.set(botId, this.currentCancelGeneration(botId) + 1);
+    this.automationSuppressedUntil.set(botId, Date.now() + Math.max(0, suppressMs));
+    log.info(`Bot automations cancelled: ${botId}`, reason);
+  }
+
+  private currentCancelGeneration(botId: string): number {
+    return this.botCancelGeneration.get(botId) ?? 0;
+  }
+
+  private assertRunActive(botId: string, generation: number) {
+    if (this.currentCancelGeneration(botId) !== generation) {
+      throw new Error("Automation cancelled by user");
+    }
+  }
+
   private appliesToBot(rule: AutomationRule, botId: string) {
+    const suppressed = (this.automationSuppressedUntil.get(botId) ?? 0) > Date.now();
+    if (suppressed) return false;
     return rule.botIds === "all" || rule.botIds.includes(botId);
   }
 
@@ -786,14 +787,14 @@ export class RuleEngine {
       return ctx;
     }
 
-    if (!pat && mode !== "exact") return {}; // boş desen = her mesaj
+    if (!pat && mode !== "exact") return {}; // empty pattern = every message
     if (mode === "exact") return raw === pat ? {} : null;
     if (mode === "startsWith") return lower.startsWith(pat.toLowerCase()) ? {} : null;
     if (mode === "regex") {
       try {
         return new RegExp(pat, "i").test(raw) ? {} : null;
       } catch {
-        throw new Error(`Geçersiz regex: ${pat}`);
+        throw new Error(`Invalid regex: ${pat}`);
       }
     }
     // contains
@@ -915,7 +916,7 @@ export class RuleEngine {
     } as const;
     const running = this.activeRuns.get(key) ?? 0;
     if (policy.concurrency === "skip" && running > 0) {
-      log.warn(`Kural atlandı (halen çalışıyor): ${rule.name}`, `bot=${botId}`);
+      log.warn(`Rule skipped (still running): ${rule.name}`, `bot=${botId}`);
       return;
     }
     this.activeRuns.set(key, running + 1);
@@ -930,26 +931,33 @@ export class RuleEngine {
       deadline: Date.now() + policy.maxRuntimeMs,
       maxSteps: policy.maxSteps,
       steps: 0,
-      stopped: false
+      stopped: false,
+      botId,
+      cancelGeneration: this.currentCancelGeneration(botId)
     };
 
-    log.info(`Gelişmiş kural tetik: ${rule.name}`, `bot=${botId} · düğüm=${rule.flow?.length ?? 0}`);
+    log.info(`Advanced rule trigger: ${rule.name}`, `bot=${botId} · nodes=${rule.flow?.length ?? 0}`);
     try {
       await this.executeNodes(rule.flow ?? [], rule, botId, ctx, state);
-      if (state.stopResult === "failed") throw new Error(state.stopMessage || "Akış başarısız olarak durduruldu");
-      log.success(`Gelişmiş kural tamamlandı: ${rule.name}`, `adım=${state.steps}`);
+      if (state.stopResult === "failed") throw new Error(state.stopMessage || "Flow stopped as failed");
+      log.success(`Advanced rule completed: ${rule.name}`, `steps=${state.steps}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const cancelledByUser = this.currentCancelGeneration(botId) !== state.cancelGeneration;
+      if (cancelledByUser) {
+        log.info(`Advanced rule stopped by user: ${rule.name}`, `bot=${botId}`);
+        return;
+      }
       ctx.error = message;
       ctx.failedAction = String(ctx.failedAction ?? ctx.lastAction ?? "flow");
-      log.error(`Gelişmiş kural hata (${rule.name})`, message);
+      log.error(`Advanced rule error (${rule.name})`, message);
       if (rule.onErrorActions?.length) {
         for (const action of rule.onErrorActions) {
           try {
             await this.runAction(botId, action, stringifyContext(ctx));
           } catch (nested) {
             log.error(
-              `Gelişmiş onError aksiyon hata (${action.type})`,
+              `Advanced onError action error (${action.type})`,
               nested instanceof Error ? nested.message : String(nested)
             );
           }
@@ -990,7 +998,7 @@ export class RuleEngine {
       }
       if (node.type === "set") {
         const name = normalizeVariableName(node.name);
-        if (!name) throw new Error("Değişken adı boş veya geçersiz");
+        if (!name) throw new Error("Variable name empty or invalid");
         ctx[name] = resolveContextExpression(node.value, ctx);
         ctx.lastVariable = name;
         ctx.lastValue = ctx[name];
@@ -1002,14 +1010,18 @@ export class RuleEngine {
           const poll = clampNumber(node.pollMs, 50, 60_000, 250);
           const deadline = Math.min(state.deadline, Date.now() + timeout);
           while (!this.conditionGroupOk(node.until, botId, ctx)) {
-            if (Date.now() >= deadline) throw new Error(`Koşul bekleme zaman aşımı (${timeout} ms)`);
+            if (Date.now() >= deadline) throw new Error(`Condition wait timed out (${timeout} ms)`);
             await sleep(poll);
             this.assertFlowBudget(state);
             this.refreshLiveContext(botId, ctx);
           }
         } else {
           const ms = clampNumber(Number(node.seconds ?? 1) * 1000, 0, 3_600_000, 1_000);
-          await sleep(ms);
+          const waitUntil = Date.now() + ms;
+          while (Date.now() < waitUntil) {
+            this.assertFlowBudget(state);
+            await sleep(Math.min(200, Math.max(0, waitUntil - Date.now())));
+          }
         }
         continue;
       }
@@ -1055,12 +1067,19 @@ export class RuleEngine {
       try {
         const action = interpolateRecord(node.action, ctx) as RuleAction;
         const result = await withTimeout(
-          this.runActionWithResult(botId, action, ctx, node.waitForTask === true, timeoutMs),
+          this.runActionWithResult(
+            botId,
+            action,
+            ctx,
+            node.waitForTask === true,
+            timeoutMs,
+            state.cancelGeneration
+          ),
           timeoutMs,
-          `Aksiyon zaman aşımı: ${String(action.type)}`
+          `Action timeout: ${String(action.type)}`
         );
         this.storeActionResult(ctx, node.saveAs, result);
-        if (!result.ok) throw new Error(result.error || `Aksiyon başarısız: ${result.actionType}`);
+        if (!result.ok) throw new Error(result.error || `Action failed: ${result.actionType}`);
         return;
       } catch (error) {
         lastError = error;
@@ -1075,7 +1094,7 @@ export class RuleEngine {
       }
     }
 
-    const message = lastError instanceof Error ? lastError.message : String(lastError ?? "Bilinmeyen aksiyon hatası");
+    const message = lastError instanceof Error ? lastError.message : String(lastError ?? "Unknown action error");
     const failed: AutomationActionResult = {
       ok: false,
       actionType: String(node.action.type),
@@ -1092,10 +1111,11 @@ export class RuleEngine {
     action: RuleAction,
     ctx: AutomationContext,
     waitForTask: boolean,
-    timeoutMs: number
+    timeoutMs: number,
+    cancelGeneration: number
   ): Promise<AutomationActionResult> {
     const inst = this.manager.get(botId);
-    if (!inst) throw new Error("Bot bulunamadı");
+    if (!inst) throw new Error("Bot not found");
     const before = new Set(this.allTaskSummaries(inst).map((task) => task.id));
     await this.runAction(botId, action, stringifyContext(ctx));
     const created = this.allTaskSummaries(inst).find((task) => !before.has(task.id));
@@ -1103,7 +1123,7 @@ export class RuleEngine {
       return { ok: true, actionType: String(action.type), status: "completed" };
     }
     if (!waitForTask) return this.taskResult(String(action.type), created);
-    const finalTask = await this.waitForTask(inst, created.id, timeoutMs);
+    const finalTask = await this.waitForTask(inst, created.id, timeoutMs, botId, cancelGeneration);
     return this.taskResult(String(action.type), finalTask);
   }
 
@@ -1118,10 +1138,13 @@ export class RuleEngine {
   private async waitForTask(
     inst: NonNullable<ReturnType<BotManager["get"]>>,
     taskId: string,
-    timeoutMs: number
+    timeoutMs: number,
+    botId: string,
+    cancelGeneration: number
   ): Promise<TaskSummary> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      this.assertRunActive(botId, cancelGeneration);
       const task = this.allTaskSummaries(inst).find((item) => item.id === taskId);
       if (task && ["done", "failed", "cancelled"].includes(task.state)) return task;
       await sleep(100);
@@ -1177,8 +1200,9 @@ export class RuleEngine {
   }
 
   private assertFlowBudget(state: FlowRunState) {
-    if (Date.now() > state.deadline) throw new Error("Otomasyon azami çalışma süresini aştı");
-    if (state.steps >= state.maxSteps) throw new Error("Otomasyon azami adım sayısını aştı");
+    this.assertRunActive(state.botId, state.cancelGeneration);
+    if (Date.now() > state.deadline) throw new Error("Automation exceeded max runtime");
+    if (state.steps >= state.maxSteps) throw new Error("Automation exceeded max steps");
   }
 
   private async execute(
@@ -1194,28 +1218,35 @@ export class RuleEngine {
         ? rule.elseActions ?? []
         : rule.actions ?? [];
     if (!list.length) return;
+    const cancelGeneration = this.currentCancelGeneration(botId);
 
     log.info(
-      `Kural tetik: ${rule.name}`,
+      `Rule trigger: ${rule.name}`,
       `bot=${inst.config.username} · ${branch === "else" ? "ELSE" : "THEN"}`
     );
 
     for (const action of list) {
       try {
+        this.assertRunActive(botId, cancelGeneration);
         await this.runAction(inst.config.id, action, ctx);
+        this.assertRunActive(botId, cancelGeneration);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        log.error(`Aksiyon hata (${action.type})`, msg);
-        // THEN sırasında hata → tek onError bloğu (bir kez)
+        if (this.currentCancelGeneration(botId) !== cancelGeneration) {
+          log.info(`Rule stopped by user: ${rule.name}`, `bot=${botId}`);
+          break;
+        }
+        log.error(`Action error (${action.type})`, msg);
+        // error during THEN → single onError block (once)
         if (branch === "then" && rule.onErrorActions && rule.onErrorActions.length > 0) {
           const errCtx = { ...ctx, error: msg, failedAction: String(action.type) };
-          log.warn(`onError bloğu: ${rule.name}`, msg);
+          log.warn(`onError block: ${rule.name}`, msg);
           for (const errAct of rule.onErrorActions) {
             try {
               await this.runAction(inst.config.id, errAct, errCtx);
             } catch (e2) {
               log.error(
-                `onError aksiyon hata (${errAct.type})`,
+                `onError action error (${errAct.type})`,
                 e2 instanceof Error ? e2.message : String(e2)
               );
             }
@@ -1274,7 +1305,7 @@ export class RuleEngine {
       const dest = String(action.to ?? action.channel ?? "panel"); // panel | chat | both
       if (dest === "chat" || dest === "both") inst.sendChat(line);
       if (dest !== "chat") {
-        log.info(`Durum: ${line}`);
+        log.info(`Status: ${line}`);
       }
       return;
     }
@@ -1283,7 +1314,7 @@ export class RuleEngine {
       return;
     }
     if (type === "stop_tasks") {
-      inst.tasks.cancelAll("otomasyon stop_tasks");
+      this.manager.cancelAllWork(botId, "otomasyon stop_tasks");
       return;
     }
     if (type === "eat") {
@@ -1316,10 +1347,6 @@ export class RuleEngine {
     }
     if (type === "attack") {
       const target = interpolate(String(action.target ?? action.player ?? ctx.player ?? ctx.attacker ?? ""), ctx);
-      if (target && this.isOwnUsername(botId, target)) {
-        log.warn("attack yoksayıldı: bot kendisine saldıramaz", target);
-        return;
-      }
       if (target) inst.combat.enqueueAttackPlayer(target);
       return;
     }
@@ -1329,10 +1356,6 @@ export class RuleEngine {
     }
     if (type === "follow") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
-      if (p && this.isOwnUsername(botId, p)) {
-        log.warn("follow yoksayıldı: bot kendisini takip edemez", p);
-        return;
-      }
       if (p) inst.enqueueAction({ type: "follow", player: p, distance: Number(action.distance ?? 3) });
       return;
     }
@@ -1344,12 +1367,7 @@ export class RuleEngine {
         const wp = list.find((w) => w.name.toLowerCase() === name.toLowerCase() || w.id === name);
         if (wp) inst.enqueueAction({ type: "goto", x: wp.x, y: wp.y, z: wp.z, label: `waypoint: ${wp.name}` });
       } else if (action.player || ctx.player) {
-        const p = interpolate(String(action.player ?? ctx.player), ctx);
-        if (this.isOwnUsername(botId, p)) {
-          log.warn("goto-player yoksayıldı: hedef botun kendisi", p);
-          return;
-        }
-        inst.enqueueAction({ type: "goto-player", player: p });
+        inst.enqueueAction({ type: "goto-player", player: interpolate(String(action.player ?? ctx.player), ctx) });
       } else if (action.x != null) {
         inst.enqueueAction({ type: "goto", x: action.x, y: action.y, z: action.z });
       }
@@ -1364,13 +1382,14 @@ export class RuleEngine {
       const rawCount = action.count != null ? interpolate(String(action.count), ctx) : "16";
       const n = Math.max(1, Number(rawCount) || 16);
       if (!name || name.startsWith("{")) {
-        log.warn("collect: eşya adı yok", JSON.stringify(action));
+        log.warn("collect: no item name", JSON.stringify(action));
         return;
       }
+      const countMode = action.countMode === "target" ? "target" : "add";
       if (name.endsWith("_log") || name.endsWith("_stem") || name === "log") {
-        inst.gather.enqueueCollectWood(n, name === "log" ? undefined : name);
+        inst.gather.enqueueCollectWood(n, name === "log" ? undefined : name, undefined, countMode);
       } else {
-        inst.gather.enqueueCollectBlock(name, n);
+        inst.gather.enqueueCollectBlock(name, n, undefined, countMode);
       }
       return;
     }
@@ -1380,14 +1399,21 @@ export class RuleEngine {
     }
     if (type === "mine" || type === "maden-topla") {
       const ore = interpolate(String(action.ore ?? ctx.ore ?? "iron"), ctx).replace(/_ore$/, "");
-      inst.gather.enqueueMine(ore, Number(action.count ?? 8), action.mode === "utility" ? "utility" : "legit");
+      const countMode = action.countMode === "target" ? "target" : "add";
+      inst.gather.enqueueMine(
+        ore,
+        Number(action.count ?? 8),
+        action.mode === "utility" ? "utility" : "legit",
+        undefined,
+        countMode
+      );
       return;
     }
     if (type === "craft" || type === "üret") {
       inst.craft.enqueueCraft(interpolate(String(action.item ?? ctx.item ?? "stick"), ctx), Number(action.count ?? 1));
       return;
     }
-    if (type === "deposit" || type === "depoya-bırak") {
+    if (type === "deposit" || type === "depoya-bırak" || type === "depoya-drop") {
       inst.enqueueAction({ type: "deposit", filter: action.filter ?? "" });
       return;
     }
@@ -1395,28 +1421,39 @@ export class RuleEngine {
       inst.enqueueAction({ type: "withdraw", item: action.item ?? ctx.item, count: action.count ?? 1 });
       return;
     }
+    if (
+      type === "drop_items" ||
+      type === "drop-items" ||
+      type === "discard_item" ||
+      type === "discard-items" ||
+      type === "eşya-at"
+    ) {
+      const item = interpolate(String(action.item ?? ctx.item ?? ""), ctx).replace(/^minecraft:/, "");
+      const rawCount = interpolate(String(action.count ?? 1), ctx);
+      inst.enqueueAction({
+        type: "drop_items",
+        item,
+        count: Math.max(0, Number(rawCount) || 0),
+        dropMode: action.dropMode === "all" || action.dropMode === "keep" ? action.dropMode : "count",
+        match: action.match === "contains" ? "contains" : "exact",
+        respectKeepItems: action.respectKeepItems !== false && action.respectKeepItems !== "false",
+        failIfMissing: action.failIfMissing === true || action.failIfMissing === "true",
+        requireCount: action.requireCount === true || action.requireCount === "true"
+      });
+      return;
+    }
     if (type === "stop") {
       inst.enqueueAction({ type: "stop" });
       return;
     }
-    // herhangi bir işi iptal et (aktif görev + kuyruk + pathfinder; companion korunur)
+    // herhangi bir işi cancelled et (aktif görev + kuyruk + pathfinder; companion korunur)
     if (
       type === "cancel_work" ||
       type === "cancel_any" ||
       type === "işi-iptal" ||
       type === "cancel_current_work"
     ) {
-      inst.tasks.cancelAll("otomasyon: işi iptal");
-      try {
-        const bot = inst.bot;
-        if (bot?.pathfinder) {
-          bot.pathfinder.setGoal(null);
-          (bot.pathfinder as { stop?(): void }).stop?.();
-        }
-        bot?.clearControlStates();
-      } catch {
-        /* */
-      }
+      this.manager.cancelAllWork(botId, "automation: cancel work");
       return;
     }
     // sadece aktif görev
@@ -1424,19 +1461,20 @@ export class RuleEngine {
       type === "leave_task" ||
       type === "cancel_task" ||
       type === "görev-bırak" ||
+      type === "görev-drop" ||
       type === "abort_current"
     ) {
       const cur = inst.tasks.currentSummary;
-      if (cur) inst.tasks.cancel(cur.id, "otomasyon: görev bırak");
+      if (cur) inst.tasks.cancel(cur.id, "automation: leave task");
       return;
     }
-    if (type === "unfollow" || type === "cancel_follow" || type === "takip-iptal") {
+    if (type === "unfollow" || type === "cancel_follow" || type === "takip-cancelled") {
       const follow = inst.combat.getRuntime().companion?.followPlayer;
       const p = interpolate(String(action.player ?? follow ?? ctx.player ?? ""), ctx);
       if (p) {
         inst.enqueueAction({ type: "social-follow", player: p, enabled: false });
       } else {
-        inst.combat.clearCompanion("otomasyon unfollow");
+        inst.combat.clearCompanion("automation unfollow");
       }
       // pathfinder da dursun
       inst.enqueueAction({ type: "stop" });
@@ -1446,22 +1484,19 @@ export class RuleEngine {
       type === "abort_all" ||
       type === "cancel_all" ||
       type === "her-şeyi-bırak" ||
+      type === "her-şeyi-drop" ||
       type === "leave_all"
     ) {
-      // takip + dövüş companion + tüm görevler + pathfinder
-      inst.resetAllWork("otomasyon: her şeyi bırak");
+      // follow + combat companion + all tasks + pathfinder + active automation flows
+      this.manager.cancelAllWork(botId, "automation: abort all");
       return;
     }
     if (type === "reset-work" || type === "reset_work" || type === "soft-reset") {
-      inst.resetAllWork("otomasyon reset-work");
+      this.manager.cancelAllWork(botId, "automation reset-work");
       return;
     }
     if (type === "protect" || type === "social-protect") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
-      if (p && this.isOwnUsername(botId, p)) {
-        log.warn("protect yoksayıldı: bot kendisini koruyamaz (hedef = kendi)", p);
-        return;
-      }
       if (p) {
         inst.enqueueAction({
           type: "social-protect",
@@ -1474,10 +1509,6 @@ export class RuleEngine {
     }
     if (type === "social-follow") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
-      if (p && action.enabled !== false && this.isOwnUsername(botId, p)) {
-        log.warn("social-follow yoksayıldı: bot kendisini takip edemez", p);
-        return;
-      }
       if (p) {
         inst.enqueueAction({
           type: "social-follow",
@@ -1490,10 +1521,6 @@ export class RuleEngine {
     }
     if (type === "social-attack") {
       const p = interpolate(String(action.player ?? action.target ?? ctx.player ?? ctx.attacker ?? ""), ctx);
-      if (p && action.enabled !== false && this.isOwnUsername(botId, p)) {
-        log.warn("social-attack yoksayıldı: bot kendisine saldıramaz", p);
-        return;
-      }
       if (p) {
         inst.enqueueAction({ type: "social-attack", player: p, enabled: action.enabled !== false });
       }
@@ -1540,7 +1567,7 @@ function compare(value: number, op: string, thr: number): boolean {
 
 /**
  * String koşul eşleşmesi.
- * eq/contains/startsWith: value içinde | ile VEYA listesi (mine|gather).
+ * eq/contains/startsWith: value forde | ile VEYA listesi (mine|gather).
  * neq: listedeki hiçbirine eşit değilse true.
  * regex: value tam regex deseni (i flag).
  */
@@ -1725,15 +1752,15 @@ function prepareFlow(nodes: AutomationNode[]): AutomationNode[] {
 }
 
 function validateFlow(nodes: AutomationNode[], depth = 0, counter = { count: 0 }) {
-  if (!Array.isArray(nodes)) throw new Error("Gelişmiş akış bir düğüm listesi olmalı");
-  if (depth > 24) throw new Error("Gelişmiş akış iç içe koşul sınırını aştı (24)");
+  if (!Array.isArray(nodes)) throw new Error("Advanced flow must be a node list");
+  if (depth > 24) throw new Error("Advanced flow nested condition limit exceeded (24)");
   for (const node of nodes) {
     counter.count += 1;
-    if (counter.count > 2_000) throw new Error("Gelişmiş akış düğüm sınırını aştı (2000)");
-    if (!node || typeof node !== "object" || !node.id) throw new Error("Geçersiz otomasyon düğümü");
+    if (counter.count > 2_000) throw new Error("Advanced flow node limit exceeded (2000)");
+    if (!node || typeof node !== "object" || !node.id) throw new Error("Invalid automation node");
     if (node.type === "action") {
       if (!node.action || typeof node.action.type !== "string" || !node.action.type.trim()) {
-        throw new Error("Aksiyon düğümünde aksiyon tipi gerekli");
+        throw new Error("Action node requires an action type");
       }
       validateFlow(node.onError ?? [], depth + 1, counter);
       continue;
@@ -1754,27 +1781,27 @@ function validateFlow(nodes: AutomationNode[], depth = 0, counter = { count: 0 }
       continue;
     }
     if (node.type === "set") {
-      if (!normalizeVariableName(node.name)) throw new Error("Değişken düğümünde geçerli bir ad gerekli");
+      if (!normalizeVariableName(node.name)) throw new Error("Variable node requires a valid name");
       continue;
     }
-    if (node.type !== "stop_flow") throw new Error(`Bilinmeyen otomasyon düğümü: ${String((node as { type?: unknown }).type)}`);
+    if (node.type !== "stop_flow") throw new Error(`Unknown automation node: ${String((node as { type?: unknown }).type)}`);
   }
 }
 
 function validateConditionGroup(group: AutomationConditionGroup, depth: number) {
   if (!group || group.kind !== "group" || !Array.isArray(group.items)) {
-    throw new Error("Geçersiz koşul grubu");
+    throw new Error("Invalid condition group");
   }
-  if (depth > 24) throw new Error("Koşul grubu iç içe sınırını aştı (24)");
-  if (!["all", "any", "not"].includes(group.operator)) throw new Error("Geçersiz koşul grubu operatörü");
+  if (depth > 24) throw new Error("Condition group nesting limit exceeded (24)");
+  if (!["all", "any", "not"].includes(group.operator)) throw new Error("Invalid condition group operator");
   for (const item of group.items) {
     if (item.kind === "group") validateConditionGroup(item, depth + 1);
     else if (item.kind === "bot") {
-      if (!item.condition?.type) throw new Error("Bot koşulu tipi gerekli");
+      if (!item.condition?.type) throw new Error("Bot condition type required");
     } else if (item.kind === "compare") {
-      if (!item.left?.trim()) throw new Error("Değer karşılaştırmasında sol değer gerekli");
+      if (!item.left?.trim()) throw new Error("Left value required for comparison");
     } else {
-      throw new Error("Bilinmeyen koşul düğümü");
+      throw new Error("Unknown condition node");
     }
   }
 }
@@ -1821,51 +1848,51 @@ export type { RuleBlueprint };
 export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: string[]; hint?: string }> = [
   {
     type: "chat",
-    label: "Sohbet / komut",
+    label: "Chat / command",
     fields: ["pattern", "match", "from", "player", "commandPrefix"],
-    hint: "match=command → /gel Steve (arg0). startsWith, contains, exact, regex."
+    hint: "match=command → /come Steve (arg0). startsWith, contains, exact, regex."
   },
-  { type: "attacked", label: "Bot saldırıya uğradı", fields: ["source", "player"], hint: "mob | player | all" },
-  { type: "player_nearby", label: "Yakında oyuncu", fields: ["radius", "player", "from"] },
+  { type: "attacked", label: "Bot was attacked", fields: ["source", "player"], hint: "mob | player | all" },
+  { type: "player_nearby", label: "Player nearby", fields: ["radius", "player", "from"] },
   {
     type: "player_far",
-    label: "Oyuncu uzakta (menzil dışı)",
+    label: "Player far (out of range)",
     fields: ["player", "radius"],
-    hint: "Mesafe > radius veya oyuncu görünmüyor. player boş = takip edilen (@follow)"
+    hint: "Distance > radius or player not visible. empty player = follow target (@follow)"
   },
   {
     type: "follow_out_of_range",
-    label: "Takip: hedef menzil dışı",
+    label: "Follow: target out of range",
     fields: ["radius"],
-    hint: "Takip varken hedef followDistance+4 (veya radius) dışına çıkınca. THEN: unfollow / abort_all"
+    hint: "While following, fires if target goes beyond followDistance+4 (or radius). THEN: unfollow / abort_all"
   },
-  { type: "player_joined", label: "Oyuncu girdi (tab)", fields: [] },
-  { type: "player_left", label: "Oyuncu çıktı (tab)", fields: [] },
-  { type: "health_below", label: "Can eşiğin altında", fields: ["threshold"] },
-  { type: "food_below", label: "Açlık eşiğin altında", fields: ["threshold"] },
+  { type: "player_joined", label: "Player joined (tab)", fields: [] },
+  { type: "player_left", label: "Player left (tab)", fields: [] },
+  { type: "health_below", label: "Health below threshold", fields: ["threshold"] },
+  { type: "food_below", label: "Hunger below threshold", fields: ["threshold"] },
   {
     type: "item_count",
-    label: "Eşya adedi (eşik)",
+    label: "Item count (threshold)",
     fields: ["item", "comparison", "threshold"],
-    hint: "Örn. oak_log < 16 → topla"
+    hint: "e.g. oak_log < 16 → collect"
   },
   {
     type: "item_gained",
-    label: "Eşya envantere geldi / arttı",
+    label: "Item gained / increased",
     fields: ["item", "threshold"],
-    hint: "Toplama/loot/craft sonrası adet artınca. item boş = herhangi; threshold = min artım"
+    hint: "After collect/loot/craft count rises. empty item = any; threshold = min increase"
   },
-  { type: "inventory_full", label: "Envanter doldu", fields: [] },
-  { type: "interval", label: "Zamanlayıcı", fields: ["everyMs"] },
-  { type: "bot_spawned", label: "Bot spawn oldu", fields: [] },
-  { type: "bot_died", label: "Bot öldü", fields: [] },
+  { type: "inventory_full", label: "Inventory full", fields: [] },
+  { type: "interval", label: "Timer", fields: ["everyMs"] },
+  { type: "bot_spawned", label: "Bot spawned", fields: [] },
+  { type: "bot_died", label: "Bot died", fields: [] },
   {
     type: "task_done",
-    label: "Görev başarıyla bitti",
+    label: "Task completed successfully",
     fields: ["taskType"],
-    hint: "collect-wood, mine, craft, gather… taskType boş = hepsi"
+    hint: "collect-wood, mine, craft, gather… empty taskType = all"
   },
-  { type: "task_failed", label: "Görev başarısız", fields: ["taskType"] }
+  { type: "task_failed", label: "Task failed", fields: ["taskType"] }
 ];
 
 export const CONDITION_META: Array<{
@@ -1876,114 +1903,121 @@ export const CONDITION_META: Array<{
 }> = [
   { type: "online", label: "Bot online", fields: [] },
   { type: "offline", label: "Bot offline", fields: [] },
-  { type: "task_idle", label: "Görev yok (boşta)", fields: [] },
-  { type: "task_busy", label: "Görev çalışıyor", fields: [] },
+  { type: "task_idle", label: "No task (idle)", fields: [] },
+  { type: "task_busy", label: "Task running", fields: [] },
   {
     type: "task_is",
-    label: "Görev tipi eşittir / eşleşir",
+    label: "Task type equals / matches",
     fields: ["taskType", "match"],
-    hint: "mine | gather | craft | none… | ile VEYA. match: eq | neq | contains | startsWith | regex"
+    hint: "mine | gather | craft | none… OR with |. match: eq | neq | contains | startsWith | regex"
   },
   {
     type: "task_label_is",
-    label: "Görev etiketi eşleşir",
+    label: "Task label matches",
     fields: ["value", "match"],
-    hint: "UI etiketinde ara (contains varsayılan). Örn. value=oak match=contains"
+    hint: "Search UI label (contains default). e.g. value=oak match=contains"
   },
   {
     type: "combat_mode_is",
-    label: "Dövüş modu eşittir",
+    label: "Combat mode equals",
     fields: ["value", "match"],
     hint: "idle | attacking | following | defending…"
   },
   {
     type: "follow_player_is",
-    label: "Takip edilen oyuncu",
+    label: "Follow target is",
     fields: ["player", "match"],
-    hint: "player=Steve veya Steve|Alex"
+    hint: "player=Steve or Steve|Alex"
   },
   {
     type: "status_is",
-    label: "Bot durumu eşittir",
+    label: "Bot status equals",
     fields: ["value", "match"],
     hint: "online | stopped | connecting…"
   },
-  { type: "following", label: "Takip ediyor", fields: [] },
-  { type: "not_following", label: "Takip etmiyor", fields: [] },
-  { type: "health_below", label: "Can ≤ eşik", fields: ["threshold"] },
-  { type: "health_above", label: "Can ≥ eşik", fields: ["threshold"] },
-  { type: "food_below", label: "Açlık ≤ eşik", fields: ["threshold"] },
-  { type: "food_above", label: "Açlık ≥ eşik", fields: ["threshold"] },
-  { type: "has_item", label: "Eşya var", fields: ["item"] },
-  { type: "not_has_item", label: "Eşya yok", fields: ["item"] },
-  { type: "item_count", label: "Eşya adedi", fields: ["item", "comparison", "threshold"] },
-  { type: "player_near", label: "Oyuncu yakında", fields: ["player", "radius"] },
-  { type: "player_far", label: "Oyuncu uzakta", fields: ["player", "radius"] },
-  { type: "in_dimension", label: "Boyut", fields: ["dimension"] },
-  { type: "time_day", label: "Gündüz", fields: [] },
-  { type: "time_night", label: "Gece", fields: [] }
+  { type: "following", label: "Following", fields: [] },
+  { type: "not_following", label: "Not following", fields: [] },
+  { type: "health_below", label: "Health ≤ threshold", fields: ["threshold"] },
+  { type: "health_above", label: "Health ≥ threshold", fields: ["threshold"] },
+  { type: "food_below", label: "Hunger ≤ threshold", fields: ["threshold"] },
+  { type: "food_above", label: "Hunger ≥ threshold", fields: ["threshold"] },
+  { type: "has_item", label: "Has item", fields: ["item"] },
+  { type: "not_has_item", label: "Missing item", fields: ["item"] },
+  { type: "item_count", label: "Item count", fields: ["item", "comparison", "threshold"] },
+  { type: "player_near", label: "Player nearby", fields: ["player", "radius"] },
+  { type: "player_far", label: "Player far", fields: ["player", "radius"] },
+  { type: "in_dimension", label: "Dimension", fields: ["dimension"] },
+  { type: "time_day", label: "Daytime", fields: [] },
+  { type: "time_night", label: "Nighttime", fields: [] }
 ];
 
-export const ACTION_META: Array<{ type: string; label: string; fields: string[]; category?: string }> = [
-  { type: "send_chat", label: "Sohbete yaz", fields: ["text"], category: "Sohbet" },
-  { type: "panel_notify", label: "Panel bildirimi", fields: ["message", "level"], category: "Sohbet" },
+export const ACTION_META: Array<{ type: string; label: string; fields: string[]; hint?: string; category?: string }> = [
+  { type: "send_chat", label: "Write to chat", fields: ["text"], category: "Chat" },
+  { type: "panel_notify", label: "Panel notification", fields: ["message", "level"], category: "Chat" },
   {
     type: "report_status",
-    label: "Bot durumu raporu (panel/sohbet)",
+    label: "Bot status report (panel/chat)",
     fields: ["to", "message"],
-    category: "Sohbet"
+    category: "Chat"
   },
-  { type: "goto", label: "Git (oyuncu/waypoint/xyz)", fields: ["player", "waypoint", "x", "y", "z"], category: "Hareket" },
-  { type: "follow", label: "Takip et", fields: ["player", "distance"], category: "Hareket" },
-  { type: "social-follow", label: "Takip (toggle companion)", fields: ["player", "distance"], category: "Hareket" },
-  { type: "unfollow", label: "Takibi bırak", fields: ["player"], category: "Hareket" },
+  { type: "goto", label: "Go (player/waypoint/xyz)", fields: ["player", "waypoint", "x", "y", "z"], category: "Movement" },
+  { type: "follow", label: "Follow", fields: ["player", "distance"], category: "Movement" },
+  { type: "social-follow", label: "Follow (toggle companion)", fields: ["player", "distance"], category: "Movement" },
+  { type: "unfollow", label: "Stop following", fields: ["player"], category: "Movement" },
   {
     type: "cancel_work",
-    label: "Herhangi bir işi iptal et (görev+yürüme)",
+    label: "Cancel any work (task+walk)",
     fields: [],
-    category: "Hareket"
+    category: "Movement"
   },
-  { type: "leave_task", label: "Sadece aktif görevi bırak", fields: [], category: "Hareket" },
-  { type: "stop_tasks", label: "Görev kuyruğunu temizle", fields: [], category: "Hareket" },
-  { type: "stop", label: "Hareket/pathfinder durdur", fields: [], category: "Hareket" },
+  { type: "leave_task", label: "Cancel current task only", fields: [], category: "Movement" },
+  { type: "stop_tasks", label: "Clear task queue", fields: [], category: "Movement" },
+  { type: "stop", label: "Stop movement/pathfinder", fields: [], category: "Movement" },
   {
     type: "abort_all",
-    label: "Her şeyi bırak (görev+takip+path)",
+    label: "Abort all (task+follow+path)",
     fields: [],
-    category: "Hareket"
+    category: "Movement"
   },
-  { type: "reset-work", label: "Tüm işleri sıfırla (soft-reset)", fields: [], category: "Hareket" },
-  { type: "wait", label: "Bekle (sn)", fields: ["seconds"], category: "Hareket" },
-  { type: "attack", label: "Saldır", fields: ["player"], category: "Dövüş" },
-  { type: "social-attack", label: "Saldır (toggle)", fields: ["player"], category: "Dövüş" },
-  { type: "clear-mobs", label: "Mob temizle", fields: ["radius"], category: "Dövüş" },
-  { type: "flee", label: "Kaç", fields: [], category: "Dövüş" },
-  { type: "protect", label: "Koru (eşlik)", fields: ["player"], category: "Dövüş" },
-  { type: "defend_self", label: "Öz savunma modu", fields: ["mode"], category: "Dövüş" },
-  { type: "set_defend", label: "Savunma ayarla", fields: ["mode"], category: "Dövüş" },
-  { type: "equip_best", label: "En iyi silahı kuşan", fields: [], category: "Dövüş" },
-  { type: "loot_death", label: "Ölüm loot noktasına git", fields: [], category: "Dövüş" },
-  { type: "eat", label: "Ye", fields: [], category: "Yaşam" },
-  { type: "hunt", label: "Avlan", fields: ["radius"], category: "Yaşam" },
-  { type: "cook", label: "Pişir", fields: [], category: "Yaşam" },
-  { type: "acquire_food", label: "Yemek edin", fields: [], category: "Yaşam" },
+  { type: "reset-work", label: "Reset all work (soft-reset)", fields: [], category: "Movement" },
+  { type: "wait", label: "Wait (sec)", fields: ["seconds"], category: "Movement" },
+  { type: "attack", label: "Attack", fields: ["player"], category: "Combat" },
+  { type: "social-attack", label: "Attack (toggle)", fields: ["player"], category: "Combat" },
+  { type: "clear-mobs", label: "Clear mobs", fields: ["radius"], category: "Combat" },
+  { type: "flee", label: "Flee", fields: [], category: "Combat" },
+  { type: "protect", label: "Protect (escort)", fields: ["player"], category: "Combat" },
+  { type: "defend_self", label: "Self-defense mode", fields: ["mode"], category: "Combat" },
+  { type: "set_defend", label: "Set defense", fields: ["mode"], category: "Combat" },
+  { type: "equip_best", label: "Equip best weapon", fields: [], category: "Combat" },
+  { type: "loot_death", label: "Go to death loot", fields: [], category: "Combat" },
+  { type: "eat", label: "Eat", fields: [], category: "Survival" },
+  { type: "hunt", label: "Hunt", fields: ["radius"], category: "Survival" },
+  { type: "cook", label: "Cook", fields: [], category: "Survival" },
+  { type: "acquire_food", label: "Acquire food", fields: [], category: "Survival" },
   {
     type: "collect",
-    label: "Eşya/blok topla (dünya)",
-    fields: ["item", "block", "count"],
-    category: "İş"
+    label: "Smart gather (auto strategy)",
+    fields: ["item", "block", "count", "countMode"],
+    category: "Work"
   },
   {
     type: "collect_item",
-    label: "Belirli eşyayı topla",
-    fields: ["item", "count"],
-    category: "İş"
+    label: "Smart collect item",
+    fields: ["item", "count", "countMode"],
+    category: "Work"
   },
-  { type: "mine", label: "Maden topla", fields: ["ore", "count", "mode"], category: "İş" },
-  { type: "craft", label: "Üret", fields: ["item", "count"], category: "İş" },
-  { type: "collect_drops", label: "Yerdeki eşya", fields: ["filter", "radius"], category: "İş" },
-  { type: "deposit", label: "Depoya bırak", fields: ["filter"], category: "İş" },
-  { type: "withdraw", label: "Depodan al", fields: ["item", "count"], category: "İş" }
+  { type: "mine", label: "Mine ore (underground strategy)", fields: ["ore", "count", "mode", "countMode"], category: "Work" },
+  { type: "craft", label: "Craft", fields: ["item", "count"], category: "Work" },
+  { type: "collect_drops", label: "Pick up ground items", fields: ["filter", "radius"], category: "Work" },
+  {
+    type: "drop_items",
+    label: "Drop specific items",
+    fields: ["item", "count", "dropMode", "match", "respectKeepItems", "failIfMissing", "requireCount"],
+    hint: "count: drop N · all: drop all matches · keep: keep N, drop excess",
+    category: "Work"
+  },
+  { type: "deposit", label: "Deposit to chest", fields: ["filter"], category: "Work" },
+  { type: "withdraw", label: "Withdraw from chest", fields: ["item", "count"], category: "Work" }
 ];
 
 /** Aksiyon metinlerinde {var} — tetikleyiciye göre hangi veriler gelir */
@@ -1991,118 +2025,118 @@ export type ContextVarDoc = { name: string; desc: string };
 
 export const CONTEXT_VARS_COMMON: ContextVarDoc[] = [
   // canlı bot durumu — her tetikleyicide
-  { name: "task", desc: "Aktif görev tipi veya none" },
-  { name: "taskType", desc: "task ile aynı" },
-  { name: "label", desc: "Aktif görev etiketi veya —" },
-  { name: "taskLabel", desc: "label ile aynı" },
+  { name: "task", desc: "Active task type or none" },
+  { name: "taskType", desc: "same as task" },
+  { name: "label", desc: "Active task label or —" },
+  { name: "taskLabel", desc: "same as label" },
   { name: "taskState", desc: "running | idle | none…" },
-  { name: "hasTask", desc: "1 = görev var, 0 = yok" },
-  { name: "busy", desc: "1 = meşgul" },
-  { name: "idle", desc: "1 = boşta" },
-  { name: "queueLength", desc: "Kuyruktaki görev sayısı" },
-  { name: "queueTypes", desc: "Kuyruk tipleri (virgüllü)" },
-  { name: "bot", desc: "Bot kullanıcı adı" },
+  { name: "hasTask", desc: "1 = has task, 0 = none" },
+  { name: "busy", desc: "1 = busy" },
+  { name: "idle", desc: "1 = idle" },
+  { name: "queueLength", desc: "Queued task count" },
+  { name: "queueTypes", desc: "Queue types (comma-separated)" },
+  { name: "bot", desc: "Bot username" },
   { name: "status", desc: "online | stopped | …" },
   { name: "health", desc: "Can" },
-  { name: "food", desc: "Açlık" },
-  { name: "dimension", desc: "Boyut" },
+  { name: "food", desc: "Hunger" },
+  { name: "dimension", desc: "Dimension" },
   { name: "position", desc: "x,y,z" },
   { name: "combatMode", desc: "idle | attacking | following…" },
-  { name: "mode", desc: "combatMode ile aynı" },
-  { name: "activeTarget", desc: "Dövüş hedefi" },
-  { name: "followPlayer", desc: "Takip edilen oyuncu" },
-  { name: "followDistance", desc: "Takip mesafesi" },
-  { name: "following", desc: "1 = takip açık" },
-  { name: "protectPlayers", desc: "Korunanlar" },
+  { name: "mode", desc: "same as combatMode" },
+  { name: "activeTarget", desc: "Combat target" },
+  { name: "followPlayer", desc: "Followed player" },
+  { name: "followDistance", desc: "Follow distance" },
+  { name: "following", desc: "1 = following" },
+  { name: "protectPlayers", desc: "Protected players" },
   { name: "branch", desc: "then | else" },
-  { name: "error", desc: "ON ERROR: hata mesajı" },
-  { name: "failedAction", desc: "ON ERROR: hata veren aksiyon tipi" },
-  { name: "runId", desc: "Gelişmiş akış çalışma kimliği" },
+  { name: "error", desc: "ON ERROR: error message" },
+  { name: "failedAction", desc: "ON ERROR: failed action type" },
+  { name: "runId", desc: "Advanced flow run id" },
   { name: "last.status", desc: "Son aksiyon: completed | queued | done | failed | cancelled | timeout" },
-  { name: "last.taskId", desc: "Son aksiyonun oluşturduğu görev kimliği" },
-  { name: "last.taskType", desc: "Son aksiyonun görev tipi" },
-  { name: "last.label", desc: "Son aksiyonun görev etiketi" },
-  { name: "last.error", desc: "Son aksiyon hata mesajı" },
-  { name: "loopIndex", desc: "Döngü indeksi (0 tabanlı)" },
-  { name: "loopNumber", desc: "Döngü sırası (1 tabanlı)" },
-  { name: "attempt", desc: "Aksiyon deneme numarası" }
+  { name: "last.taskId", desc: "Task id created by last action" },
+  { name: "last.taskType", desc: "Last action task type" },
+  { name: "last.label", desc: "Last action task label" },
+  { name: "last.error", desc: "Last action error message" },
+  { name: "loopIndex", desc: "Loop index (zero-based)" },
+  { name: "loopNumber", desc: "Loop number (one-based)" },
+  { name: "attempt", desc: "Action attempt number" }
 ];
 
 export const CONTEXT_VARS_BY_TRIGGER: Record<string, ContextVarDoc[]> = {
   chat: [
-    { name: "player", desc: "Mesajı yazan oyuncu" },
-    { name: "text", desc: "Ham sohbet metni" },
-    { name: "command", desc: "Komut adı (match=command, örn. gel)" },
-    { name: "arg", desc: "Komuttan sonraki tüm argümanlar (boşluklu)" },
-    { name: "args", desc: "arg ile aynı" },
-    { name: "arg0", desc: "1. argüman — /topla cobble 32 → cobble" },
-    { name: "arg1", desc: "2. argüman — /topla cobble 32 → 32" },
-    { name: "arg2", desc: "3. argüman" }
+    { name: "player", desc: "Chat author player" },
+    { name: "text", desc: "Raw chat text" },
+    { name: "command", desc: "Command name (match=command, e.g. come)" },
+    { name: "arg", desc: "All args after command (space-separated)" },
+    { name: "args", desc: "same as arg" },
+    { name: "arg0", desc: "1st argument — /topla cobble 32 → cobble" },
+    { name: "arg1", desc: "2nd argument — /topla cobble 32 → 32" },
+    { name: "arg2", desc: "3rd argument" }
   ],
   attacked: [
-    { name: "attacker", desc: "Saldıran mob/oyuncu etiketi" },
-    { name: "player", desc: "attacker ile aynı (uyumluluk)" }
+    { name: "attacker", desc: "Attacker mob/player label" },
+    { name: "player", desc: "same as attacker (compat)" }
   ],
   player_nearby: [
-    { name: "player", desc: "Yaklaşan oyuncu" },
-    { name: "distance", desc: "Mesafe (blok, tam sayı)" }
+    { name: "player", desc: "Approaching player" },
+    { name: "distance", desc: "Distance (blocks, integer)" }
   ],
   player_far: [
-    { name: "player", desc: "Uzak oyuncu / takip hedefi" },
-    { name: "distance", desc: "Mesafe veya ∞ (görünmüyor)" },
-    { name: "radius", desc: "Kural eşiği" },
-    { name: "followDistance", desc: "Companion takip mesafesi" }
+    { name: "player", desc: "Far player / follow target" },
+    { name: "distance", desc: "Distance or ∞ (not visible)" },
+    { name: "radius", desc: "Rule threshold" },
+    { name: "followDistance", desc: "Companion follow distance" }
   ],
   follow_out_of_range: [
-    { name: "player", desc: "Takip edilen oyuncu" },
+    { name: "player", desc: "Followed player" },
     { name: "distance", desc: "Mesafe veya ∞" },
-    { name: "radius", desc: "Uzak eşiği" },
-    { name: "followDistance", desc: "Ayarlanan takip mesafesi" }
+    { name: "radius", desc: "Distance threshold" },
+    { name: "followDistance", desc: "Configured follow distance" }
   ],
-  player_joined: [{ name: "player", desc: "Giren oyuncu" }],
-  player_left: [{ name: "player", desc: "Çıkan oyuncu" }],
+  player_joined: [{ name: "player", desc: "Joining player" }],
+  player_left: [{ name: "player", desc: "Leaving player" }],
   health_below: [
-    { name: "health", desc: "Anlık can" },
-    { name: "food", desc: "Anlık açlık" }
+    { name: "health", desc: "Current health" },
+    { name: "food", desc: "Current hunger" }
   ],
   food_below: [
-    { name: "health", desc: "Anlık can" },
-    { name: "food", desc: "Anlık açlık" }
+    { name: "health", desc: "Current health" },
+    { name: "food", desc: "Current hunger" }
   ],
   item_count: [
-    { name: "item", desc: "İzlenen eşya adı" },
-    { name: "count", desc: "Envanterdeki adet" }
+    { name: "item", desc: "Watched item name" },
+    { name: "count", desc: "Inventory has insufficientki adet" }
   ],
   item_gained: [
-    { name: "item", desc: "Artan eşya" },
-    { name: "gained", desc: "item ile aynı" },
-    { name: "count", desc: "Yeni toplam adet" },
-    { name: "delta", desc: "Ne kadar arttı (+N)" }
+    { name: "item", desc: "Gained item" },
+    { name: "gained", desc: "same as item" },
+    { name: "count", desc: "New total count" },
+    { name: "delta", desc: "How much increased (+N)" }
   ],
   task_done: [
-    { name: "task", desc: "Görev tipi (taskType ile aynı)" },
-    { name: "taskType", desc: "Görev tipi: collect-wood, mine, craft…" },
-    { name: "label", desc: "Görev etiketi (UI label)" },
-    { name: "taskLabel", desc: "label ile aynı" },
+    { name: "task", desc: "Task type (same as taskType)" },
+    { name: "taskType", desc: "Task type: collect-wood, mine, craft…" },
+    { name: "label", desc: "Task label (UI label)" },
+    { name: "taskLabel", desc: "same as label" },
     { name: "status", desc: "done" },
-    { name: "taskId", desc: "Tamamlanan görevin kimliği" },
-    { name: "taskStatus", desc: "Görev durumu" },
-    { name: "taskProgressDone", desc: "Son ilerleme değeri" },
-    { name: "taskProgressTotal", desc: "Toplam ilerleme değeri" },
-    { name: "taskProgressLabel", desc: "İlerleme etiketi" }
+    { name: "taskId", desc: "Completed task id" },
+    { name: "taskStatus", desc: "Task status" },
+    { name: "taskProgressDone", desc: "Last progress value" },
+    { name: "taskProgressTotal", desc: "Total progress value" },
+    { name: "taskProgressLabel", desc: "Progress label" }
   ],
   task_failed: [
-    { name: "task", desc: "Görev tipi" },
-    { name: "taskType", desc: "Görev tipi" },
-    { name: "label", desc: "Görev etiketi" },
-    { name: "taskLabel", desc: "label ile aynı" },
+    { name: "task", desc: "Task type" },
+    { name: "taskType", desc: "Task type" },
+    { name: "label", desc: "Task label" },
+    { name: "taskLabel", desc: "same as label" },
     { name: "status", desc: "failed" },
-    { name: "taskId", desc: "Başarısız görevin kimliği" },
-    { name: "taskStatus", desc: "Görev durumu" },
-    { name: "taskError", desc: "Görev hata mesajı" },
-    { name: "taskProgressDone", desc: "Son ilerleme değeri" },
-    { name: "taskProgressTotal", desc: "Toplam ilerleme değeri" },
-    { name: "taskProgressLabel", desc: "İlerleme etiketi" }
+    { name: "taskId", desc: "Failed task id" },
+    { name: "taskStatus", desc: "Task status" },
+    { name: "taskError", desc: "Task error message" },
+    { name: "taskProgressDone", desc: "Last progress value" },
+    { name: "taskProgressTotal", desc: "Total progress value" },
+    { name: "taskProgressLabel", desc: "Progress label" }
   ],
   inventory_full: [],
   interval: [],

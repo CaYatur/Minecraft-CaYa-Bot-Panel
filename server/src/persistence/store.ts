@@ -15,7 +15,7 @@ export function loadJson<T>(fileName: string, fallback: T): T {
     const raw = fs.readFileSync(file, "utf8");
     return JSON.parse(raw) as T;
   } catch (err) {
-    log.error(`${fileName} okunamadı, varsayılan kullanılıyor`, String(err));
+    log.error(`Could not read ${fileName}, using default`, String(err));
     return fallback;
   }
 }
@@ -31,7 +31,7 @@ export function saveJson(fileName: string, data: unknown): Promise<void> {
       await fs.promises.rename(tmp, file);
     })
     .catch((err) => {
-      log.error(`${fileName} yazılamadı`, String(err));
+      log.error(`Could not write ${fileName}`, String(err));
     });
   writeChains.set(fileName, next);
   return next;

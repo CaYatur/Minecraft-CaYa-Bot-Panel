@@ -11,7 +11,7 @@ import { WaterGuardService, type WaterGuardState } from "./waterGuard";
 
 /**
  * Survival brain (Faz 7): auto-eat, hunt nearby animals, simple furnace cook.
- * FallGuard: düşüş MLG · WaterGuard: boğulmama · HazardGuard: ateş/lav · BucketScoop: boş kova doldur.
+ * FallGuard: düşüş MLG · WaterGuard: boğulmama · HazardGuard: fire/lava · BucketScoop: boş kova doldur.
  */
 export class SurvivalService {
   private bot: Bot | null = null;
@@ -88,7 +88,7 @@ export class SurvivalService {
 
     // tok — yeme dene (spam "Food is full" engeli)
     if (food >= 20) return false;
-    // dövüşte: sadece can kritikse ye (silahı kaptırmasın)
+    // combatte: sadece can kritikse ye (silahı kaptırmasın)
     if (combatBusy && health > 8) return false;
     if (food > threshold && !(combatBusy && health <= 8)) return false;
     if (Date.now() - this.lastEatAt < 2500) return false;
@@ -133,9 +133,9 @@ export class SurvivalService {
       this.lastEatAt = Date.now();
       // tok spam'i log boğmasın
       if (/food is full|not hungry|cannot eat/i.test(msg)) {
-        this.log().debug("Yeme atlandı", msg);
+        this.log().debug("Eating skipped", msg);
       } else {
-        this.log().warn("Yeme başarısız", msg);
+        this.log().warn("Yeme failed", msg);
       }
       return false;
     } finally {
@@ -145,12 +145,12 @@ export class SurvivalService {
 
   enqueueEatNow() {
     return this.instance.tasks.enqueue(
-      { type: "eat", label: "şimdi ye", priority: PRIORITY.SURVIVAL, params: {}, requeueOnPreempt: false },
+      { type: "eat", label: "eat now", priority: PRIORITY.SURVIVAL, params: {}, requeueOnPreempt: false },
       () => async (token, report) => {
         report({ done: 0, total: 1, label: "yeniyor…" });
         const ok = await this.eatBest();
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
-        if (!ok) throw new Error("Yenilecek uygun yiyecek yok (blacklist/yasak/boş)");
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+        if (!ok) throw new Error("No suitable food (blacklist/banned/empty)");
         report({ done: 1, total: 1, label: "yendi" });
       }
     );
@@ -166,7 +166,7 @@ export class SurvivalService {
 
   enqueueCook() {
     return this.instance.tasks.enqueue(
-      { type: "cook", label: "çiğ eti pişir", priority: PRIORITY.AUTO, params: {}, requeueOnPreempt: true },
+      { type: "cook", label: "cook raw meat", priority: PRIORITY.AUTO, params: {}, requeueOnPreempt: true },
       () => (token, report) => this.runCook(token, report)
     );
   }
@@ -177,12 +177,12 @@ export class SurvivalService {
       () => async (token, report) => {
         report({ done: 0, total: 3, label: "avlan…" });
         await this.runHunt(40, token, report);
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
-        report({ done: 1, total: 3, label: "pişir…" });
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+        report({ done: 1, total: 3, label: "cooking…" });
         try {
           await this.runCook(token, report);
         } catch {
-          this.log().info("Pişirme atlandı veya fırın yok — çiğ etle idare");
+          this.log().info("Cooking skipped or no furnace — mmainging with raw meat");
         }
         report({ done: 2, total: 3, label: "ye…" });
         await this.eatBest();
@@ -200,8 +200,8 @@ export class SurvivalService {
     while (!token.cancelled && Date.now() - started < 5 * 60_000 && kills < 3) {
       const animal = this.nearestAnimal(radius);
       if (!animal) {
-        report({ done: kills, total: 3, label: "yakında hayvan yok" });
-        if (kills === 0) throw new Error("Yakında avlanacak hayvan bulunamadı");
+        report({ done: kills, total: 3, label: "no animals nearby" });
+        if (kills === 0) throw new Error("No hunt animals nearby");
         break;
       }
       const name = String(animal.name ?? "animal").replace(/^minecraft:/, "");
@@ -228,22 +228,22 @@ export class SurvivalService {
       if (res.ok && (!animal.isValid || (animal.health !== undefined && animal.health <= 0))) {
         kills++;
         await sleep(800); // loot drop
-      } else if (!res.ok && res.reason === "cancelled") throw new Error(token.reason ?? "iptal");
+      } else if (!res.ok && res.reason === "cancelled") throw new Error(token.reason ?? "cancelled");
       await sleep(100);
     }
 
     // pickup nearby drops briefly by standing
     await sleep(1500);
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     this.log().success(`Av bitti (${kills} hayvan)`);
   }
 
   async runCook(token: TaskToken, report: ProgressFn) {
     const bot = this.requireBot();
     const raw = bot.inventory.items().find((i) => isRawMeat(i.name) && RAW_TO_COOKED[i.name]);
-    if (!raw) throw new Error("Pişirilecek çiğ et yok");
+    if (!raw) throw new Error("No raw meat to cook");
 
-    report({ done: 0, total: 1, label: "fırın aranıyor" });
+    report({ done: 0, total: 1, label: "looking for furnace" });
     const furnace = bot.findBlock({
       matching: (b) => ["furnace", "smoker", "blast_furnace"].includes(b.name),
       maxDistance: 32
@@ -266,10 +266,10 @@ export class SurvivalService {
             }
           }
         } catch (e) {
-          throw new Error(`Fırın yok ve yerleştirilemedi: ${e instanceof Error ? e.message : e}`);
+          throw new Error(`No furnace and could not place one: ${e instanceof Error ? e.message : e}`);
         }
       } else {
-        throw new Error("Yakında fırın yok ve cobblestone yetersiz");
+        throw new Error("No furnace nearby and not enough cobblestone");
       }
     }
 
@@ -277,12 +277,12 @@ export class SurvivalService {
       matching: (b) => ["furnace", "smoker", "blast_furnace"].includes(b.name),
       maxDistance: 32
     });
-    if (!furn) throw new Error("Fırın bulunamadı");
+    if (!furn) throw new Error("Furnace not found");
 
     await runGoto(this.instance, furn.position.x, furn.position.y, furn.position.z, 2, token, report);
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
-    report({ done: 0, total: 1, label: "pişiriliyor" });
+    report({ done: 0, total: 1, label: "smelting" });
     try {
       const win = await bot.openFurnace(furn);
       const fuel =
@@ -304,9 +304,9 @@ export class SurvivalService {
       }
       win.close();
     } catch (e) {
-      throw new Error(`Fırın kullanımı başarısız: ${e instanceof Error ? e.message : e}`);
+      throw new Error(`Furnace use failed: ${e instanceof Error ? e.message : e}`);
     }
-    this.log().success("Pişirme denemesi tamam");
+    this.log().success("Cook attempt done");
   }
 
   private async craftSimple(bot: Bot, name: string, count: number) {
@@ -336,7 +336,7 @@ export class SurvivalService {
 
   private requireBot(): Bot {
     const bot = this.bot ?? this.instance.bot;
-    if (!bot || this.instance.status !== "online") throw new Error("Bot çevrimdışı");
+    if (!bot || this.instance.status !== "online") throw new Error("Bot offline");
     this.bot = bot;
     return bot;
   }
@@ -350,7 +350,7 @@ export class SurvivalService {
     if (hasFood) return;
     const cur = this.instance.tasks.currentSummary;
     if (cur && (cur.type === "acquire-food" || cur.type === "hunt" || cur.type === "cook")) return;
-    this.log().info("Yiyecek yok ve açlık düşük — yemek-edin görevi kuyruğa");
+    this.log().info("No food and low hunger — acquire-food task queued");
     try {
       this.enqueueAcquireFood();
     } catch {

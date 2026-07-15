@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { EV } from "../lib/events";
 import { socket } from "../lib/socket";
@@ -56,6 +57,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
+  const { t } = useI18n();
   const [radius, setRadius] = useState("32");
   const [fgLive, setFgLive] = useState<FallGuardLive | null>(null);
 
@@ -83,7 +85,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
     try {
       await api.patch(`/api/bots/${botId}`, { survival });
       await refresh();
-      toast("success", "Hayatta kalma ayarı kaydedildi");
+      toast("success", t("survival.settingsSaved"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -92,7 +94,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
     try {
       await api.patch(`/api/bots/${botId}`, { movement });
       await refresh();
-      toast("success", "Hareket / parkur ayarı kaydedildi");
+      toast("success", t("survival.movementSettingsSaved"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -125,34 +127,34 @@ export function SurvivalPanel({ botId }: { botId: string }) {
     <div className="flex h-full flex-col gap-4 overflow-y-auto">
       {!online && (
         <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-          Bot çevrimdışı — ayarlar kaydedilir; yeme/av/pişirme bot online iken çalışır.
+          {t("survival.offlineHint")}
         </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Beslenme</div>
+          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("survival.nutritionTitle")}</div>
           <div className="mono mb-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-400">
             <span>
-              Açlık <b className="text-zinc-200">{bot.runtime.food}</b>/20
+              {t("survival.hunger")} <b className="text-zinc-200">{bot.runtime.food}</b>/20
             </span>
             <span className="text-zinc-600">·</span>
             <span>
-              Doyma <b className="text-zinc-200">{bot.runtime.foodSaturation.toFixed(1)}</b>
+              {t("survival.saturation")} <b className="text-zinc-200">{bot.runtime.foodSaturation.toFixed(1)}</b>
             </span>
             <span className="text-zinc-600">·</span>
             <span>
-              Can <b className="text-zinc-200">{bot.runtime.health}</b>
+              {t("survival.health")} <b className="text-zinc-200">{bot.runtime.health}</b>
             </span>
           </div>
 
           <label className="mb-3 flex items-center gap-2 text-sm text-zinc-300">
             <input type="checkbox" checked={s.autoEat} onChange={(e) => void patch({ autoEat: e.target.checked })} />
-            Otomatik ye
+            {t("survival.autoEatLabel")}
           </label>
 
           <label className="mb-3 flex flex-col gap-1 text-xs text-zinc-400">
-            Ye eşiği (açlık)
+            {t("survival.eatThreshold")}
             <input
               type="number"
               min={1}
@@ -166,49 +168,49 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           <div className="flex flex-wrap gap-2">
             <button
               disabled={!online}
-              onClick={() => act({ type: "eat" }, "Yeme kuyruğa")}
+              onClick={() => act({ type: "eat" }, t("survival.eatQueuedToast"))}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-amber-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Şimdi Ye
+              {t("survival.eatNowButton")}
             </button>
             <button
               disabled={!online}
-              onClick={() => act({ type: "hunt", radius: Number(radius) || 32 }, "Av başlatıldı")}
+              onClick={() => act({ type: "hunt", radius: Number(radius) || 32 }, t("survival.huntStartedToast"))}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Avlan
+              {t("survival.huntButton")}
             </button>
             <button
               disabled={!online}
-              onClick={() => act({ type: "cook" }, "Pişirme kuyruğa")}
+              onClick={() => act({ type: "cook" }, t("survival.cookQueuedToast"))}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Pişir
+              {t("survival.cookButton")}
             </button>
             <button
               disabled={!online}
-              onClick={() => act({ type: "acquire-food" }, "Yemek edin akışı")}
+              onClick={() => act({ type: "acquire-food" }, t("survival.acquireFoodToast"))}
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
             >
-              Yemek Edin
+              {t("survival.acquireFoodButton")}
             </button>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-[10px] text-zinc-500">Av yarıçapı</span>
+            <span className="text-[10px] text-zinc-500">{t("survival.huntRadius")}</span>
             <input
               value={radius}
               onChange={(e) => setRadius(e.target.value)}
               className="mono w-16 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
             />
           </div>
-          <p className="mono mt-2 text-[10px] text-zinc-600">komut: ye · av [yarıçap] · …</p>
+          <p className="mono mt-2 text-[10px] text-zinc-600">{t("survival.commandHint")}</p>
         </div>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Eldeki yiyecekler</div>
+          <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("survival.foodOnHandTitle")}</div>
           <div className="flex flex-wrap gap-1">
-            {foods.length === 0 && <span className="text-xs text-zinc-600 italic">yiyecek yok / envanter bilinmiyor</span>}
+            {foods.length === 0 && <span className="text-xs text-zinc-600 italic">{t("survival.noFoodOrUnknown")}</span>}
             {foods.map(
               (f) =>
                 f && (
@@ -218,32 +220,30 @@ export function SurvivalPanel({ botId }: { botId: string }) {
                 )
             )}
           </div>
-          <div className="mt-3 mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Blacklist (otomatik yenmez)</div>
+          <div className="mt-3 mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("survival.blacklistTitle")}</div>
           <div className="flex flex-wrap gap-1">
-            {(s.foodBlacklist ?? []).length === 0 && <span className="text-xs text-zinc-600 italic">yok</span>}
+            {(s.foodBlacklist ?? []).length === 0 && <span className="text-xs text-zinc-600 italic">{t("survival.noneLabel")}</span>}
             {(s.foodBlacklist ?? []).map((n) => (
               <span key={n} className="mono rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
                 {n}
               </span>
             ))}
           </div>
-          <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-            Dövüşte yalnızca can kritikse yer. Av RealismLayer ile (Faz 6). Sistem mesajları sohbete yazılmaz (İ1).
-          </p>
+          <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">{t("survival.foodHint")}</p>
         </div>
       </div>
 
       {/* Düşüş kurtarma / MLG */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Düşüş kurtarma (MLG)</span>
+          <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("survival.fallGuardTitle")}</span>
           {fgLive?.falling && (
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                 fgLive.lethal ? "bg-red-950/70 text-red-300" : "bg-amber-950/60 text-amber-300"
               }`}
             >
-              {fgLive.lethal ? "ÖLÜMCÜL DÜŞÜŞ" : "düşüyor"} · ≈{fgLive.predictedDamage} HP · {fgLive.remainingBlocks}m
+              {fgLive.lethal ? t("survival.lethalFall") : t("survival.falling")} · ≈{fgLive.predictedDamage} HP · {fgLive.remainingBlocks}m
             </span>
           )}
           {fgLive?.active && (
@@ -259,12 +259,12 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={fg.enabled}
             onChange={(e) => void patch({ fallGuard: { ...fg, enabled: e.target.checked } })}
           />
-          Otomatik düşüş kurtarma
+          {t("survival.autoFallGuardLabel")}
         </label>
 
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
           <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
-            Min. hasar (HP)
+            {t("survival.minDamageHp")}
             <input
               type="number"
               min={1}
@@ -277,7 +277,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             />
           </label>
           <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
-            Ölümcül marj (can)
+            {t("survival.lethalMargin")}
             <input
               type="number"
               min={0}
@@ -292,7 +292,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             />
           </label>
           <label className="flex flex-col gap-1 text-[10px] text-zinc-500">
-            MLG mesafe (blok)
+            {t("survival.mlgDistance")}
             <input
               type="number"
               min={1}
@@ -315,12 +315,12 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={fg.onlyWhenDangerous}
             onChange={(e) => void patch({ fallGuard: { ...fg, onlyWhenDangerous: e.target.checked } })}
           />
-          Sadece tehlikeli/ölümcül düşüşte müdahale et
+          {t("survival.onlyDangerousLabel")}
         </label>
 
         <div className="mb-3 rounded-lg border border-emerald-900/30 bg-emerald-950/10 px-2 py-2">
           <div className="mb-1.5 text-[10px] font-semibold tracking-wide text-emerald-400/90 uppercase">
-            MLG malzeme geri al
+            {t("survival.mlgReclaimTitle")}
           </div>
           <label className="mb-1.5 flex items-center gap-2 text-xs text-zinc-300">
             <input
@@ -328,7 +328,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               checked={fg.autoReclaim !== false}
               onChange={(e) => void patch({ fallGuard: { ...fg, autoReclaim: e.target.checked } })}
             />
-            Otomatik geri al (iniş sonrası)
+            {t("survival.autoReclaimLabel")}
           </label>
           <div className="flex flex-wrap gap-3 text-xs text-zinc-400">
             <label className="flex items-center gap-1.5">
@@ -338,7 +338,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
                 disabled={fg.autoReclaim === false}
                 onChange={(e) => void patch({ fallGuard: { ...fg, reclaimWater: e.target.checked } })}
               />
-              Su / powder snow <span className="text-emerald-500/80">(öncelikli)</span>
+              {t("survival.waterPowderSnow")} <span className="text-emerald-500/80">{t("survival.priorityLabel")}</span>
             </label>
             <label className="flex items-center gap-1.5">
               <input
@@ -347,7 +347,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
                 disabled={fg.autoReclaim === false}
                 onChange={(e) => void patch({ fallGuard: { ...fg, reclaimBoat: e.target.checked } })}
               />
-              Tekne
+              {t("survival.boatLabel")}
             </label>
             <label className="flex items-center gap-1.5">
               <input
@@ -356,50 +356,46 @@ export function SurvivalPanel({ botId }: { botId: string }) {
                 disabled={fg.autoReclaim === false}
                 onChange={(e) => void patch({ fallGuard: { ...fg, reclaimBlocks: e.target.checked } })}
               />
-              Blok yastık
+              {t("survival.blockCushionLabel")}
             </label>
           </div>
-          <p className="mt-1.5 text-[10px] text-zinc-600">
-            Zor durumda (yanma, kaçış, çok yakın düşman) gecikir; su neredeyse her zaman alınır. Güvenli olunca tekrar
-            dener.
-          </p>
+          <p className="mt-1.5 text-[10px] text-zinc-600">{t("survival.reclaimHint")}</p>
         </div>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2 py-2 text-[11px] leading-relaxed text-zinc-500">
-          <p className="mb-1 text-zinc-400">Envanterde varsa sırayla değerlendirilir:</p>
+          <p className="mb-1 text-zinc-400">{t("survival.materialOrderHint")}</p>
           <ul className="list-inside list-disc space-y-0.5">
             <li>
-              <b className="text-zinc-300">Su kovası</b> — klasik MLG; iniş sonrası boş kova ile kaynak geri alınır
+              <b className="text-zinc-300">{t("survival.waterBucketItem")}</b> — {t("survival.waterBucketDesc")}
             </li>
             <li>
-              <b className="text-zinc-300">Tekne</b> — MLG + mümkünse tekneyi kırıp topla
+              <b className="text-zinc-300">{t("survival.boatItem")}</b> — {t("survival.boatDesc")}
             </li>
             <li>
-              <b className="text-zinc-300">Saman / slime / cobweb…</b> — yumuşak iniş; güvenliyse kır-al
+              <b className="text-zinc-300">{t("survival.hayItem")}</b> — {t("survival.hayDesc")}
             </li>
           </ul>
-          <p className="mt-2">
-            Feather Falling hesaplanır. Pathfinder düşüşte kesilir. Malzeme yoksa log uyarısı (İ1, sohbet yok).
-          </p>
+          <p className="mt-2">{t("survival.featherFallingNote")}</p>
           {fgLive?.inventoryOptions?.length ? (
-            <p className="mono mt-2 text-emerald-500/80">Hazır: {fgLive.inventoryOptions.join(", ")}</p>
+            <p className="mono mt-2 text-emerald-500/80">{t("survival.readyMaterials", { list: fgLive.inventoryOptions.join(", ") })}</p>
           ) : online ? (
-            <p className="mt-2 text-zinc-600 italic">Şu an envanterde kurtarma malzemesi görünmüyor.</p>
+            <p className="mt-2 text-zinc-600 italic">{t("survival.noRecoveryMaterial")}</p>
           ) : null}
-          {fgLive?.lastAction ? <p className="mono mt-1 text-zinc-600">son: {fgLive.lastAction}</p> : null}
+          {fgLive?.lastAction ? <p className="mono mt-1 text-zinc-600">{t("survival.lastAction", { action: fgLive.lastAction })}</p> : null}
         </div>
       </div>
 
-      {/* Su / boğulma koruması */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Su koruması</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          {t("survival.waterGuardTitle")}
+        </div>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
             type="checkbox"
             checked={wg.enabled}
             onChange={(e) => void patch({ waterGuard: { ...wg, enabled: e.target.checked } })}
           />
-          Suda boğulmama + karaya çık (spawn dahil otomatik)
+          {t("survival.drownProtection")}
         </label>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -407,10 +403,10 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={wg.seekLand}
             onChange={(e) => void patch({ waterGuard: { ...wg, seekLand: e.target.checked } })}
           />
-          Yakındaki karaya yüz / yürü
+          {t("survival.seekNearbyLand")}
         </label>
-        <label className="mb-2 flex flex-col gap-1 text-[10px] text-zinc-500 max-w-xs">
-          Oksijen eşiği (0–20) — altında acil yüzeye
+        <label className="mb-2 flex max-w-xs flex-col gap-1 text-[10px] text-zinc-500">
+          {t("survival.oxygenThreshold")}
           <input
             type="number"
             min={1}
@@ -424,22 +420,20 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             className="mono w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
           />
         </label>
-        <p className="text-[11px] leading-relaxed text-zinc-500">
-          Kafa suda iken yukarı yüzer (space/jump). Yüzeyde nefes alır, boğulmaz. Derin suda veya düşük
-          oksijende yakındaki karaya pathfinder ile çıkar. Okyanus spawn’da otomatik devreye girer.
-        </p>
+        <p className="text-[11px] leading-relaxed text-zinc-500">{t("survival.waterGuardHint")}</p>
       </div>
 
-      {/* Ateş / lav */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Ateş / lav koruması</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          {t("survival.fireGuardTitle")}
+        </div>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
             type="checkbox"
             checked={hg.enabled}
             onChange={(e) => void patch({ hazardGuard: { ...hg, enabled: e.target.checked } })}
           />
-          Otomatik ateş/lav kaçışı
+          {t("survival.autoFireEscape")}
         </label>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -447,7 +441,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={hg.seekWater}
             onChange={(e) => void patch({ hazardGuard: { ...hg, seekWater: e.target.checked } })}
           />
-          Yanınca suya koş
+          {t("survival.runToWaterOnFire")}
         </label>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -455,18 +449,14 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={hg.useWaterBucket}
             onChange={(e) => void patch({ hazardGuard: { ...hg, useWaterBucket: e.target.checked } })}
           />
-          Su kovası ile sön (varsa)
+          {t("survival.extinguishWithBucket")}
         </label>
-        <p className="text-[11px] leading-relaxed text-zinc-500">
-          Lavdaysa zıplayıp çıkar; yanıyorsa suya veya güvenli bloğa pathfinder ile kaçar. Magma/ateş
-          bloğu üzerinde de devreye girer. Envanterde water_bucket varsa ayak altına döküp söndürmeyi dener.
-        </p>
+        <p className="text-[11px] leading-relaxed text-zinc-500">{t("survival.fireGuardHint")}</p>
       </div>
 
-      {/* Boş kova doldurma — MLG geri almadan bağımsız */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
-          Boş kova doldur (opsiyonel)
+          {t("survival.bucketFillTitle")}
         </div>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -474,7 +464,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={scoop.enabled}
             onChange={(e) => void patch({ bucketScoop: { ...scoop, enabled: e.target.checked } })}
           />
-          Yakındaki kaynaklardan boş kovayı doldur
+          {t("survival.bucketFillLabel")}
         </label>
         <div className="mb-2 flex flex-wrap gap-4 text-xs text-zinc-400">
           <label className="flex items-center gap-1.5">
@@ -484,7 +474,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               disabled={!scoop.enabled}
               onChange={(e) => void patch({ bucketScoop: { ...scoop, scoopWater: e.target.checked } })}
             />
-            Su
+            {t("survival.water")}
           </label>
           <label className="flex items-center gap-1.5">
             <input
@@ -493,11 +483,11 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               disabled={!scoop.enabled}
               onChange={(e) => void patch({ bucketScoop: { ...scoop, scoopLava: e.target.checked } })}
             />
-            Lav
+            {t("survival.lava")}
           </label>
         </div>
-        <label className="mb-2 flex flex-col gap-1 text-[10px] text-zinc-500 max-w-[8rem]">
-          Tarama yarıçapı
+        <label className="mb-2 flex max-w-[8rem] flex-col gap-1 text-[10px] text-zinc-500">
+          {t("survival.scanRadius")}
           <input
             type="number"
             min={1}
@@ -513,21 +503,22 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           />
         </label>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          <b className="font-medium text-zinc-400">MLG su geri alma bundan ayrıdır</b> — bu kapalı olsa bile düşüşte
-          dökülen MLG suyu (Yaşam → MLG malzeme geri al) alınır. Bu seçenek sadece boş gezerken kaynak doldurmak içindir.
+          <b className="font-medium text-zinc-400">{t("survival.mlgIndependentNote")}</b>{" "}
+          {t("survival.mlgIndependentDesc")}
         </p>
       </div>
 
-      {/* Parkur */}
       <div className="rounded-lg border border-indigo-900/40 bg-indigo-950/15 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">Gelişmiş parkur</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">
+          {t("survival.parkourTitle")}
+        </div>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
             type="checkbox"
             checked={mov.allowParkour !== false}
             onChange={(e) => void patchMove({ allowParkour: e.target.checked })}
           />
-          Pathfinder parkour (2 blok boşluk + sprint)
+          {t("survival.pathfinderParkour")}
         </label>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -535,7 +526,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={mov.ladderParkour !== false}
             onChange={(e) => void patchMove({ ladderParkour: e.target.checked })}
           />
-          Merdiven / vine parkuru
+          {t("survival.ladderParkour")}
         </label>
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
@@ -543,10 +534,10 @@ export function SurvivalPanel({ botId }: { botId: string }) {
             checked={mov.parkourSprint !== false}
             onChange={(e) => void patchMove({ parkourSprint: e.target.checked })}
           />
-          Sprint jump (3–4 blok)
+          {t("survival.sprintJump")}
         </label>
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-[10px] text-zinc-500 uppercase">Max gap</span>
+          <span className="text-[10px] text-zinc-500 uppercase">{t("survival.maxGap")}</span>
           {([2, 3, 4] as const).map((g) => (
             <button
               key={g}
@@ -558,19 +549,17 @@ export function SurvivalPanel({ botId }: { botId: string }) {
                   : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
               }`}
             >
-              {g} blok
+              {t("survival.blocksUnit", { n: g })}
             </button>
           ))}
         </div>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          Pathfinder parkour takip/goto’da açıkken atlanabilir boşluklardan atlar (safe-only değil). Yol yoksa 2–4
-          blok özel gap jump. Merdiven: path + manuel; düşünce MLG. Zıplarken bakış basılmaz (geri-at azalır).
-          Görev: <span className="mono text-zinc-400">parkour-goto</span>.
+          {t("survival.parkourHint", { task: "parkour-goto" })}
         </p>
 
         <div className="mt-3 border-t border-zinc-800 pt-2">
           <div className="mb-1.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
-            Uçurum güvenliği (deneysel — varsayılan kapalı)
+            {t("survival.edgeSafetyTitle")}
           </div>
           <label className="mb-1.5 flex items-center gap-2 text-sm text-zinc-300">
             <input
@@ -578,12 +567,9 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               checked={mov.edgeSafety === true}
               onChange={(e) => void patchMove({ edgeSafety: e.target.checked })}
             />
-            Kenar tarama (sadece gerçek uçurum)
+            {t("survival.edgeScanLabel")}
           </label>
-          <p className="text-[10px] leading-relaxed text-zinc-600">
-            Düz / güvenli yollarda kenar güvenliği gerekmez ve devreye girmez. Açıkken bile 1-up / düz basamak
-            normal pathfinder işi. Takip döngüsünden çıkarıldı (yanlış geri itme); kapalı önerilir.
-          </p>
+          <p className="text-[10px] leading-relaxed text-zinc-600">{t("survival.edgeSafetyHint")}</p>
         </div>
       </div>
     </div>

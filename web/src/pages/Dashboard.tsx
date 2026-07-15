@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AddBotModal } from "../components/AddBotModal";
 import { AllChatPanel } from "../components/AllChatPanel";
 import { BotCard } from "../components/BotCard";
+import { BotLogo } from "../components/BotLogo";
 import { LogPanel } from "../components/LogPanel";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
@@ -58,7 +59,7 @@ export function Dashboard() {
 
       {list.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 text-zinc-500">
-          <span className="text-4xl">🐺</span>
+          <BotLogo className="h-12 w-12 opacity-70" />
           <p className="text-sm">{t("dashboard.empty")}</p>
         </div>
       ) : (

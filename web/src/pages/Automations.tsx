@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Settings2, X } from "lucide-react";
 import { ItemPicker } from "../components/ItemPicker";
 import {
   AdvancedFlowBuilder,
@@ -78,6 +79,13 @@ type ActRow = {
   block?: string;
   ore?: string;
   count?: number | string;
+  /** add = mevcut envantere ekle, target = toplam envanter hedefi */
+  countMode?: "add" | "target";
+  dropMode?: "count" | "all" | "keep";
+  match?: "exact" | "contains";
+  respectKeepItems?: boolean;
+  failIfMissing?: boolean;
+  requireCount?: boolean;
   radius?: number;
   distance?: number;
   mode?: string;
@@ -183,15 +191,15 @@ export function Automations() {
   }, []);
 
   const triggers = meta?.triggers ?? [
-    { type: "chat", label: "Sohbet / komut", fields: [] },
-    { type: "item_gained", label: "Eşya geldi", fields: [] },
-    { type: "item_count", label: "Eşya adedi", fields: [] },
-    { type: "attacked", label: "Saldırı", fields: [] }
+    { type: "chat", label: "chat", fields: [] },
+    { type: "item_gained", label: "item_gained", fields: [] },
+    { type: "item_count", label: "item_count", fields: [] },
+    { type: "attacked", label: "attacked", fields: [] }
   ];
-  const actionMeta = meta?.actions ?? [{ type: "goto", label: "Git", fields: [] }];
+  const actionMeta = meta?.actions ?? [{ type: "goto", label: "goto", fields: [] }];
   const conditionMeta = meta?.conditions ?? [
-    { type: "task_idle", label: "Boşta", fields: [] },
-    { type: "online", label: "Online", fields: [] }
+    { type: "task_idle", label: "task_idle", fields: [] },
+    { type: "online", label: "online", fields: [] }
   ];
 
   /** Sunucu meta etiketini dil dosyasından çöz (yoksa fallback) */
@@ -320,6 +328,7 @@ export function Automations() {
         if (a.block != null && a.block !== "") o.block = a.block;
         if (a.ore != null) o.ore = a.ore;
         if (a.count != null && a.count !== "") o.count = a.count;
+        if (a.countMode != null) o.countMode = a.countMode;
         if (a.radius != null) o.radius = a.radius;
         if (a.distance != null) o.distance = a.distance;
         if (a.mode != null) o.mode = a.mode;
@@ -403,6 +412,7 @@ export function Automations() {
       block: a.block != null ? String(a.block) : undefined,
       ore: a.ore != null ? String(a.ore) : undefined,
       count: a.count as number | string | undefined,
+      countMode: a.countMode === "target" ? "target" : a.countMode === "add" ? "add" : undefined,
       radius: a.radius != null ? Number(a.radius) : undefined,
       distance: a.distance != null ? Number(a.distance) : undefined,
       mode: a.mode != null ? String(a.mode) : undefined,
@@ -549,7 +559,18 @@ export function Automations() {
         <span className="text-zinc-500">{t("automations.actionLabel")}</span>
         <select
           value={a.type}
-          onChange={(e) => onPatch(i, { type: e.target.value })}
+          onChange={(e) => {
+            const nextType = e.target.value;
+            onPatch(i, {
+              type: nextType,
+              countMode: ["collect", "collect_item", "mine"].includes(nextType) ? "add" : a.countMode,
+              dropMode: nextType === "drop_items" ? "count" : a.dropMode,
+              match: nextType === "drop_items" ? "exact" : a.match,
+              respectKeepItems: nextType === "drop_items" ? true : a.respectKeepItems,
+              failIfMissing: nextType === "drop_items" ? false : a.failIfMissing,
+              requireCount: nextType === "drop_items" ? false : a.requireCount
+            });
+          }}
           className={fieldCls}
         >
           {actionMeta.map((m) => (
@@ -616,7 +637,7 @@ export function Automations() {
           ) : (
             <ItemPicker
               version={catalogVersion}
-              kind={a.type === "collect" || a.type === "collect_item" ? "blocks" : "items"}
+              kind="items"
               value={String(a.item ?? a.block ?? "oak_log")}
               onChange={(n) => onPatch(i, { item: n, block: n })}
             />
@@ -627,6 +648,19 @@ export function Automations() {
             placeholder={t("automations.phCount")}
             className={`${fieldCls} w-24`}
           />
+          {["collect", "collect_item", "mine"].includes(a.type) && (
+            <label className="flex min-w-[11rem] flex-col gap-0.5 text-xs">
+              <span className="text-zinc-500">{t("automations.countModeLabel")}</span>
+              <select
+                value={a.countMode ?? "add"}
+                onChange={(e) => onPatch(i, { countMode: e.target.value as "add" | "target" })}
+                className={fieldCls}
+              >
+                <option value="add">{t("automations.countModeAdd")}</option>
+                <option value="target">{t("automations.countModeTarget")}</option>
+              </select>
+            </label>
+          )}
         </>
       )}
       {["clear-mobs", "hunt", "collect_drops"].includes(a.type) && (
@@ -645,8 +679,77 @@ export function Automations() {
           className={`${fieldCls} w-20`}
         />
       )}
+      {a.type === "drop_items" && (
+        <>
+          <ItemPicker
+            version={catalogVersion}
+            kind="items"
+            value={String(a.item ?? "cobblestone")}
+            onChange={(n) => onPatch(i, { item: n })}
+          />
+          <label className="flex min-w-[9rem] flex-col gap-0.5 text-xs">
+            <span className="text-zinc-500">{t("automations.dropModeLabel")}</span>
+            <select
+              value={a.dropMode ?? "count"}
+              onChange={(e) => onPatch(i, { dropMode: e.target.value as "count" | "all" | "keep" })}
+              className={fieldCls}
+            >
+              <option value="count">{t("automations.dropModeCount")}</option>
+              <option value="all">{t("automations.dropModeAll")}</option>
+              <option value="keep">{t("automations.dropModeKeep")}</option>
+            </select>
+          </label>
+          {(a.dropMode ?? "count") !== "all" && (
+            <input
+              min={0}
+              type="number"
+              value={a.count ?? 1}
+              onChange={(e) => onPatch(i, { count: e.target.value })}
+              placeholder={t("automations.phCountArg")}
+              className={`${fieldCls} w-24`}
+            />
+          )}
+          <label className="flex min-w-[9rem] flex-col gap-0.5 text-xs">
+            <span className="text-zinc-500">{t("automations.dropMatchLabel")}</span>
+            <select
+              value={a.match ?? "exact"}
+              onChange={(e) => onPatch(i, { match: e.target.value as "exact" | "contains" })}
+              className={fieldCls}
+            >
+              <option value="exact">{t("automations.dropMatchExact")}</option>
+              <option value="contains">{t("automations.dropMatchContains")}</option>
+            </select>
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-2 text-[11px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={a.respectKeepItems !== false}
+              onChange={(e) => onPatch(i, { respectKeepItems: e.target.checked })}
+            />
+            {t("automations.dropRespectKeep")}
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-2 text-[11px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={a.failIfMissing === true}
+              onChange={(e) => onPatch(i, { failIfMissing: e.target.checked })}
+            />
+            {t("automations.dropFailIfMissing")}
+          </label>
+          {(a.dropMode ?? "count") === "count" && (
+            <label className="flex cursor-pointer items-center gap-1.5 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-2 text-[11px] text-zinc-400">
+              <input
+                type="checkbox"
+                checked={a.requireCount === true}
+                onChange={(e) => onPatch(i, { requireCount: e.target.checked })}
+              />
+              {t("automations.dropRequireCount")}
+            </label>
+          )}
+        </>
+      )}
       <button type="button" onClick={onRemove} className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40">
-        ✕
+        <X className="h-3.5 w-3.5" />
       </button>
     </div>
   );
@@ -656,11 +759,13 @@ export function Automations() {
       if (match === "command") return `${commandPrefix || "/"}${pattern}`;
       return `"${pattern}" (${match})`;
     }
-    if (triggerType === "item_gained") return `+${item || "herhangi"} (≥${threshold || 1})`;
+    if (triggerType === "item_gained")
+      return `+${item || t("automations.summaryAny")} (≥${threshold || 1})`;
     if (triggerType === "item_count") return `${item} ${comparison} ${threshold}`;
-    if (triggerType === "attacked") return `saldırı · ${source}`;
+    if (triggerType === "attacked") return t("automations.summaryAttacked", { source });
     if (triggerType === "player_far") return `${player || "@follow"} > ${radius}m`;
-    if (triggerType === "follow_out_of_range") return `takip menzil dışı (>${radius}m)`;
+    if (triggerType === "follow_out_of_range")
+      return t("automations.summaryFollowOut", { radius });
     return triggerType;
   };
 
@@ -1309,7 +1414,7 @@ export function Automations() {
                     onClick={() => setConditions((rows) => rows.filter((_, j) => j !== i))}
                     className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40"
                   >
-                    ✕
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}
@@ -1503,7 +1608,7 @@ export function Automations() {
         </div>
         {rules.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-800 py-12 text-zinc-500">
-            <span className="text-3xl">⚙️</span>
+            <Settings2 className="h-8 w-8" />
             <p className="text-sm">{t("automations.empty")}</p>
           </div>
         )}

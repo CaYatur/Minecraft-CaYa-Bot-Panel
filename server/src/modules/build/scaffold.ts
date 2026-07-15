@@ -31,7 +31,7 @@ export class ScaffoldTracker {
 
   record(x: number, y: number, z: number, name: string) {
     const k = this.key(x, y, z);
-    if (this.protected.has(k)) return; // yapı hücresi scaffold sayılmaz
+    if (this.protected.has(k)) return; // structure cell is not scaffold
     this.stack.push({ x: Math.floor(x), y: Math.floor(y), z: Math.floor(z), name });
   }
 

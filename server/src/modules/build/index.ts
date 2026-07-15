@@ -19,7 +19,7 @@ import { normalizeRotateY, type BuildTransform, type RotateY } from "./transform
 import { v3 } from "./vec3util";
 
 /**
- * Faz 14–16 — Şema inşaat: schem/litematic/caya + transform + progress + scaffold.
+ * Faz 14–16 — Schematic inşaat: schem/litematic/caya + transform + progress + scaffold.
  */
 export class BuildService {
   private runtime: BuildRuntime = emptyBuildRuntime();
@@ -76,7 +76,7 @@ export class BuildService {
     this.emit(true);
   }
 
-  /** Malzeme listesini envanterden anlık yenile + UI'ye bas */
+  /** Malzeme listesini inventoryden anlık yenile + UI'ye bas */
   private refreshMaterials(blocks: SchematicBlock[], force = true) {
     this.runtime.materials = this.materialsFor(blocks);
     this.emit(force);
@@ -97,7 +97,7 @@ export class BuildService {
       }
     }
     const aliasHave = (blockName: string): number => {
-      // Aynı blok için kullanılabilen farklı item stack'lerini topla; max almak tabloyu eksik gösteriyordu.
+      // Aynı blok for kullanılabilen farklı item stack'lerini topla; max almak tabloyu eksik gösteriyordu.
       const names = new Set([...itemNameForBlock(blockName), blockName]);
       let total = 0;
       for (const name of names) total += haveMap[name] ?? 0;
@@ -127,11 +127,11 @@ export class BuildService {
 
   /**
    * Eksik malzemeleri kaynak kuyruğuna ekle (sırayla USER görevleri).
-   * 1) yere düşenler  2) her eksik tür için collect/mine (yakın → halka arama)
+   * 1) yere düşenler  2) her eksik tür for collect/mine (yakın → halka arama)
    */
   enqueueCollectMissing(opts: { schematicId: string; versionHint?: string; transform?: BuildTransform }) {
     const sid = opts.schematicId.trim();
-    if (!sid) throw new Error("Şema id gerekli");
+    if (!sid) throw new Error("Schematic id required");
     const version = opts.versionHint || "1.20.4";
 
     return this.instance.tasks.enqueue(
@@ -143,7 +143,7 @@ export class BuildService {
         requeueOnPreempt: true
       },
       () => async (token, report) => {
-        this.setActivity("Malzeme listesi hazırlanıyor…");
+        this.setActivity("Preparing material list…");
         this.setPhase("acquiring", "malzeme listesi…");
         report({ done: 0, total: 1, label: "malzeme listesi…" });
         const parsed = await loadParsedSchematic(sid, version, opts.transform);
@@ -151,11 +151,11 @@ export class BuildService {
         this.refreshMaterials(blocks, true);
 
         try {
-          this.setActivity("Yere düşen eşyalar toplanıyor…", null);
-          report({ done: 0, total: 1, label: "yere düşenler…" });
+          this.setActivity("Picking up dropped items…", null);
+          report({ done: 0, total: 1, label: "drops…" });
           await this.instance.gather.runCollectDrops(undefined, 28, token, (p) => {
             report(p);
-            this.setActivity(p.label ?? "Yere düşenler…", null);
+            this.setActivity(p.label ?? "Drops…", null);
             this.refreshMaterials(blocks, true);
           });
         } catch {
@@ -173,15 +173,15 @@ export class BuildService {
 
         let i = 0;
         for (const m of missing) {
-          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          if (token.cancelled) throw new Error(token.reason ?? "cancelled");
           i++;
-          this.setActivity(`Toplanıyor: ${m.name} ×${m.missing} (${i}/${missing.length})`, m.name);
+          this.setActivity(`Collecting: ${m.name} ×${m.missing} (${i}/${missing.length})`, m.name);
           report({ done: i - 1, total: missing.length, label: `topla ${m.name} ×${m.missing}` });
           try {
             await this.acquireOneMaterial(m.name, m.missing, token, report, blocks);
           } catch (e) {
-            this.log().warn(`Malzeme toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
-            this.setActivity(`Başarısız: ${m.name} — ${e instanceof Error ? e.message : String(e)}`, m.name);
+            this.log().warn(`Could not collect material: ${m.name}`, e instanceof Error ? e.message : String(e));
+            this.setActivity(`Failed: ${m.name} — ${e instanceof Error ? e.message : String(e)}`, m.name);
           }
           this.refreshMaterials(blocks, true);
         }
@@ -192,7 +192,7 @@ export class BuildService {
         const label =
           still.length === 0
             ? "malzemeler tamam"
-            : `kısmi: hâlâ eksik ${still
+            : `partial: still missing ${still
                 .slice(0, 4)
                 .map((m) => `${m.name}×${m.missing}`)
                 .join(", ")}`;
@@ -203,7 +203,7 @@ export class BuildService {
     );
   }
 
-  /** Tek malzeme: drop → sandık/shulker → craft zinciri → doğrudan kaynak */
+  /** Tek malzeme: drop → chest/shulker → craft zinciri → doğrudan kaynak */
   private async acquireOneMaterial(
     blockName: string,
     count: number,
@@ -225,12 +225,12 @@ export class BuildService {
 
     // 1) Yakındaki düşmüş item'ler.
     try {
-      refresh(`Yerde aranıyor: ${item}`);
+      refresh(`Searching ground: ${item}`);
       await this.instance.gather.runCollectDrops(item, 16, token, (p) => refresh(p.label ?? `Yerde: ${item}`));
     } catch { /* best effort */ }
     if (this.countHaveItem(names) >= targetHave) return;
 
-    // 2) Oyuncunun sandık/barrel/dünyadaki shulker'ı; gerekirse botun taşıdığı shulker.
+    // 2) Oyuncunun chest/barrel/worlddaki shulker'ı; gerekirse botun taşıdığı shulker.
     const storageNeed = targetHave - this.countHaveItem(names);
     await withdrawBuildMaterials(this.instance, names, storageNeed, token, refresh);
     if (this.countHaveItem(names) >= targetHave) return;
@@ -238,17 +238,17 @@ export class BuildService {
     // 3) Tarif bağımlılıklarını çöz: örn. dark_oak_fence → dark_oak_planks → dark_oak_log.
     if (this.instance.craft.canCraft(item)) {
       try {
-        refresh(`Craft zinciri: ${item} · hedef ${targetHave}`);
+        refresh(`Craft zinciri: ${item} · target ${targetHave}`);
         await this.instance.craft.runCraftInline(item, targetHave, token, (p) => refresh(p.label ?? `Craft: ${item}`));
       } catch (error) {
-        this.log().warn(`Craft zinciri tamamlanamadı: ${item}`, error instanceof Error ? error.message : String(error));
+        this.log().warn(`Craft chain incomplete: ${item}`, error instanceof Error ? error.message : String(error));
       }
     }
     if (this.countHaveItem(names) >= targetHave) return;
 
     // 4) Son çare: kesin isimli doğal blok/maden araması. Plank gibi sonuçlar aynı ağaç türüne yönlendirilir.
-    refresh(`Kaynak aranıyor: ${item} · hedef ${targetHave}`);
-    await this.instance.gather.runCollectBlock(item, targetHave, token, (p) => refresh(p.label ?? `Toplanıyor: ${item}`));
+    refresh(`Searching resource: ${item} · target ${targetHave}`);
+    await this.instance.gather.runCollectBlock(item, targetHave, token, (p) => refresh(p.label ?? `Collecting: ${item}`));
 
     // Kaynak toplama ham girdiyi getirdiyse bir kez daha craft et.
     if (this.countHaveItem(names) < targetHave && this.instance.craft.canCraft(item)) {
@@ -256,7 +256,7 @@ export class BuildService {
     }
     this.refreshMaterials(allBlocks, true);
     if (this.countHaveItem(names) < targetHave) {
-      throw new Error(`${item}: hedef ${targetHave}, bulunan ${this.countHaveItem(names)}`);
+      throw new Error(`${item}: target ${targetHave}, bulunan ${this.countHaveItem(names)}`);
     }
   }
 
@@ -275,21 +275,21 @@ export class BuildService {
     };
   }
 
-  stopBuild(reason = "inşaat durduruldu") {
+  stopBuild(reason = "build stopped") {
     const buildTypes = new Set(["build", "build-acquire", "build-acquire-plan"]);
     const cur = this.instance.tasks.currentSummary;
     if (cur && buildTypes.has(cur.type)) this.instance.tasks.cancel(cur.id, reason);
     for (const t of this.instance.tasks.queueSummaries) {
       if (buildTypes.has(t.type)) this.instance.tasks.cancel(t.id, reason);
     }
-    // scaffold temizliği best-effort (async, iz bırakma)
+    // scaffold temizliği best-effort (async, iz dropma)
     if (this.scaffolds.count && this.instance.bot && this.instance.status === "online") {
       const bot = this.instance.bot;
       const tracker = this.scaffolds;
       this.scaffolds = new ScaffoldTracker();
       void tracker.cleanup(bot, { cancelled: false }).then((n) => {
         this.runtime.scaffoldsCleared += n;
-        this.log().info("Durdurma sonrası scaffold temizliği", `${n} blok`);
+        this.log().info("Scaffold cleanup after stop", `${n} blok`);
         this.emit();
       });
     } else {
@@ -301,11 +301,11 @@ export class BuildService {
     this.runtime.activity = null;
     this.runtime.activityMaterial = null;
     this.emit();
-    this.log().info("İnşaat durduruldu", reason);
+    this.log().info("Build stopped", reason);
   }
 
   /** Tüm iş sıfırla: inşaat runtime + scaffold tamamen temiz (bot bağlı kalır) */
-  hardReset(reason = "inşaat sıfırlandı") {
+  hardReset(reason = "build reset") {
     this.stopBuild(reason);
     this.scaffolds = new ScaffoldTracker();
     this.runtime = emptyBuildRuntime();
@@ -319,7 +319,7 @@ export class BuildService {
     allowPartial?: boolean;
     /** eksik malzemeleri önce kuyruğa al (kaynak görevleri + inşaat) */
     collectMissing?: boolean;
-    /** nearby-first: envanterde olan/yakın önce; layer-first: serpentine */
+    /** nearby-first: inventoryde olan/yakın önce; layer-first: serpentine */
     placeOrder?: BuildPlaceOrder;
     versionHint?: string;
     rotateY?: RotateY | number;
@@ -327,15 +327,15 @@ export class BuildService {
     mirrorZ?: boolean;
   }) {
     const sid = opts.schematicId.trim();
-    if (!sid) throw new Error("Şema id gerekli");
+    if (!sid) throw new Error("Schematic id required");
 
-    this.stopBuild("yeni inşaat başlıyor");
+    this.stopBuild("starting new build");
     this.scaffolds = new ScaffoldTracker();
     this.runtime = emptyBuildRuntime();
     this.runtime.phase = "preparing";
     this.runtime.schematicId = sid;
     this.runtime.startedAt = Date.now();
-    this.runtime.label = "hazırlanıyor…";
+    this.runtime.label = "preparing…";
     this.runtime.collectMissing = Boolean(opts.collectMissing);
     this.runtime.placeOrder = opts.placeOrder === "layer-first" ? "layer-first" : "nearby-first";
     this.runtime.transform = {
@@ -354,7 +354,7 @@ export class BuildService {
     const summary = this.instance.tasks.enqueue(
       {
         type: "build",
-        label: `yapı: ${sid.slice(0, 8)}…`,
+        label: `build: ${sid.slice(0, 8)}…`,
         priority: PRIORITY.USER,
         params: { ...opts },
         requeueOnPreempt: true
@@ -367,7 +367,7 @@ export class BuildService {
 
   private resolveOrigin(origin: BuildOrigin): { x: number; y: number; z: number } {
     const bot = this.instance.bot;
-    if (!bot || this.instance.status !== "online") throw new Error("Bot çevrimdışı");
+    if (!bot || this.instance.status !== "online") throw new Error("Bot offline");
 
     if (origin.mode === "here") {
       return {
@@ -378,12 +378,12 @@ export class BuildService {
     }
     if (origin.mode === "player") {
       const name = String(origin.player ?? "").trim();
-      if (!name) throw new Error("Oyuncu adı gerekli");
+      if (!name) throw new Error("Player name required");
       const ent = bot.players[name]?.entity;
       if (!ent) {
         const inTab = Boolean(bot.players[name]);
         throw new Error(
-          inTab ? `${name} menzil dışında — konum bilinmiyor (yakınlaşın)` : `${name} sunucuda görünmüyor`
+          inTab ? `${name} out of range — position unknown (get closer)` : `${name} not visible on server`
         );
       }
       return {
@@ -393,7 +393,7 @@ export class BuildService {
       };
     }
     if (origin.x == null || origin.y == null || origin.z == null) {
-      throw new Error("Koordinat origin için x,y,z gerekli");
+      throw new Error("x,y,z required for coordinate origin");
     }
     return {
       x: Math.floor(Number(origin.x)),
@@ -402,7 +402,7 @@ export class BuildService {
     };
   }
 
-  /** Katman katman, her katmanda yılan yolu (yürürken yerleştirme için) */
+  /** Katman katman, her katmanda yılan yolu (yürürken place for) */
   private sortBlocks(blocks: SchematicBlock[]): SchematicBlock[] {
     const byY = new Map<number, SchematicBlock[]>();
     for (const b of blocks) {
@@ -465,7 +465,7 @@ export class BuildService {
     this.runtime.collectMissing = Boolean(opts.collectMissing);
 
     try {
-      this.setPhase("preparing", "şema yükleniyor…");
+      this.setPhase("preparing", "loading schematic…");
       const parsed = await loadParsedSchematic(opts.schematicId, version, transform);
       this.runtime.schematicName = parsed.meta.name;
       // üst yarı / portal vb. atla
@@ -477,12 +477,12 @@ export class BuildService {
 
       // --- eksik malzeme toplama (sıralı, yakında yoksa çevre ara) ---
       if (opts.collectMissing) {
-        this.setPhase("acquiring", "eksik malzemeler toplanıyor…");
-        this.setActivity("Yere düşen eşyalar toplanıyor…", null);
+        this.setPhase("acquiring", "eksik malzemeler collecting…");
+        this.setActivity("Picking up dropped items…", null);
         try {
           await this.instance.gather.runCollectDrops(undefined, 24, token, (p) => {
             report(p);
-            this.setActivity(p.label ?? "Yere düşenler…", null);
+            this.setActivity(p.label ?? "Drops…", null);
             this.refreshMaterials(blocks, true);
           });
         } catch {
@@ -492,9 +492,9 @@ export class BuildService {
         const missingList = this.materialsFor(blocks).filter((m) => m.missing > 0);
         let ai = 0;
         for (const m of missingList) {
-          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          if (token.cancelled) throw new Error(token.reason ?? "cancelled");
           ai++;
-          this.setActivity(`Toplanıyor: ${m.name} ×${m.missing} (${ai}/${missingList.length})`, m.name);
+          this.setActivity(`Collecting: ${m.name} ×${m.missing} (${ai}/${missingList.length})`, m.name);
           report({
             done: ai - 1,
             total: missingList.length,
@@ -503,9 +503,9 @@ export class BuildService {
           try {
             await this.acquireOneMaterial(m.name, m.missing, token, report, blocks);
           } catch (e) {
-            this.log().warn(`Toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
+            this.log().warn(`Could not collect: ${m.name}`, e instanceof Error ? e.message : String(e));
             this.setActivity(
-              `Başarısız: ${m.name} — ${e instanceof Error ? e.message : String(e)}`,
+              `Failed: ${m.name} — ${e instanceof Error ? e.message : String(e)}`,
               m.name
             );
           }
@@ -522,8 +522,8 @@ export class BuildService {
           .map((m) => `${m.name}×${m.missing}`)
           .join(", ")}${missing.length > 5 ? "…" : ""}`;
         this.setPhase("failed", msg, msg);
-        this.log().warn("İnşaat başlamadı — eksik malzeme", msg);
-        throw new Error(msg + " (kısmi inşaat veya malzeme topla)");
+        this.log().warn("Build did not start — missing materials", msg);
+        throw new Error(msg + " (partial build or gather materials)");
       }
 
       const origin = this.resolveOrigin(opts.origin);
@@ -532,14 +532,14 @@ export class BuildService {
         transform.rotateY || transform.mirrorX || transform.mirrorZ
           ? ` · R${transform.rotateY ?? 0}${transform.mirrorX ? " mX" : ""}${transform.mirrorZ ? " mZ" : ""}`
           : "";
-      this.setActivity(`İnşa ediliyor: ${parsed.meta.name}`, null);
-      this.setPhase("building", `inşa: ${parsed.meta.name}${rotLabel}`);
+      this.setActivity(`Building: ${parsed.meta.name}`, null);
+      this.setPhase("building", `build: ${parsed.meta.name}${rotLabel}`);
       this.log().info(
-        `İnşaat başladı: ${parsed.meta.name}`,
-        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok · sıra=${placeOrder}${rotLabel}`
+        `Build started: ${parsed.meta.name}`,
+        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok · order=${placeOrder}${rotLabel}`
       );
 
-      // --- dünya koordinatları önceden hesap ---
+      // --- world koordinatları önceden hesap ---
       type Job = {
         block: SchematicBlock;
         name: string;
@@ -562,8 +562,8 @@ export class BuildService {
         retryAt: 0
       }));
       this.log().info(
-        "İnşaat hedefleri hazır",
-        `${jobs.length} koordinat · destek öncelikli · sticky hedef · dur-koy`
+        "Build targets ready",
+        `${jobs.length} koordinat · support priority · sticky target · stop-and-place`
       );
       let placed = 0;
       let skipped = 0;
@@ -573,7 +573,7 @@ export class BuildService {
       let acquireStalls = 0;
       /** sticky: aynı bloğa bitirene kadar yapış — zig-zag dengesizliği azaltır */
       let stickyJob: Job | null = null;
-      /** başarılı/atlanan hücreler — destek skoru için */
+      /** başarılı/atlmainn hücreler — destek skoru for */
       const solidKeys = new Set<string>();
       const keyOf = (x: number, y: number, z: number) => `${x},${y},${z}`;
 
@@ -609,17 +609,17 @@ export class BuildService {
 
       const hasSupport = (job: Job): boolean => worldSolid(job.wx, job.wy - 1, job.wz);
 
-      /** Düşük skor = önce. Destek + alt katman + mesafe dengesi (sadece en yakın ≠ stabil). */
+      /** Düşük skor = önce. Destek + alt katman + distance dengesi (sadece en yakın ≠ stabil). */
       const scoreJob = (job: Job): number => {
         const d = distToBlock(this.instance, job.wx, job.wy, job.wz);
         const supportPen = hasSupport(job) ? 0 : 420;
         const botY = Math.floor(this.instance.bot?.entity?.position.y ?? job.wy);
         const climbPen = Math.max(0, job.wy - botY - 1) * 35;
         if (placeOrder === "layer-first") {
-          // katman (Y) mutlak öncelik, sonra destek, sonra mesafe
+          // katman (Y) mutlak öncelik, sonra destek, sonra distance
           return job.wy * 80_000 + supportPen + d * 25 + climbPen;
         }
-        // nearby-first: mesafe baskın ama alt katman + destek hâlâ tercih
+        // nearby-first: distance baskın ama alt katman + destek hâlâ tercih
         return d * 95 + job.wy * 12 + supportPen + climbPen;
       };
 
@@ -648,7 +648,7 @@ export class BuildService {
         this.runtime.scaffoldsPlaced = this.scaffolds.count;
         const doneN = placed + skipped + failed;
         const act =
-          res === "placed" ? `Kondu: ${job.name}` : res === "skipped" ? `Atlandı: ${job.name}` : `Kalıcı hata: ${job.name}`;
+          res === "placed" ? `Placed: ${job.name}` : res === "skipped" ? `Skipped: ${job.name}` : `Permanent error: ${job.name}`;
         this.runtime.activity = `${act} · ${doneN}/${jobs.length}`;
         this.runtime.activityMaterial = job.name;
         this.runtime.label = `${job.name} @${job.wx},${job.wy},${job.wz} · ${doneN}/${jobs.length} · +${placed}`;
@@ -671,12 +671,12 @@ export class BuildService {
         job.retryAt = Date.now() + 280 + job.attempts * 220;
         this.runtime.activity = `Yeniden denenecek: ${job.name} (${job.attempts}/4)`;
         this.runtime.activityMaterial = job.name;
-        this.runtime.label = `geçici yerleştirme hatası · ${job.name}`;
+        this.runtime.label = `temporary place error · ${job.name}`;
         this.emit(true);
       };
 
       const pickNextJob = (ready: Job[]): Job => {
-        // sticky: hâlâ uygunsa aynı hedefe yapış (sağa sola zıplama yok)
+        // sticky: hâlâ uygunsa aynı targete yapış (sağa sola zıplama yok)
         if (
           stickyJob &&
           !stickyJob.done &&
@@ -726,7 +726,7 @@ export class BuildService {
         }
         for (const job of open) {
           if (processed >= maxCluster) break;
-          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          if (token.cancelled) throw new Error(token.reason ?? "cancelled");
           if (distToBlock(this.instance, job.wx, job.wy, job.wz) > PLACE_REACH) continue;
           const res = await placeBlockAt(
             this.instance,
@@ -755,12 +755,12 @@ export class BuildService {
         consecutiveFail++;
       };
 
-      // --- yürü + menzilde koy + hedefe git (ulaşmadan zorlama) ---
+      // --- yürü + menzilde koy + targete git (ulaşmadan zorlama) ---
       let guard = 0;
       const maxRounds = jobs.length * 16 + 120;
       let lastWalkTick = 0;
       while (jobs.some((job) => !job.done) && guard < maxRounds) {
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
         guard++;
         // önce menzildekiler (zaten yanındaysa yürüme)
         await placeReachable({ stopFirst: true, maxCluster: 12 });
@@ -785,11 +785,11 @@ export class BuildService {
             (sum, material) => sum + material.missing,
             0
           );
-          this.setPhase("acquiring", `inşaat bekliyor — eksik malzeme turu ${acquirePasses}`);
-          this.setActivity("Yere düşen yapı malzemeleri toplanıyor…", null);
+          this.setPhase("acquiring", `build waiting — missing material pass ${acquirePasses}`);
+          this.setActivity("Collecting dropped build materials…", null);
           try {
             await this.instance.gather.runCollectDrops(undefined, 24, token, (p) => {
-              this.setActivity(p.label ?? "Yerdeki eşyalar…", null);
+              this.setActivity(p.label ?? "Ground itemslar…", null);
               refreshRemaining();
             });
           } catch {
@@ -800,7 +800,7 @@ export class BuildService {
             .filter((material) => material.missing > 0)
             .slice(0, 4);
           for (const material of missingNow) {
-            if (token.cancelled) throw new Error(token.reason ?? "iptal");
+            if (token.cancelled) throw new Error(token.reason ?? "cancelled");
             try {
               await this.acquireOneMaterial(
                 material.name,
@@ -811,7 +811,7 @@ export class BuildService {
               );
             } catch (error) {
               this.log().warn(
-                `İnşaat sırasında malzeme alınamadı: ${material.name}`,
+                `Could not acquire material during build: ${material.name}`,
                 error instanceof Error ? error.message : String(error)
               );
             }
@@ -823,23 +823,23 @@ export class BuildService {
             0
           );
           acquireStalls = afterMissing < beforeMissing ? 0 : acquireStalls + 1;
-          this.setActivity(`İnşa ediliyor: ${parsed.meta.name}`, null);
-          this.setPhase("building", `inşa devam ediyor: ${parsed.meta.name}`);
+          this.setActivity(`Building: ${parsed.meta.name}`, null);
+          this.setPhase("building", `build continuing: ${parsed.meta.name}`);
           continue;
         }
 
         const next = pickNextJob(ready);
         const dist = distToBlock(this.instance, next.wx, next.wy, next.wz);
-        this.runtime.label = `yürü → ${next.wx},${next.wy},${next.wz} · kalan ${pending.length}`;
+        this.runtime.label = `walk → ${next.wx},${next.wy},${next.wz} · remaining ${pending.length}`;
         this.runtime.activity =
           dist > PLACE_REACH
-            ? `Yürüyor: ${next.name} (${dist.toFixed(1)}m) @${next.wx},${next.wy},${next.wz}`
+            ? `Walking: ${next.name} (${dist.toFixed(1)}m) @${next.wx},${next.wy},${next.wz}`
             : `Koyuyor: ${next.name} @${next.wx},${next.wy},${next.wz}`;
         this.runtime.activityMaterial = next.name;
         report({ done: placed + skipped + failed, total: jobs.length, label: this.runtime.label });
         this.emit(true);
 
-        // UZAKSA: hedef bloğa yürü; yolda menzile girenleri koy (hareket ederek inşa)
+        // UZAKSA: target bloğa yürü; yolda menzile girenleri koy (hareket ederek inşa)
         if (dist > PLACE_REACH) {
           await pathNear(
             this.instance,
@@ -875,7 +875,7 @@ export class BuildService {
           );
           // outofreach: failed sayma — tekrar yürüyecek
           if (res === "outofreach") {
-            this.runtime.activity = `Ulaşılamadı, yeniden yürüyor: ${next.name}`;
+            this.runtime.activity = `Unreachable, walking again: ${next.name}`;
             this.emit(true);
             // sticky tut ama kısa bekle, tekrar path
             jobSoftRetry(next);
@@ -888,7 +888,7 @@ export class BuildService {
         await placeReachable({ stopFirst: true, maxCluster: 16 });
 
         if (consecutiveFail >= 5) {
-          this.runtime.label = `yerleştirme toparlanıyor (${consecutiveFail})`;
+          this.runtime.label = `placent recovering (${consecutiveFail})`;
           stickyJob = null;
           this.emit(true);
           try {
@@ -903,7 +903,7 @@ export class BuildService {
         if (guard % 2 === 0) refreshRemaining();
       }
 
-      // kalanları (maxRounds) failed say
+      // remainingları (maxRounds) failed say
       for (const j of jobs) {
         if (!j.done) markDone(j, "failed");
       }
@@ -915,8 +915,8 @@ export class BuildService {
       }
 
       this.flushEmit();
-      this.setPhase("cleanup", "geçici bloklar temizleniyor…");
-      this.log().info("Scaffold temizliği", `${this.scaffolds.count} kayıt`);
+      this.setPhase("cleanup", "cleaning temporary blocks…");
+      this.log().info("Scaffold cleanup", `${this.scaffolds.count} entries`);
       const cleared = await this.scaffolds.cleanup(this.instance.bot!, token, (c, t) => {
         this.runtime.scaffoldsCleared = c;
         this.runtime.label = `temizlik ${c}/${t}`;
@@ -926,22 +926,22 @@ export class BuildService {
       this.runtime.scaffoldsCleared = cleared;
 
       if (token.cancelled) {
-        this.setPhase("cancelled", "iptal edildi");
-        throw new Error(token.reason ?? "iptal");
+        this.setPhase("cancelled", "cancelled edildi");
+        throw new Error(token.reason ?? "cancelled");
       }
 
-      const label = `bitti: ${placed} kondu, ${skipped} atlandı, ${failed} başarısız, scaffold ${cleared}`;
+      const label = `done: ${placed} placed, ${skipped} skipped, ${failed} failed, scaffold ${cleared}`;
       this.runtime.materials = this.materialsFor(jobs.filter((job) => job.status === "failed").map((job) => job.block));
       this.emit(true);
       this.setActivity(null, null);
       // Tam başarıda done + dur; hata varsa failed (görev de fail)
       if (failed === 0) {
         this.setPhase("done", label);
-        this.log().success(`İnşaat tamam: ${parsed.meta.name}`, label);
+        this.log().success(`Build complete: ${parsed.meta.name}`, label);
         report({ done: jobs.length, total: jobs.length, label });
       } else {
-        this.setPhase("failed", label, `${failed} blok yerleştirilemedi`);
-        this.log().warn(`İnşaat kısmi/hatalı: ${parsed.meta.name}`, label);
+        this.setPhase("failed", label, `${failed} blok placeilemedi`);
+        this.log().warn(`Build partial/failed: ${parsed.meta.name}`, label);
         report({ done: jobs.length, total: jobs.length, label });
         throw new Error(label);
       }
@@ -949,7 +949,7 @@ export class BuildService {
       const msg = e instanceof Error ? e.message : String(e);
       try {
         if (this.scaffolds.count && this.instance.bot) {
-          this.setPhase("cleanup", "iptal — scaffold temizliği…");
+          this.setPhase("cleanup", "cancelled — scaffold cleanup…");
           await this.scaffolds.cleanup(this.instance.bot, { cancelled: false });
         }
       } catch {
@@ -958,7 +958,7 @@ export class BuildService {
       if (this.runtime.phase !== "failed" && this.runtime.phase !== "cancelled") {
         this.setPhase(token.cancelled ? "cancelled" : "failed", msg, msg);
       }
-      this.log().error("İnşaat hata/iptal", msg);
+      this.log().error("Build error/cancelled", msg);
       throw e;
     }
   }

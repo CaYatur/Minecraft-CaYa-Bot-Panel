@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { EV } from "../lib/events";
 import { socket } from "../lib/socket";
@@ -42,8 +43,8 @@ function protectList(c: CompanionState): string[] {
   return [];
 }
 
-/** Yakındaki oyuncular — takip/saldırı/koru toggle. Koruma detay ayarları Dövüş panelinde. */
 export function NearbyPlayers({ botId }: { botId: string }) {
+  const { t } = useI18n();
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const [players, setPlayers] = useState<NearbyPlayer[]>([]);
@@ -82,10 +83,10 @@ export function NearbyPlayers({ botId }: { botId: string }) {
         .catch(() => {});
     };
     pull();
-    const t = setInterval(pull, 2000);
+    const tmr = setInterval(pull, 2000);
     return () => {
       cancelled = true;
-      clearInterval(t);
+      clearInterval(tmr);
     };
   }, [botId, bot?.status, radius]);
 
@@ -107,23 +108,27 @@ export function NearbyPlayers({ botId }: { botId: string }) {
     const on = !isFollow(name);
     void act(
       { type: "social-follow", player: name, enabled: on, distance: followDist },
-      on ? `Ana takip: ${name} (≤${followDist}m)` : `Takip kapatıldı: ${name}`
+      on
+        ? t("nearby.followMainToast", { name, dist: followDist })
+        : t("nearby.followOffToast", { name })
     );
   };
 
   const toggleAttack = (name: string) => {
     if (isProtect(name)) {
-      toast("error", "Korunan oyuncuya saldırı açılamaz");
+      toast("error", t("nearby.attackProtectedError"));
       return;
     }
     const on = !isAttack(name);
-    void act({ type: "social-attack", player: name, enabled: on }, on ? `Saldırı: ${name}` : `Saldırı kapatıldı: ${name}`);
+    void act(
+      { type: "social-attack", player: name, enabled: on },
+      on ? t("nearby.attackToast", { name }) : t("nearby.attackOffToast", { name })
+    );
   };
 
   const toggleProtect = (name: string) => {
     const on = !isProtect(name);
     const setAsMain = on && wards.length === 0;
-    // detay ayar Dövüş → Eşlik koruması; burada sadece liste + ana takip mesafesi
     void act(
       {
         type: "social-protect",
@@ -134,14 +139,17 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       },
       on
         ? setAsMain
-          ? `Koruma + ana takip: ${name}`
-          : `Koruma listesine eklendi: ${name}`
-        : `Koruma listesinden çıktı: ${name}`
+          ? t("nearby.protectMainToast", { name })
+          : t("nearby.protectAddToast", { name })
+        : t("nearby.protectRemoveToast", { name })
     );
   };
 
   const setAsMainFollow = (name: string) => {
-    void act({ type: "social-follow", player: name, enabled: true, distance: followDist }, `Ana takip: ${name}`);
+    void act(
+      { type: "social-follow", player: name, enabled: true, distance: followDist },
+      t("nearby.setMainToast", { name })
+    );
   };
 
   if (!bot) return null;
@@ -152,9 +160,14 @@ export function NearbyPlayers({ botId }: { botId: string }) {
   const activeLine =
     companion.followPlayer || companion.attackPlayer || wards.length
       ? [
-          wards.length ? `koru:[${wards.join(", ")}]` : null,
-          companion.followPlayer ? `ana:${companion.followPlayer}≤${companion.followDistance}` : null,
-          companion.attackPlayer ? `saldır:${companion.attackPlayer}` : null
+          wards.length ? t("nearby.activeProtect", { list: wards.join(", ") }) : null,
+          companion.followPlayer
+            ? t("nearby.activeMain", {
+                name: companion.followPlayer,
+                dist: companion.followDistance
+              })
+            : null,
+          companion.attackPlayer ? t("nearby.activeAttack", { name: companion.attackPlayer }) : null
         ]
           .filter(Boolean)
           .join(" · ")
@@ -163,15 +176,18 @@ export function NearbyPlayers({ botId }: { botId: string }) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Yakındaki oyuncular</span>
+        <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          {t("nearby.title")}
+        </span>
         <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
-          {inRange.length} menzilde{tabOnly.length ? ` · ${tabOnly.length} tab` : ""}
+          {t("nearby.inRangeCount", { n: inRange.length })}
+          {tabOnly.length ? ` · ${t("nearby.tabCount", { n: tabOnly.length })}` : ""}
         </span>
         {activeLine && (
           <span className="rounded-full bg-indigo-950/50 px-2 py-0.5 text-[10px] text-indigo-300">{activeLine}</span>
         )}
         <label className="ml-auto flex items-center gap-1.5 text-[10px] text-zinc-500">
-          Liste menzili
+          {t("nearby.listRadius")}
           <input
             type="number"
             min={4}
@@ -182,7 +198,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
           />
         </label>
         <label className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-          Takip mesafe
+          {t("nearby.followDistance")}
           <input
             type="number"
             min={1}
@@ -190,31 +206,30 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             value={followDist}
             onChange={(e) => setFollowDist(Math.max(1, Math.min(16, Number(e.target.value) || 3)))}
             className="mono w-12 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200 outline-none focus:border-indigo-500"
-            title="Ana kişide durma mesafesi (blok)"
+            title={t("nearby.followDistanceTitle")}
           />
         </label>
       </div>
 
       {wards.length > 0 && (
         <p className="mb-2 text-[10px] leading-relaxed text-zinc-500">
-          Koruma: <span className="text-indigo-300">{wards.join(", ")}</span>
+          {t("nearby.protectLine")} <span className="text-indigo-300">{wards.join(", ")}</span>
           {companion.followPlayer ? (
             <>
               {" "}
-              · ana: <span className="text-emerald-300">{companion.followPlayer}</span>
+              · {t("nearby.mainLine")} <span className="text-emerald-300">{companion.followPlayer}</span>
             </>
           ) : null}
           {" · "}
-          ayarlar: <span className="text-amber-300/90">Dövüş sekmesi → Eşlik koruması</span>
+          {t("nearby.settingsHint")}{" "}
+          <span className="text-amber-300/90">{t("nearby.settingsLink")}</span>
         </p>
       )}
 
-      {!online && <p className="text-xs text-zinc-600 italic">Bot online olunca yakındaki oyuncular burada listelenir.</p>}
+      {!online && <p className="text-xs text-zinc-600 italic">{t("nearby.offlineHint")}</p>}
 
       {online && inRange.length === 0 && tabOnly.length === 0 && (
-        <p className="text-xs text-zinc-600 italic">
-          Menzilde oyuncu yok (veya sunucu entity yayınlamıyor — Paper&apos;da tam mesafe).
-        </p>
+        <p className="text-xs text-zinc-600 italic">{t("nearby.emptyInRange")}</p>
       )}
 
       <div className="max-h-64 space-y-1.5 overflow-y-auto">
@@ -232,37 +247,61 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             >
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">
                 {p.username}
-                {main && <span className="ml-1 text-[10px] font-normal text-amber-400">ana</span>}
-                {pOn && !main && <span className="ml-1 text-[10px] font-normal text-indigo-400">koru</span>}
+                {main && (
+                  <span className="ml-1 text-[10px] font-normal text-amber-400">{t("nearby.mainBadge")}</span>
+                )}
+                {pOn && !main && (
+                  <span className="ml-1 text-[10px] font-normal text-indigo-400">{t("nearby.protectBadge")}</span>
+                )}
               </span>
               <span className="mono text-[10px] text-zinc-500">{p.distance?.toFixed(1)} m</span>
-              <button type="button" disabled={!online} onClick={() => toggleFollow(p.username)} className={fOn ? btnFollowOn : btnIdle}>
-                {fOn ? "● Takip" : "Takip"}
+              <button
+                type="button"
+                disabled={!online}
+                onClick={() => toggleFollow(p.username)}
+                className={fOn ? btnFollowOn : btnIdle}
+              >
+                {fOn ? t("nearby.followOn") : t("nearby.follow")}
               </button>
               {pOn && !fOn && (
-                <button type="button" disabled={!online} onClick={() => setAsMainFollow(p.username)} className={btnMainOn}>
-                  Ana yap
+                <button
+                  type="button"
+                  disabled={!online}
+                  onClick={() => setAsMainFollow(p.username)}
+                  className={btnMainOn}
+                >
+                  {t("nearby.setMain")}
                 </button>
               )}
               <button
                 type="button"
                 disabled={!online}
-                onClick={() => act({ type: "goto-player", player: p.username }, `Yanına: ${p.username}`)}
+                onClick={() =>
+                  act(
+                    { type: "goto-player", player: p.username },
+                    t("nearby.goToToast", { name: p.username })
+                  )
+                }
                 className={btnIdle}
               >
-                Yanına
+                {t("nearby.goTo")}
               </button>
-              <button type="button" disabled={!online || pOn} onClick={() => toggleAttack(p.username)} className={aOn ? btnAttackOn : btnIdle}>
-                {aOn ? "● Saldır" : "Saldır"}
+              <button
+                type="button"
+                disabled={!online || pOn}
+                onClick={() => toggleAttack(p.username)}
+                className={aOn ? btnAttackOn : btnIdle}
+              >
+                {aOn ? t("nearby.attackOn") : t("nearby.attack")}
               </button>
               <button
                 type="button"
                 disabled={!online}
                 onClick={() => toggleProtect(p.username)}
                 className={pOn ? btnProtectOn : btnIdle}
-                title="Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi."
+                title={t("nearby.protectTitle")}
               >
-                {pOn ? "● Koru" : "Koru"}
+                {pOn ? t("nearby.protectOn") : t("nearby.protect")}
               </button>
             </div>
           );
@@ -274,14 +313,14 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-zinc-800 px-2 py-1.5 opacity-80"
           >
             <span className="min-w-0 flex-1 truncate text-sm text-zinc-400">{p.username}</span>
-            <span className="text-[10px] text-zinc-600">tab · konum yok</span>
+            <span className="text-[10px] text-zinc-600">{t("nearby.tabNoPos")}</span>
             <button
               type="button"
               disabled={!online}
               onClick={() => toggleFollow(p.username)}
               className={isFollow(p.username) ? btnFollowOn : btnIdle}
             >
-              {isFollow(p.username) ? "● Takip (bekle)" : "Takip (bekle)"}
+              {isFollow(p.username) ? t("nearby.followWaitOn") : t("nearby.followWait")}
             </button>
             <button
               type="button"
@@ -289,7 +328,7 @@ export function NearbyPlayers({ botId }: { botId: string }) {
               onClick={() => toggleProtect(p.username)}
               className={isProtect(p.username) ? btnProtectOn : btnIdle}
             >
-              {isProtect(p.username) ? "● Koru" : "Koru"}
+              {isProtect(p.username) ? t("nearby.protectOn") : t("nearby.protect")}
             </button>
           </div>
         ))}

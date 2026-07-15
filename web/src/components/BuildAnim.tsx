@@ -1,7 +1,9 @@
+import { useI18n } from "../i18n/useI18n";
 import type { BuildPlacedBlock, BuildRuntime } from "../lib/types";
 
 /** İnşaat ilerleme — hafif, takılmayan UI (ağır animasyon kaldırıldı) */
 export function BuildAnim({ build }: { build: BuildRuntime }) {
+  const { t } = useI18n();
   const last = build.lastBlock;
   const recent = build.recentBlocks ?? [];
   const processed = build.placed + (build.skipped || 0) + (build.failed || 0);
@@ -32,7 +34,7 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
               {shortName(b.name)}
             </span>
           ))}
-          {!recent.length && <span className="text-[11px] text-zinc-600">Blok yerleşince burada listelenir</span>}
+          {!recent.length && <span className="text-[11px] text-zinc-600">{t("build.noBlocksYet")}</span>}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
@@ -53,16 +55,16 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
           </span>
           <span className="mono shrink-0 text-zinc-500">
             {processed}/{build.total || "?"}
-            {build.placed ? ` · konan ${build.placed}` : ""}
-            {build.skipped ? ` · atla ${build.skipped}` : ""}
-            {build.failed ? ` · hata ${build.failed}` : ""}
+            {build.placed ? ` ${t("build.placedCount", { n: build.placed })}` : ""}
+            {build.skipped ? ` ${t("build.skippedCount", { n: build.skipped })}` : ""}
+            {build.failed ? ` ${t("build.failedCount", { n: build.failed })}` : ""}
           </span>
         </div>
       </div>
 
       <div>
         <div className="mb-1 flex justify-between gap-2 text-[10px] text-zinc-500">
-          <span className="truncate">{build.label || "Bekleniyor"}</span>
+          <span className="truncate">{build.label || t("build.waiting")}</span>
           <span className="mono shrink-0">{pct}%</span>
         </div>
         <div className="h-2.5 overflow-hidden rounded border border-zinc-700 bg-zinc-950">

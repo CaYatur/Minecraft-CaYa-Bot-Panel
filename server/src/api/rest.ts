@@ -140,7 +140,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/chat",
     h((req, res) => {
       const text = String(req.body?.text ?? "").trim();
-      if (!text) throw new PanelError("Boş mesaj gönderilemez.");
+      if (!text) throw new PanelError("Cannot send an empty message.");
       manager.mustGet(req.params.id!).sendChat(text);
       res.json({ ok: true, queued: manager.mustGet(req.params.id!).chatQueueLength });
     })
@@ -153,17 +153,23 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       const inst = manager.mustGet(req.params.id!);
       let action: Record<string, unknown> = req.body ?? {};
 
-      // waypoint hedefi burada çözülür (görev etiketi waypoint adını taşır)
+      // waypoint targeti burada çözülür (görev etiketi waypoint adını taşır)
       if (action.type === "goto-waypoint") {
         const wp = manager.waypoints.get(String(action.waypointId ?? ""));
-        if (wp.serverId !== inst.config.serverId) throw new PanelError("Bu waypoint başka bir sunucu profiline ait.");
+        if (wp.serverId !== inst.config.serverId) throw new PanelError("This waypoint belongs to a different server profile.");
         if (inst.status === "online" && inst.runtime.dimension !== wp.dimension) {
-          throw new PanelError(`Waypoint ${wp.dimension} boyutunda, bot ${inst.runtime.dimension} boyutunda — önce boyut değiştir.`);
+          throw new PanelError(`Waypoint is in ${wp.dimension}, bot is in ${inst.runtime.dimension} — change dimension first.`);
         }
-        action = { type: "goto", x: wp.x, y: wp.y, z: wp.z, range: action.range ?? 2, label: `waypoint'e git: ${wp.name}` };
+        action = { type: "goto", x: wp.x, y: wp.y, z: wp.z, range: action.range ?? 2, label: `goto waypoint: ${wp.name}` };
       }
 
       try {
+        const actionType = String(action.type ?? "");
+        if (["reset-work", "reset-all", "işleri-sıfırla", "soft-reset"].includes(actionType)) {
+          manager.cancelAllWork(req.params.id!, String(action.reason ?? "all work reset from panel"));
+          res.json({ ok: true, task: null });
+          return;
+        }
         const task = inst.enqueueAction(action);
         res.json({ ok: true, task });
       } catch (err) {
@@ -176,8 +182,8 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/tasks/:taskId/cancel",
     h((req, res) => {
       const inst = manager.mustGet(req.params.id!);
-      if (!inst.tasks.cancel(req.params.taskId!, "panelden iptal edildi")) {
-        throw new PanelError("Görev bulunamadı (bitmiş olabilir).", 404);
+      if (!inst.tasks.cancel(req.params.taskId!, "cancelled from panel")) {
+        throw new PanelError("Task not found (it may have finished).", 404);
       }
       res.json({ ok: true });
     })
@@ -186,12 +192,12 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/bots/:id/tasks/cancel-all",
     h((req, res) => {
-      manager.mustGet(req.params.id!).tasks.cancelAll("panelden tümü iptal edildi");
+      manager.cancelAllWork(req.params.id!, "all cancelled from panel");
       res.json({ ok: true });
     })
   );
 
-  // ---- envanter (Faz 5) -----------------------------------------------------------
+  // ---- inventory (Faz 5) -----------------------------------------------------------
   r.post(
     "/bots/:id/inventory",
     h(async (req, res) => {
@@ -201,7 +207,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       } catch (err) {
         if (err instanceof PanelError) throw err;
         // mineflayer'ın ham hataları (equip timeout vb.) panele anlaşılır dönsün
-        throw new PanelError(`Envanter işlemi başarısız: ${err instanceof Error ? err.message : String(err)}`);
+        throw new PanelError(`Inventory action failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       res.json({ ok: true });
     })
@@ -212,7 +218,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/waypoints",
     h((req, res) => {
       const serverId = String(req.query.serverId ?? "");
-      if (!serverId) throw new PanelError("serverId sorgu parametresi gerekli.");
+      if (!serverId) throw new PanelError("serverId query parameter is required.");
       res.json(manager.waypoints.forServer(serverId));
     })
   );
@@ -237,7 +243,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/waypoint-here",
     h((req, res) => {
       const inst = manager.mustGet(req.params.id!);
-      if (inst.status !== "online") throw new PanelError("Bot çevrimdışı — güncel konum alınamıyor.");
+      if (inst.status !== "online") throw new PanelError("Bot offline — cannot read current position.");
       const wp = manager.createWaypoint(inst.config.serverId, {
         name: String(req.body?.name ?? ""),
         x: inst.runtime.position.x,
@@ -273,7 +279,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/bots/:id/tasks/pause",
     h((req, res) => {
-      const ok = manager.mustGet(req.params.id!).tasks.pause("panelden duraklatıldı");
+      const ok = manager.mustGet(req.params.id!).tasks.pause("paused from panel");
       res.json({ ok });
     })
   );
@@ -297,7 +303,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     h((req, res) => {
       const item = String(req.query.item ?? "");
       const count = Math.max(1, Number(req.query.count) || 1);
-      if (!item) throw new PanelError("item sorgu parametresi gerekli");
+      if (!item) throw new PanelError("item query parameter is required");
       res.json({ plan: manager.mustGet(req.params.id!).craft.previewPlan(item, count) });
     })
   );
@@ -336,7 +342,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/rules/:id/test",
     h(async (req, res) => {
       const botId = String(req.body?.botId ?? "");
-      if (!botId) throw new PanelError("botId gerekli");
+      if (!botId) throw new PanelError("botId is required");
       await manager.rules.testRule(req.params.id!, botId);
       res.json({ ok: true });
     })
@@ -347,7 +353,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       const name = decodeURIComponent(String(req.params.name ?? ""));
       const bp = findBlueprint(name);
       const tpl = bp?.rule ?? RULE_TEMPLATES.find((t) => t.name === name);
-      if (!tpl) throw new PanelError("Şablon/blueprint bulunamadı", 404);
+      if (!tpl) throw new PanelError("Template/blueprint not found", 404);
       res.json(
         manager.rules.create({
           ...tpl,
@@ -363,7 +369,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/world-memory",
     h((req, res) => {
       const serverId = String(req.query.serverId ?? "");
-      if (!serverId) throw new PanelError("serverId gerekli");
+      if (!serverId) throw new PanelError("serverId is required");
       res.json({
         chests: manager.worldMemory.chestsFor(serverId),
         ores: manager.worldMemory.oresFor(serverId)
@@ -432,7 +438,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/schematics/:id",
     h(async (req, res) => {
       const meta = getSchematicMeta(req.params.id!);
-      if (!meta) throw new PanelError("Şema bulunamadı", 404);
+      if (!meta) throw new PanelError("Schematic not found", 404);
       const version = String(req.query.version ?? "1.20.4");
       const parsed = await loadParsedSchematic(meta.id, version);
       res.json({
@@ -456,16 +462,16 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     h(async (req, res) => {
       const body = req.body ?? {};
       if (Array.isArray(body.blocks)) {
-        if (body.blocks.length > 150_000) throw new PanelError("En fazla 150000 blok");
-        res.json(addCayaJsonSchematic({ name: String(body.name || "Şema"), blocks: body.blocks, note: body.note }));
+        if (body.blocks.length > 150_000) throw new PanelError("Maximum 150000 blocks");
+        res.json(addCayaJsonSchematic({ name: String(body.name || "Schematic"), blocks: body.blocks, note: body.note }));
         return;
       }
-      if (!body.dataBase64) throw new PanelError("dataBase64 veya blocks gerekli");
+      if (!body.dataBase64) throw new PanelError("dataBase64 or blocks required");
       // base64 boyutu kaba kontrol (≈ 25MB binary)
-      if (String(body.dataBase64).length > 36 * 1024 * 1024) throw new PanelError("Dosya çok büyük (max ~25MB)");
+      if (String(body.dataBase64).length > 36 * 1024 * 1024) throw new PanelError("File too large (max ~25MB)");
       res.json(
         await addSchematicFromBase64({
-          name: String(body.name || "Şema"),
+          name: String(body.name || "Schematic"),
           filename: body.filename ? String(body.filename) : undefined,
           dataBase64: String(body.dataBase64),
           note: body.note ? String(body.note) : undefined
@@ -478,7 +484,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/schematics/:id",
     h((req, res) => {
       try {
-        if (!deleteSchematic(req.params.id!)) throw new PanelError("Şema bulunamadı", 404);
+        if (!deleteSchematic(req.params.id!)) throw new PanelError("Schematic not found", 404);
         res.json({ ok: true });
       } catch (e) {
         if (e instanceof PanelError) throw e;
@@ -499,7 +505,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     h(async (req, res) => {
       const inst = manager.mustGet(req.params.id!);
       const schematicId = String(req.query.schematicId ?? "");
-      if (!schematicId) throw new PanelError("schematicId gerekli");
+      if (!schematicId) throw new PanelError("schematicId is required");
       const version = String(req.query.version ?? "1.20.4");
       const rotateY = req.query.rotateY != null ? Number(req.query.rotateY) : 0;
       const mirrorX = req.query.mirrorX === "1" || req.query.mirrorX === "true";
@@ -523,5 +529,5 @@ export function restErrorHandler(err: unknown, _req: Request, res: Response, _ne
     res.status(err.httpStatus).json({ error: err.message });
     return;
   }
-  res.status(500).json({ error: err instanceof Error ? err.message : "Bilinmeyen sunucu hatası" });
+  res.status(500).json({ error: err instanceof Error ? err.message : "Unknown server error" });
 }

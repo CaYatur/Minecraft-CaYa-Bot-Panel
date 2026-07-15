@@ -1,4 +1,4 @@
-/** REST katmanının HTTP koduna çevirebildiği hata tipi (döngüsel import'u önlemek için ayrı dosyada). */
+/** REST katmanının HTTP koduna çevirebildiği hata tipi (döngüsel import'u önlemek for ayrı dosyada). */
 export class PanelError extends Error {
   constructor(
     message: string,

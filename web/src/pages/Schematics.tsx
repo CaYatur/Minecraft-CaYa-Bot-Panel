@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { FolderOpen } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
@@ -83,7 +84,7 @@ export function Schematics() {
         dataBase64,
         note: note.trim() || undefined
       });
-      toast("success", `Yüklendi: ${meta.name}`);
+      toast("success", t("schematics.uploaded", { name: meta.name }));
       setName("");
       setNote("");
       await refresh();
@@ -96,10 +97,10 @@ export function Schematics() {
   };
 
   const remove = async (id: string) => {
-    if (!confirm("Şema silinsin mi?")) return;
+    if (!confirm(t("schematics.deleteConfirm", { name: items.find((it) => it.id === id)?.name ?? "" }))) return;
     try {
       await api.del(`/api/schematics/${id}`);
-      toast("info", "Şema silindi");
+      toast("info", t("schematics.schematicDeleted"));
       if (selected === id) setSelected(null);
       await refresh();
     } catch (e) {
@@ -112,19 +113,26 @@ export function Schematics() {
       <div>
         <h1 className="text-xl font-bold text-zinc-100">{t("schematics.title")}</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          WorldEdit <span className="mono text-zinc-400">.schem</span>, Litematica{" "}
-          <span className="mono text-zinc-400">.litematic</span> veya CaYa{" "}
-          <span className="mono text-zinc-400">.caya.json</span>. Bot detay → Yapı sekmesinden inşa +
-          döndür/aynala.
+          {t("schematics.subtitle", { schem: ".schem", litematic: ".litematic", caya: ".caya.json" })
+            .split(/(\.schem|\.litematic|\.caya\.json)/)
+            .map((part, i) =>
+              part === ".schem" || part === ".litematic" || part === ".caya.json" ? (
+                <span key={i} className="mono text-zinc-400">
+                  {part}
+                </span>
+              ) : (
+                <span key={i}>{part}</span>
+              )
+            )}
         </p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* liste + upload */}
         <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-          <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Kütüphane</div>
+          <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("schematics.library")}</div>
           <div className="max-h-72 space-y-1 overflow-y-auto">
-            {items.length === 0 && <p className="text-xs text-zinc-600 italic">Henüz şema yok.</p>}
+            {items.length === 0 && <p className="text-xs text-zinc-600 italic">{t("schematics.empty")}</p>}
             {items.map((it) => (
               <button
                 key={it.id}
@@ -138,28 +146,34 @@ export function Schematics() {
               >
                 <span className="min-w-0 flex-1 truncate font-medium">{it.name}</span>
                 <span className="mono shrink-0 text-[10px] text-zinc-500">
-                  {it.blockCount != null ? `${it.blockCount} blok` : it.format}
+                  {it.blockCount != null ? `${it.blockCount} ${t("schematics.blocks")}` : it.format}
                 </span>
               </button>
             ))}
           </div>
 
           <div className="border-t border-zinc-800 pt-3 space-y-2">
-            <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Yükle</div>
+            <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("schematics.upload")}</div>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Görünen ad (opsiyonel)"
+              placeholder={t("schematics.displayNamePlaceholder")}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
             />
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Not (opsiyonel)"
+              placeholder={t("schematics.notePlaceholder")}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
             />
-            <label className="flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-950/50 px-3 py-4 text-sm text-zinc-400 hover:border-indigo-600 hover:text-indigo-300">
-              {uploading ? "Yükleniyor…" : "📂 .schem / .litematic / .caya.json seç"}
+            <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-700 bg-zinc-950/50 px-3 py-4 text-sm text-zinc-400 hover:border-indigo-600 hover:text-indigo-300">
+              {uploading ? (
+                t("schematics.uploadingLabel")
+              ) : (
+                <>
+                  <FolderOpen className="h-4 w-4" /> {t("schematics.fileSelectLabel")}
+                </>
+              )}
               <input
                 type="file"
                 accept=".schem,.schematic,.litematic,.json,.caya.json"
@@ -173,15 +187,15 @@ export function Schematics() {
 
         {/* detay */}
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-          <div className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Detay / malzemeler</div>
-          {!detail && <p className="text-xs text-zinc-600 italic">Soldan bir şema seçin.</p>}
+          <div className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("schematics.detailMaterials")}</div>
+          {!detail && <p className="text-xs text-zinc-600 italic">{t("schematics.selectFromLeft")}</p>}
           {detail && (
             <div className="space-y-3">
               <div>
                 <div className="text-lg font-semibold text-zinc-100">{detail.meta.name}</div>
                 {detail.meta.note && <p className="text-xs text-zinc-500">{detail.meta.note}</p>}
                 <p className="mono mt-1 text-[11px] text-zinc-500">
-                  {detail.size.w}×{detail.size.h}×{detail.size.l} · {detail.blockCount} blok · {detail.meta.format} ·{" "}
+                  {detail.size.w}×{detail.size.h}×{detail.size.l} · {detail.blockCount} {t("schematics.blocks")} · {detail.meta.format} ·{" "}
                   {(detail.meta.sizeBytes / 1024).toFixed(1)} KB
                 </p>
               </div>
@@ -189,8 +203,8 @@ export function Schematics() {
                 <table className="w-full text-left text-xs">
                   <thead className="sticky top-0 bg-zinc-900 text-zinc-500">
                     <tr>
-                      <th className="px-2 py-1.5 font-medium">Blok</th>
-                      <th className="px-2 py-1.5 font-medium text-right">Adet</th>
+                      <th className="px-2 py-1.5 font-medium">{t("schematics.blockColumn")}</th>
+                      <th className="px-2 py-1.5 font-medium text-right">{t("schematics.countColumn")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -210,10 +224,21 @@ export function Schematics() {
                   onClick={() => void remove(detail.meta.id)}
                   className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/40 disabled:opacity-40"
                 >
-                  Sil
+                  {t("schematics.delete")}
                 </button>
                 <span className="text-[10px] leading-relaxed text-zinc-600">
-                  İnşa için bot detay sayfasındaki <b className="text-zinc-400">Yapı</b> sekmesini kullanın.
+                  {t("schematics.buildTabHint", { tab: ".build." })
+                    .split(".build.")
+                    .map((part, i, arr) =>
+                      i < arr.length - 1 ? (
+                        <span key={i}>
+                          {part}
+                          <b className="text-zinc-400">{t("schematics.buildTab")}</b>
+                        </span>
+                      ) : (
+                        <span key={i}>{part}</span>
+                      )
+                    )}
                 </span>
               </div>
             </div>

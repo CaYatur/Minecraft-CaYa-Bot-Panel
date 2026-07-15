@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { MapPin } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { fmtPos } from "../lib/format";
@@ -226,7 +227,7 @@ export function CombatPanel({ botId }: { botId: string }) {
             {wards.length > 0 && (
               <>
                 {" · "}
-                eşlik: <span className="text-indigo-300">{wards.join(", ")}</span>
+                {t("combat.escortLabel")} <span className="text-indigo-300">{wards.join(", ")}</span>
               </>
             )}
           </span>
@@ -241,7 +242,7 @@ export function CombatPanel({ botId }: { botId: string }) {
           </div>
           <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">{t("combat.selfDefenseHint")}</p>
 
-          <div className="mb-1 text-[10px] font-medium tracking-wide text-zinc-500 uppercase">Hedef</div>
+          <div className="mb-1 text-[10px] font-medium tracking-wide text-zinc-500 uppercase">{t("combat.targetType")}</div>
           <div className="mb-3 flex flex-wrap gap-1.5">
             {DEFEND_OPTIONS.map((o) => (
               <button
@@ -261,21 +262,21 @@ export function CombatPanel({ botId }: { botId: string }) {
 
           <div className="grid gap-3 sm:grid-cols-2">
             <NumField
-              label="Tarama menzili (blok)"
+              label={t("combat.scanRange")}
               value={defendRange}
               min={4}
               max={32}
               onCommit={(v) => void patchCombat({ defendRange: v })}
             />
             <NumField
-              label="Kaçış can eşiği"
+              label={t("combat.fleeHealth")}
               value={cfg.fleeAtHealth}
               min={1}
               max={20}
               onCommit={(v) => void patchCombat({ fleeAtHealth: v })}
             />
             <NumField
-              label="Kovalama mesafesi"
+              label={t("combat.chaseDistance")}
               value={cfg.chaseDistance}
               min={4}
               max={64}
@@ -283,7 +284,7 @@ export function CombatPanel({ botId }: { botId: string }) {
             />
           </div>
           <p className="mt-2 text-[10px] text-zinc-600">
-            Örn. can ≤ {cfg.fleeAtHealth} → kaç; üstündeyse menzildeki ({defendRange}m) mob&apos;u öldür.
+            {t("combat.selfDefenseExample", { health: cfg.fleeAtHealth, range: defendRange })}
           </p>
         </section>
 
@@ -347,57 +348,52 @@ export function CombatPanel({ botId }: { botId: string }) {
               onCommit={(v) => void patchCombat({ cleaveRange: v })}
             />
           </div>
-          <p className="mt-2 text-[10px] text-zinc-600">
-            Örn. Steve&apos;e saldırırken üstüne binen zombie veya seni vuran yakın oyuncu da isabet alır (cooldown
-            paylaşır — gerçekçi vuruş temposu).
-          </p>
+          <p className="mt-2 text-[10px] text-zinc-600">{t("combat.cleaveExample")}</p>
         </section>
 
         {/* ── Eşlik koruması ── */}
         <section className="rounded-lg border border-indigo-900/40 bg-indigo-950/15 p-3">
           <div className="mb-1 flex flex-wrap items-center gap-2">
-            <div className="text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">Eşlik koruması</div>
+            <div className="text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">{t("combat.escort")}</div>
             {wards.length > 0 ? (
               <span className="rounded-full bg-indigo-950/60 px-2 py-0.5 text-[10px] text-indigo-200">
                 {wards.join(", ")}
-                {c.companion?.followPlayer ? ` · ana ${c.companion.followPlayer}` : ""}
+                {c.companion?.followPlayer ? t("combat.escortMain", { name: c.companion.followPlayer }) : ""}
               </span>
             ) : (
-              <span className="text-[10px] text-zinc-600 italic">kimse yok → Yakındaki oyuncular · Koru</span>
+              <span className="text-[10px] text-zinc-600 italic">{t("combat.escortNone")}</span>
             )}
           </div>
-          <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
-            Korunan kişinin yanındaki tehditler. Kişi ekle/çıkar: Yakındaki oyuncular. Ayarlar anlık.
-          </p>
+          <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">{t("combat.escortHint")}</p>
 
-          <div className="mb-1 text-[10px] font-medium tracking-wide text-zinc-500 uppercase">Saldırı modu</div>
+          <div className="mb-1 text-[10px] font-medium tracking-wide text-zinc-500 uppercase">{t("combat.attackModeLabel")}</div>
           <div className="mb-3 flex flex-wrap gap-1.5">
             <button
               type="button"
               onClick={() => applyProtect({ protectAggro: "threats" })}
               className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${chip(aggro === "threats")}`}
             >
-              Sadece tehdit
+              {t("combat.aggroThreatsOnly")}
             </button>
             <button
               type="button"
               onClick={() => applyProtect({ protectAggro: "non_whitelist" })}
               className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${chip(aggro === "non_whitelist", "amber")}`}
             >
-              Beyaz liste dışı
+              {t("combat.aggroNonWhitelist")}
             </button>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <NumField
-              label="Koruma menzili"
+              label={t("combat.protectRange")}
               value={escortPs.range ?? 10}
               min={4}
               max={32}
               onCommit={(v) => applyProtect({ range: v })}
             />
             <NumField
-              label="Ana takip mesafesi"
+              label={t("combat.mainFollowDistance")}
               value={followDist}
               min={1}
               max={16}
@@ -412,7 +408,7 @@ export function CombatPanel({ botId }: { botId: string }) {
                 checked={escortPs.retaliateMobs ?? true}
                 onChange={(e) => applyProtect({ retaliateMobs: e.target.checked })}
               />
-              Mob
+              {t("combat.retaliateMob")}
             </label>
             <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
               <input
@@ -420,13 +416,13 @@ export function CombatPanel({ botId }: { botId: string }) {
                 checked={escortPs.retaliatePlayers ?? true}
                 onChange={(e) => applyProtect({ retaliatePlayers: e.target.checked })}
               />
-              Oyuncu
+              {t("combat.retaliatePlayer")}
             </label>
           </div>
 
           <label className="mt-3 flex flex-col gap-1 text-xs text-zinc-400">
             <span>
-              Beyaz liste <span className="font-normal text-zinc-600">(virgül · saldırmasın)</span>
+              {t("combat.whitelistLabel")} <span className="font-normal text-zinc-600">{t("combat.whitelistHint")}</span>
             </span>
             <input
               value={whitelistText}
@@ -442,7 +438,7 @@ export function CombatPanel({ botId }: { botId: string }) {
                   .filter(Boolean);
                 applyProtect({ whitelist: wl });
               }}
-              placeholder="oyuncu1, oyuncu2"
+              placeholder={t("combat.whitelistPlaceholder")}
               className={inputCls}
             />
           </label>
@@ -451,85 +447,85 @@ export function CombatPanel({ botId }: { botId: string }) {
 
       {/* ── Hedefli saldırı ── */}
       <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Hedefli saldırı</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("combat.targetedAttack")}</div>
         <div className="flex flex-wrap items-center gap-2">
           <input
             value={target}
             onChange={(e) => setTarget(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && target && act({ type: "attack", player: target }, `Saldırı: ${target}`)}
-            placeholder="Oyuncu adı"
+            onKeyDown={(e) => e.key === "Enter" && target && act({ type: "attack", player: target }, t("combat.attackToast", { name: target }))}
+            placeholder={t("common.playerNamePlaceholder")}
             className={`w-44 ${inputCls}`}
           />
           <button
             type="button"
-            onClick={() => act({ type: "attack", player: target }, `Saldırı: ${target}`)}
+            onClick={() => act({ type: "attack", player: target }, t("combat.attackToast", { name: target }))}
             disabled={!online || !target.trim()}
             className="rounded-lg bg-red-900/60 px-3 py-1.5 text-sm font-medium text-red-200 hover:bg-red-800/60 disabled:opacity-40"
           >
-            Saldır
+            {t("combat.attackButton")}
           </button>
           <input
             value={radius}
             onChange={(e) => setRadius(e.target.value)}
             className={`mono w-16 ${inputCls}`}
-            title="Mob temizleme yarıçapı"
+            title={t("combat.clearMobsRadiusTitle")}
           />
           <button
             type="button"
-            onClick={() => act({ type: "clear-mobs", radius: Number(radius) || 16 }, "Mob temizliği başlatıldı")}
+            onClick={() => act({ type: "clear-mobs", radius: Number(radius) || 16 }, t("combat.clearMobsToast"))}
             disabled={!online}
             className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
           >
-            Mob temizle
+            {t("combat.clearMobsButton")}
           </button>
         </div>
-        <p className="mono mt-2 text-[10px] text-zinc-600">komut: attack isim · mobtemizle [r] · kac · loot · stop</p>
+        <p className="mono mt-2 text-[10px] text-zinc-600">{t("combat.commandsHint")}</p>
       </section>
 
       {/* ── Gerçekçilik ── */}
       <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Gerçekçilik</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("combat.realismTitle")}</div>
         <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
-          RealismLayer: bak → menzil ≤ {cfg.reach} · görüş hattı · vuruş temposu · tepki {cfg.reactionMsMin}–
-          {cfg.reactionMsMax} ms. Aimbot / duvar arkası yok (§9). Değerler anlık.
+          {t("combat.realismHint", { reach: cfg.reach, reactionMin: cfg.reactionMsMin, reactionMax: cfg.reactionMsMax })}
         </p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <NumField label="Menzil (blok)" value={cfg.reach} step={0.1} min={1} max={4} onCommit={(v) => void patchCombat({ reach: v })} />
-          <NumField label="CPS tavanı (1.8)" value={cfg.cpsCap} min={1} max={15} onCommit={(v) => void patchCombat({ cpsCap: v })} />
-          <NumField label="Tepki min (ms)" value={cfg.reactionMsMin} min={0} max={1000} onCommit={(v) => void patchCombat({ reactionMsMin: v })} />
-          <NumField label="Tepki max (ms)" value={cfg.reactionMsMax} min={0} max={1500} onCommit={(v) => void patchCombat({ reactionMsMax: v })} />
-          <NumField label="Dönüş °/tick" value={cfg.turnSpeedDegPerTick} min={5} max={90} onCommit={(v) => void patchCombat({ turnSpeedDegPerTick: v })} />
+          <NumField label={t("combat.rangeLabel")} value={cfg.reach} step={0.1} min={1} max={4} onCommit={(v) => void patchCombat({ reach: v })} />
+          <NumField label={t("combat.cpsCapLabel")} value={cfg.cpsCap} min={1} max={15} onCommit={(v) => void patchCombat({ cpsCap: v })} />
+          <NumField label={t("combat.reactionMinLabel")} value={cfg.reactionMsMin} min={0} max={1000} onCommit={(v) => void patchCombat({ reactionMsMin: v })} />
+          <NumField label={t("combat.reactionMaxLabel")} value={cfg.reactionMsMax} min={0} max={1500} onCommit={(v) => void patchCombat({ reactionMsMax: v })} />
+          <NumField label={t("combat.turnSpeedLabel")} value={cfg.turnSpeedDegPerTick} min={5} max={90} onCommit={(v) => void patchCombat({ turnSpeedDegPerTick: v })} />
           <label className="flex items-center gap-2 text-sm text-zinc-300">
             <input type="checkbox" checked={cfg.jumpCrit} onChange={(e) => void patchCombat({ jumpCrit: e.target.checked })} />
-            Zıplayarak kritik
+            {t("combat.jumpCritLabel")}
           </label>
         </div>
       </section>
 
       {/* ── Ölüm & loot ── */}
       <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Ölüm &amp; loot</div>
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("combat.deathLootTitle")}</div>
         {c.lastDeath ? (
           <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="mono text-zinc-300">
-              📍 {fmtPos(c.lastDeath)} <span className="text-zinc-600">({c.lastDeath.dimension})</span>
+            <span className="mono flex items-center gap-1 text-zinc-300">
+              <MapPin className="h-3.5 w-3.5 shrink-0" /> {fmtPos(c.lastDeath)}{" "}
+              <span className="text-zinc-600">({c.lastDeath.dimension})</span>
             </span>
             <span className={`text-xs ${lootLeft > 0 ? "text-amber-300" : "text-zinc-600"}`}>
               {lootLeft > 0
-                ? `Loot: ${Math.floor(lootSec / 60)}:${String(lootSec % 60).padStart(2, "0")}`
-                : "Süre dolmuş olabilir"}
+                ? t("combat.lootCountdown", { time: `${Math.floor(lootSec / 60)}:${String(lootSec % 60).padStart(2, "0")}` })
+                : t("combat.lootExpired")}
             </span>
             <button
               type="button"
-              onClick={() => act({ type: "loot-death" }, "Ölüm noktasına gidiliyor")}
+              onClick={() => act({ type: "loot-death" }, t("combat.gotoDeathToast"))}
               disabled={!online || lootLeft <= 0}
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
             >
-              Eşyaları geri topla
+              {t("combat.recoverItemsButton")}
             </button>
           </div>
         ) : (
-          <p className="text-xs text-zinc-600 italic">Henüz kayıtlı ölüm yok. Ölünce waypoint: ölüm-&lt;bot&gt;</p>
+          <p className="text-xs text-zinc-600 italic">{t("combat.noDeathRecorded")}</p>
         )}
       </section>
     </div>

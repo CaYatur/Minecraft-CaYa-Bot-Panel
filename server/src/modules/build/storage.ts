@@ -26,7 +26,7 @@ function sleep(ms: number) {
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
   return bot;
 }
 
@@ -50,14 +50,14 @@ function containerItems(container: OpenContainer): ContainerItem[] {
 
 async function openContainer(bot: Bot, block: unknown): Promise<OpenContainer> {
   const api = bot as unknown as { openContainer(block: unknown): Promise<OpenContainer> };
-  if (typeof api.openContainer !== "function") throw new Error("openContainer desteği yok");
+  if (typeof api.openContainer !== "function") throw new Error("openContainer not supported");
   return api.openContainer(block);
 }
 
 /**
  * Yakındaki oyuncu depolarından malzeme alır.
- * Sandık/barrel ve dünyaya yerleştirilmiş shulker kutuları yalnızca açılır; kırılmaz.
- * Envanterde taşınan shulker ise güvenli noktaya geçici konur ve işlem sonunda geri alınır.
+ * Sandık/barrel ve worldya placeilmiş shulker kutuları yalnızca açılır; kırılmaz.
+ * Inventory has insufficient taşınan shulker ise safe noktaya geçici konur ve işlem sonunda geri alınır.
  */
 export async function withdrawBuildMaterials(
   instance: BotInstance,
@@ -83,7 +83,7 @@ export async function withdrawBuildMaterials(
 
   const visited = new Set<string>();
   for (const position of positions) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     if (inventoryCount(bot, names) - before >= wanted) break;
     const key = `${position.x},${position.y},${position.z}`;
     if (visited.has(key)) continue;
@@ -104,7 +104,7 @@ export async function withdrawBuildMaterials(
     } catch (error) {
       instance
         .getLogger()
-        .warn("Depo okunamadı", `${block.name}: ${error instanceof Error ? error.message : String(error)}`);
+        .warn("Storage read failed", `${block.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -114,10 +114,10 @@ export async function withdrawBuildMaterials(
       (item) => item.name === "shulker_box" || item.name.endsWith("_shulker_box")
     );
     for (const shulker of shulkers) {
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       if (inventoryCount(bot, names) - before >= wanted) break;
       try {
-        onActivity(`Taşınan shulker açılıyor: ${shulker.name}`);
+        onActivity(`Opening carried shulker: ${shulker.name}`);
         await withPortableShulker(instance, shulker.name, token, async (container) => {
           await withdrawMatching(
             container,
@@ -128,13 +128,13 @@ export async function withdrawBuildMaterials(
       } catch (error) {
         instance
           .getLogger()
-          .warn("Shulker kullanılamadı", error instanceof Error ? error.message : String(error));
+          .warn("Could not use shulker", error instanceof Error ? error.message : String(error));
       }
     }
   }
 
   const taken = Math.max(0, inventoryCount(bot, names) - before);
-  if (taken > 0) onActivity(`Depodan alındı: ${[...names].join("/")} ×${taken}`);
+  if (taken > 0) onActivity(`Depodan withdrawn: ${[...names].join("/")} ×${taken}`);
   return taken;
 }
 
@@ -188,10 +188,10 @@ async function withPortableShulker(
     0
   );
   const location = findSafePortablePosition(bot);
-  if (!location) throw new Error("Shulker için güvenli geçici yer yok");
+  if (!location) throw new Error("No safe temporary spot for shulker");
 
   const item = bot.inventory.items().find((entry) => entry.name === shulkerName);
-  if (!item) throw new Error(`${shulkerName} envanterde yok`);
+  if (!item) throw new Error(`${shulkerName} inventoryde yok`);
 
   bot.pathfinder?.setGoal(null);
   bot.clearControlStates();
@@ -203,7 +203,7 @@ async function withPortableShulker(
 
   const placed = bot.blockAt(location.target);
   if (!placed || placed.name !== shulkerName) {
-    throw new Error("Shulker yerleştirilemedi");
+    throw new Error("Shulker placeilemedi");
   }
 
   let container: OpenContainer | null = null;
@@ -217,7 +217,7 @@ async function withPortableShulker(
       // no-op
     }
 
-    // Yalnızca bu fonksiyonun yerleştirdiği kesin koordinattaki shulker geri alınır.
+    // Yalnızca bu fonksiyonun placediği kesin koordinattaki shulker geri alınır.
     const live = bot.blockAt(location.target);
     if (live?.name === shulkerName && bot.canDigBlock(live)) {
       try {
@@ -244,7 +244,7 @@ async function withPortableShulker(
     if (now >= beforeShulkers) return;
     await sleep(100);
   }
-  throw new Error("Geçici shulker geri alınamadı; konumu loglardan kontrol edin");
+  throw new Error("Temporary shulker could not be reclaimed; check logs for position");
 }
 
 function findSafePortablePosition(bot: Bot): {

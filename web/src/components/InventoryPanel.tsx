@@ -1,14 +1,9 @@
 import { useState } from "react";
+import { Ban, Hand, MousePointerClick, Pin, Shield } from "lucide-react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import type { InventoryItem, StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
-
-const ARMOR = [
-  { slot: 5, label: "Kask" },
-  { slot: 6, label: "Göğüs" },
-  { slot: 7, label: "Bacak" },
-  { slot: 8, label: "Ayak" }
-] as const;
 const OFFHAND = 45;
 const MAIN = Array.from({ length: 27 }, (_, i) => 9 + i);
 const HOTBAR = Array.from({ length: 9 }, (_, i) => 36 + i);
@@ -29,6 +24,14 @@ export function InventoryPanel({ botId }: { botId: string }) {
   const toast = useAppStore((s) => s.toast);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const [selected, setSelected] = useState<number | null>(null);
+  const { t } = useI18n();
+
+  const ARMOR = [
+    { slot: 5, label: t("inventory.helmet") },
+    { slot: 6, label: t("inventory.chestplate") },
+    { slot: 7, label: t("inventory.leggings") },
+    { slot: 8, label: t("inventory.boots") }
+  ] as const;
 
   if (!bot) return null;
   const inv = bot.inventory;
@@ -77,11 +80,11 @@ export function InventoryPanel({ botId }: { botId: string }) {
         title={
           it
             ? `${it.displayName} ×${it.count}` +
-              (it.durability ? ` · dayanıklılık ${it.durability.left}/${it.durability.max}` : "") +
+              (it.durability ? ` · ${t("inventory.durability", { left: it.durability.left, max: it.durability.max })}` : "") +
               (it.enchants.length ? ` · ${it.enchants.join(", ")}` : "") +
-              (banned ? " · 🚫 yasaklı" : "") +
-              (keep ? " · 📌 korunuyor" : "")
-            : (label ?? "boş")
+              (banned ? ` · ${t("inventory.banned")}` : "") +
+              (keep ? ` · ${t("inventory.protected")}` : "")
+            : (label ?? t("inventory.emptySlot"))
         }
         className={`relative flex h-14 w-14 flex-col items-center justify-center rounded-lg border text-center transition-colors ${
           isSel
@@ -99,8 +102,8 @@ export function InventoryPanel({ botId }: { botId: string }) {
                 {it.count}
               </span>
             )}
-            {banned && <span className="absolute -top-1.5 -right-1.5 text-[11px]">🚫</span>}
-            {keep && <span className="absolute -top-1.5 -left-1.5 text-[11px]">📌</span>}
+            {banned && <Ban className="absolute -top-1.5 -right-1.5 h-3 w-3 text-red-400" />}
+            {keep && <Pin className="absolute -top-1.5 -left-1.5 h-3 w-3 text-indigo-300" />}
             {durPct !== null && (
               <span className="absolute bottom-0 left-1 h-0.5 rounded-full" style={{ width: `${Math.max(8, durPct * 0.9)}%`, backgroundColor: durPct > 50 ? "#4ade80" : durPct > 20 ? "#fbbf24" : "#f87171" }} />
             )}
@@ -119,28 +122,28 @@ export function InventoryPanel({ botId }: { botId: string }) {
     <div className="flex h-full flex-col gap-4 overflow-y-auto">
       {!online && (
         <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-          Bot çevrimdışı — {inv ? "son bilinen envanter gösteriliyor, işlemler kapalı." : "envanter verisi için botu başlat."}
+          {t("inventory.offlineHint", { detail: inv ? t("inventory.offlineWithInv") : t("inventory.offlineNoInv") })}
         </div>
       )}
 
       <div className="flex flex-wrap items-start gap-6">
         {/* zırh + offhand */}
         <div className="flex flex-col gap-1.5">
-          <div className="mb-0.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Zırh</div>
+          <div className="mb-0.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("inventory.armorLabel")}</div>
           {ARMOR.map((a) => (
             <SlotBox key={a.slot} slot={a.slot} label={a.label} />
           ))}
-          <div className="mt-1 mb-0.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Sol El</div>
-          <SlotBox slot={OFFHAND} label="Kalkan" />
+          <div className="mt-1 mb-0.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("inventory.offhandLabel")}</div>
+          <SlotBox slot={OFFHAND} label={t("inventory.shield")} />
         </div>
 
         {/* ana envanter + hotbar */}
         <div className="flex flex-col gap-3">
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Envanter</span>
+              <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("inventory.inventoryLabel")}</span>
               <span className={`mono text-[10px] ${used >= 36 ? "text-red-400" : used >= 30 ? "text-amber-400" : "text-zinc-600"}`}>
-                {used}/36 dolu
+                {t("inventory.slotsFull", { used })}
               </span>
             </div>
             <div className="grid grid-cols-9 gap-1.5">
@@ -150,7 +153,7 @@ export function InventoryPanel({ botId }: { botId: string }) {
             </div>
           </div>
           <div>
-            <div className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Hotbar (sarı = elde)</div>
+            <div className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("inventory.hotbarLabel")}</div>
             <div className="grid grid-cols-9 gap-1.5">
               {HOTBAR.map((s, i) => (
                 <SlotBox key={s} slot={s} hotbarIndex={i} />
@@ -161,38 +164,42 @@ export function InventoryPanel({ botId }: { botId: string }) {
 
         {/* ayarlar */}
         <div className="min-w-48 flex-1 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-          <div className="mb-2 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Otomatik</div>
-          <label className="flex items-center gap-2 text-sm text-zinc-300" title="Kapatma, bot yeniden bağlanınca tam etkili olur">
+          <div className="mb-2 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("inventory.autoLabel")}</div>
+          <label className="flex items-center gap-2 text-sm text-zinc-300" title={t("inventory.autoBestGearHint")}>
             <input
               type="checkbox"
               checked={autoBestGear}
               onChange={(e) => void patchInventoryConfig({ autoBestGear: e.target.checked })}
             />
-            En iyi zırhı otomatik giy
+            {t("inventory.autoBestGear")}
           </label>
-          <div className="mt-3 mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">🚫 Yasaklılar (bot kullanamaz)</div>
+          <div className="mt-3 mb-1 flex items-center gap-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+            <Ban className="h-3 w-3" /> {t("inventory.bannedLabel")}
+          </div>
           <div className="flex flex-wrap gap-1">
-            {bannedItems.length === 0 && <span className="text-xs text-zinc-600 italic">yok</span>}
+            {bannedItems.length === 0 && <span className="text-xs text-zinc-600 italic">{t("inventory.none")}</span>}
             {bannedItems.map((n) => (
               <button
                 key={n}
                 onClick={() => toggleList("bannedItems", n)}
                 className="mono rounded bg-red-950/60 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-900/60"
-                title="Yasağı kaldır"
+                title={t("inventory.removeBan")}
               >
                 {n} ×
               </button>
             ))}
           </div>
-          <div className="mt-3 mb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">📌 Korunanlar (asla atılmaz)</div>
+          <div className="mt-3 mb-1 flex items-center gap-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+            <Pin className="h-3 w-3" /> {t("inventory.keptLabel")}
+          </div>
           <div className="flex flex-wrap gap-1">
-            {keepItems.length === 0 && <span className="text-xs text-zinc-600 italic">yok</span>}
+            {keepItems.length === 0 && <span className="text-xs text-zinc-600 italic">{t("inventory.none")}</span>}
             {keepItems.map((n) => (
               <button
                 key={n}
                 onClick={() => toggleList("keepItems", n)}
                 className="mono rounded bg-indigo-950/60 px-1.5 py-0.5 text-[10px] text-indigo-300 hover:bg-indigo-900/60"
-                title="Korumayı kaldır"
+                title={t("inventory.removeKeep")}
               >
                 {n} ×
               </button>
@@ -213,33 +220,39 @@ export function InventoryPanel({ botId }: { botId: string }) {
             </span>
             {online && (
               <>
-                <ActionBtn onClick={() => op({ op: "hold", slot: selected }, "Ele alındı")}>✋ Eline Al</ActionBtn>
+                <ActionBtn onClick={() => op({ op: "hold", slot: selected }, t("inventory.holdToast"))}>
+                  <Hand className="h-3.5 w-3.5" /> {t("inventory.holdButton")}
+                </ActionBtn>
                 {equipDest(selectedItem.name) !== "hand" && (
-                  <ActionBtn onClick={() => op({ op: "equip", slot: selected }, "Kuşanıldı")}>🛡️ Kuşan</ActionBtn>
+                  <ActionBtn onClick={() => op({ op: "equip", slot: selected }, t("inventory.equipToast"))}>
+                    <Shield className="h-3.5 w-3.5" /> {t("inventory.equipButton")}
+                  </ActionBtn>
                 )}
                 {selected !== null && SLOT_TO_DEST[selected] && (
-                  <ActionBtn onClick={() => op({ op: "unequip", dest: SLOT_TO_DEST[selected] }, "Çıkarıldı")}>Çıkar</ActionBtn>
+                  <ActionBtn onClick={() => op({ op: "unequip", dest: SLOT_TO_DEST[selected] }, t("inventory.unequipToast"))}>
+                    {t("inventory.unequipButton")}
+                  </ActionBtn>
                 )}
                 {selected !== null && selected >= 36 && selected <= 44 && (
-                  <ActionBtn onClick={() => op({ op: "setHotbar", quickBar: selected - 36 })}>👆 Elde Seç</ActionBtn>
+                  <ActionBtn onClick={() => op({ op: "setHotbar", quickBar: selected - 36 })}>
+                    <MousePointerClick className="h-3.5 w-3.5" /> {t("inventory.setHotbarButton")}
+                  </ActionBtn>
                 )}
-                <ActionBtn onClick={() => op({ op: "toss", slot: selected, amount: 1 })}>1 At</ActionBtn>
+                <ActionBtn onClick={() => op({ op: "toss", slot: selected, amount: 1 })}>{t("inventory.tossOneButton")}</ActionBtn>
                 <ActionBtn danger onClick={() => op({ op: "toss", slot: selected })}>
-                  Hepsini At
+                  {t("inventory.tossAllButton")}
                 </ActionBtn>
               </>
             )}
             <ActionBtn onClick={() => selectedItem && toggleList("bannedItems", selectedItem.name)}>
-              {bannedItems.includes(selectedItem.name) ? "🚫 Yasağı Kaldır" : "🚫 Yasakla"}
+              <Ban className="h-3.5 w-3.5" /> {bannedItems.includes(selectedItem.name) ? t("inventory.unbanButton") : t("inventory.banButton")}
             </ActionBtn>
             <ActionBtn onClick={() => selectedItem && toggleList("keepItems", selectedItem.name)}>
-              {keepItems.includes(selectedItem.name) ? "📌 Korumayı Kaldır" : "📌 Koru"}
+              <Pin className="h-3.5 w-3.5" /> {keepItems.includes(selectedItem.name) ? t("inventory.unkeepButton") : t("inventory.keepButton")}
             </ActionBtn>
           </div>
         ) : (
-          <span className="text-xs text-zinc-600 italic">
-            Bir eşyaya tıkla → işlemler burada çıkar (eline al, kuşan, at, yasakla, koru…)
-          </span>
+          <span className="text-xs text-zinc-600 italic">{t("inventory.selectItemHint")}</span>
         )}
       </div>
     </div>
@@ -258,7 +271,7 @@ function ActionBtn({
   return (
     <button
       onClick={onClick}
-      className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
         danger ? "bg-red-950/60 text-red-300 hover:bg-red-900/60" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
       }`}
     >

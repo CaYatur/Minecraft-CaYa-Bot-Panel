@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import { ItemPicker } from "../ItemPicker";
 
 export type FlowAction = Record<string, unknown> & { type: string };
@@ -252,15 +253,21 @@ function FlowList({ nodes, onChange, depth, title, tone, ...props }: FlowListPro
       {nodes.map((node, index) => (
         <div key={node.id} className="relative">
           <div className="absolute top-2 right-2 z-10 flex gap-1">
-            <MiniButton disabled={index === 0} onClick={() => move(index, -1)} title="↑">↑</MiniButton>
-            <MiniButton disabled={index === nodes.length - 1} onClick={() => move(index, 1)} title="↓">↓</MiniButton>
-            <MiniButton onClick={() => duplicate(index)} title={props.t("automations.advanced.duplicate")}>⧉</MiniButton>
+            <MiniButton disabled={index === 0} onClick={() => move(index, -1)} title="Up">
+              <ChevronUp className="h-3 w-3" />
+            </MiniButton>
+            <MiniButton disabled={index === nodes.length - 1} onClick={() => move(index, 1)} title="Down">
+              <ChevronDown className="h-3 w-3" />
+            </MiniButton>
+            <MiniButton onClick={() => duplicate(index)} title={props.t("automations.advanced.duplicate")}>
+              <Copy className="h-3 w-3" />
+            </MiniButton>
             <MiniButton
               onClick={() => onChange(nodes.filter((_, itemIndex) => itemIndex !== index))}
               title={props.t("automations.advanced.remove")}
               danger
             >
-              ✕
+              <X className="h-3 w-3" />
             </MiniButton>
           </div>
           <NodeEditor
@@ -568,7 +575,9 @@ function ConditionGroupEditor({ group, onChange, ...props }: Omit<Props, "value"
               <CompareConditionEditor condition={item} onChange={(next) => updateItem(index, next)} t={props.t} />
             )}
           </div>
-          <MiniButton onClick={() => removeItem(index)} danger title={props.t("automations.advanced.remove")}>✕</MiniButton>
+          <MiniButton onClick={() => removeItem(index)} danger title={props.t("automations.advanced.remove")}>
+            <X className="h-3 w-3" />
+          </MiniButton>
         </div>
       ))}
       <div className="flex flex-wrap gap-1.5">
@@ -666,7 +675,27 @@ function ActionEditor({ action, onChange, ...props }: Omit<Props, "value" | "onC
     <div className="space-y-2">
       <div className="flex flex-wrap items-end gap-2">
         <Field label={props.t("automations.actionLabel")}>
-          <select value={type} onChange={(event) => onChange({ type: event.target.value })} className={fieldCls}>
+          <select
+            value={type}
+            onChange={(event) => {
+              const nextType = event.target.value;
+              onChange({
+                type: nextType,
+                ...(["collect", "collect_item", "mine"].includes(nextType) ? { countMode: "add" } : {}),
+                ...(nextType === "drop_items"
+                  ? {
+                      dropMode: "count",
+                      match: "exact",
+                      count: 1,
+                      respectKeepItems: true,
+                      failIfMissing: false,
+                      requireCount: false
+                    }
+                  : {})
+              });
+            }}
+            className={fieldCls}
+          >
             {props.actionMeta.map((meta) => (
               <option key={meta.type} value={meta.type}>{meta.category ? `${props.catLabel(meta.category)}: ` : ""}{props.metaLabel("actions", meta.type, meta.label)}</option>
             ))}
@@ -688,13 +717,62 @@ function ActionEditor({ action, onChange, ...props }: Omit<Props, "value" | "onC
             {type === "mine" ? (
               <ItemPicker version={props.catalogVersion} kind="ores" value={String(action.ore ?? "iron")} onChange={(ore) => patch({ ore: ore.replace(/_ore$/, "") })} />
             ) : (
-              <ItemPicker version={props.catalogVersion} kind={type === "collect" || type === "collect_item" ? "blocks" : "items"} value={String(action.item ?? action.block ?? "oak_log")} onChange={(item) => patch({ item, block: item })} />
+              <ItemPicker version={props.catalogVersion} kind="items" value={String(action.item ?? action.block ?? "oak_log")} onChange={(item) => patch({ item, block: item })} />
             )}
             <input value={String(action.count ?? 1)} onChange={(event) => patch({ count: event.target.value })} placeholder="{arg1}" className={`${fieldCls} w-24`} />
+            {["collect", "collect_item", "mine"].includes(type) && (
+              <Field label={props.t("automations.countModeLabel")}>
+                <select
+                  value={String(action.countMode ?? "add")}
+                  onChange={(event) => patch({ countMode: event.target.value })}
+                  className={fieldCls}
+                >
+                  <option value="add">{props.t("automations.countModeAdd")}</option>
+                  <option value="target">{props.t("automations.countModeTarget")}</option>
+                </select>
+              </Field>
+            )}
           </>
         )}
         {["clear-mobs", "clear_mobs", "hunt", "collect_drops"].includes(type) && <input type="number" value={Number(action.radius ?? 16)} onChange={(event) => patch({ radius: Number(event.target.value) })} className={`${fieldCls} w-24`} />}
         {type === "wait" && <input type="number" value={Number(action.seconds ?? 1)} onChange={(event) => patch({ seconds: Number(event.target.value) })} className={`${fieldCls} w-24`} />}
+        {type === "drop_items" && (
+          <>
+            <ItemPicker
+              version={props.catalogVersion}
+              kind="items"
+              value={String(action.item ?? "cobblestone")}
+              onChange={(item) => patch({ item })}
+            />
+            <Field label={props.t("automations.dropModeLabel")}>
+              <select value={String(action.dropMode ?? "count")} onChange={(event) => patch({ dropMode: event.target.value })} className={fieldCls}>
+                <option value="count">{props.t("automations.dropModeCount")}</option>
+                <option value="all">{props.t("automations.dropModeAll")}</option>
+                <option value="keep">{props.t("automations.dropModeKeep")}</option>
+              </select>
+            </Field>
+            {String(action.dropMode ?? "count") !== "all" && (
+              <input
+                min={0}
+                type="number"
+                value={Number(action.count ?? 1)}
+                onChange={(event) => patch({ count: Number(event.target.value) })}
+                className={`${fieldCls} w-24`}
+              />
+            )}
+            <Field label={props.t("automations.dropMatchLabel")}>
+              <select value={String(action.match ?? "exact")} onChange={(event) => patch({ match: event.target.value })} className={fieldCls}>
+                <option value="exact">{props.t("automations.dropMatchExact")}</option>
+                <option value="contains">{props.t("automations.dropMatchContains")}</option>
+              </select>
+            </Field>
+            <Check checked={action.respectKeepItems !== false} onChange={(checked) => patch({ respectKeepItems: checked })} label={props.t("automations.dropRespectKeep")} />
+            <Check checked={action.failIfMissing === true} onChange={(checked) => patch({ failIfMissing: checked })} label={props.t("automations.dropFailIfMissing")} />
+            {String(action.dropMode ?? "count") === "count" && (
+              <Check checked={action.requireCount === true} onChange={(checked) => patch({ requireCount: checked })} label={props.t("automations.dropRequireCount")} />
+            )}
+          </>
+        )}
         <button type="button" onClick={() => setJsonOpen((open) => !open)} className="rounded bg-zinc-800 px-2 py-1.5 text-[10px] text-zinc-400 hover:text-zinc-200">{props.t("automations.advanced.extraJson")}</button>
       </div>
       {jsonOpen && (

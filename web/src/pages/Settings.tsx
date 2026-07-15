@@ -1,3 +1,5 @@
+import { Globe } from "lucide-react";
+import { BotLogo } from "../components/BotLogo";
 import { useI18n } from "../i18n/useI18n";
 import type { LocalePreference } from "../i18n";
 import { useAppStore } from "../stores/useAppStore";
@@ -29,8 +31,8 @@ export function Settings() {
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Language */}
         <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/15 p-4 lg:col-span-2">
-          <div className="mb-1 text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">
-            🌐 {t("language.title")}
+          <div className="mb-1 flex items-center gap-1 text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">
+            <Globe className="h-3.5 w-3.5" /> {t("language.title")}
           </div>
           <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">{t("language.fallbackNote")}</p>
 
@@ -135,6 +137,32 @@ export function Settings() {
             <span className="text-zinc-300">İ6</span> — {t("settings.p6")}
           </li>
         </ul>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-sm">
+        <BotLogo className="h-6 w-6 shrink-0" />
+        <span className="font-semibold text-zinc-300">{t("app.name")}</span>
+        <span className="text-zinc-600">·</span>
+        <a
+          href="https://cayadev.com"
+          target="_blank"
+          rel="noreferrer"
+          className="text-zinc-400 hover:text-indigo-300 hover:underline"
+        >
+          cayadev.com
+        </a>
+        <span className="text-zinc-600">·</span>
+        <a
+          href="https://github.com/CaYatur"
+          target="_blank"
+          rel="noreferrer"
+          className="text-zinc-400 hover:text-indigo-300 hover:underline"
+        >
+          github.com/CaYatur
+        </a>
+        <span className="ml-auto text-xs text-zinc-600">
+          © {new Date().getFullYear()} ÇAĞAN TURGUT (CaYatur) — {t("settings.aboutLicense")}
+        </span>
       </div>
     </div>
   );

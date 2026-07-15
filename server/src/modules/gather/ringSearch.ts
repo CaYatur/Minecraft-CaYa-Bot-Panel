@@ -1,18 +1,22 @@
 import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
-import { runGoto } from "../movement";
+import { runGoto, runGotoXZ, type GotoOptions } from "../movement";
 
 export interface RingSearchOptions {
   step?: number;
   maxRadius?: number;
+  /** Y seviyesini sabitlemeden yüzeyde X/Z keşfi yapar. Ağaç/bitki for önerilir. */
+  surfaceTravel?: boolean;
+  /** Arama noktalarına giderken kullanılacak pathfinder izinleri. */
+  movement?: GotoOptions;
   /** return true when found and search should stop */
   probe: (bot: Bot) => boolean | Promise<boolean>;
 }
 
 /**
  * Halka arama (Faz 8): merkezden dışa halkalar; her durakta probe.
- * İlerleme: "aranıyor… halka k/n"
+ * İlerleme: "searching… ring k/n"
  */
 export async function ringSearch(
   instance: BotInstance,
@@ -21,7 +25,7 @@ export async function ringSearch(
   opts: RingSearchOptions
 ): Promise<boolean> {
   const bot = instance.bot;
-  if (!bot || instance.status !== "online") throw new Error("Bot çevrimdışı");
+  if (!bot || instance.status !== "online") throw new Error("Bot offline");
 
   const step = opts.step ?? 32;
   const maxR = opts.maxRadius ?? 256;
@@ -32,8 +36,8 @@ export async function ringSearch(
   if (await opts.probe(bot)) return true;
 
   for (let ring = 1; ring <= rings; ring++) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
-    report({ done: ring - 1, total: rings, label: `aranıyor… halka ${ring}/${rings}` });
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+    report({ done: ring - 1, total: rings, label: `searching… ring ${ring}/${rings}` });
 
     const r = ring * step;
     // 8 yön + ara noktalar (16 köşe)
@@ -45,9 +49,13 @@ export async function ringSearch(
     }
 
     for (const p of points) {
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       try {
-        await runGoto(instance, p.x, origin.y, p.z, 3, token, () => {});
+        if (opts.surfaceTravel) {
+          await runGotoXZ(instance, p.x, p.z, 3, token, () => {}, opts.movement);
+        } else {
+          await runGoto(instance, p.x, origin.y, p.z, 3, token, () => {}, opts.movement);
+        }
       } catch {
         continue; // unreachable sample point
       }
@@ -58,6 +66,6 @@ export async function ringSearch(
     }
   }
 
-  report({ done: rings, total: rings, label: "arama tükendi" });
+  report({ done: rings, total: rings, label: "search exhausted" });
   return false;
 }

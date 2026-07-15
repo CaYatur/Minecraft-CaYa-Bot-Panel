@@ -34,7 +34,7 @@ export class CraftService {
     return this.instance.tasks.enqueue(
       {
         type: "craft",
-        label: `üret: ${name} ×${n}`,
+        label: `craft: ${name} ×${n}`,
         priority: PRIORITY.USER,
         params: { item: name, count: n },
         requeueOnPreempt: true
@@ -43,7 +43,7 @@ export class CraftService {
     );
   }
 
-  /** Build/acquire içinden kuyruğa almadan tam bağımlılık zinciriyle craft et */
+  /** Build/acquire forden kuyruğa almadan tam bağımlılık zinciriyle craft et */
   async runCraftInline(item: string, count: number, token: TaskToken, report: ProgressFn) {
     await runSmartCraftInline(this.instance, item, count, token, report);
   }
@@ -54,9 +54,9 @@ export class CraftService {
   }
 
   private buildPlan(bot: Bot, item: string, count: number, depth: number): CraftPlanStep[] {
-    if (depth > MAX_DEPTH) return [{ kind: "gather", item, count, note: "derinlik sınırı" }];
+    if (depth > MAX_DEPTH) return [{ kind: "gather", item, count, note: "depth limit" }];
     const id = bot.registry.itemsByName[item]?.id;
-    if (id == null) return [{ kind: "gather", item, count, note: "bilinmeyen eşya" }];
+    if (id == null) return [{ kind: "gather", item, count, note: "unknown item" }];
 
     const have = bot.inventory.items().filter((i) => i.name === item).reduce((s, i) => s + i.count, 0);
     if (have >= count) return [];
@@ -90,7 +90,7 @@ export class CraftService {
 
   private async runCraft(item: string, count: number, token: TaskToken, report: ProgressFn) {
     await runSmartCraftInline(this.instance, item, count, token, report);
-    this.log().success(`Üretim bitti: ${item}`);
+    this.log().success(`Craft done: ${item}`);
   }
 
   private async gatherFallback(item: string, count: number, token: TaskToken, report: ProgressFn) {
@@ -106,17 +106,17 @@ export class CraftService {
     if (item.includes("ore") || item === "cobblestone" || item === "stone" || item === "iron_ingot") {
       // Nested enqueue tamamlanmayı beklemez — plan adımında kullanıcıya net uyarı
       this.log().warn(
-        `Craft planı için ${item}×${count} envanterde yok; önce maden-topla / el ile temin et (iç içe kuyruk beklenmez)`
+        `Craft plan needs ${item}×${count} not in inventory; mine/gather first (nested queue does not wait)`
       );
       return;
     }
-    this.log().warn(`Toplama planı karşılanamadı: ${item}×${count}`);
+    this.log().warn(`Gather plan not met: ${item}×${count}`);
   }
 
   private async craftItem(bot: Bot, item: string, count: number, token: TaskToken) {
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
     const id = bot.registry.itemsByName[item]?.id;
-    if (id == null) throw new Error(`Eşya bilinmiyor: ${item}`);
+    if (id == null) throw new Error(`Unknown item: ${item}`);
 
     let left = count;
     let guard = 0;
@@ -133,12 +133,12 @@ export class CraftService {
         }
         recipes = bot.recipesFor(id, null, 1, true) as unknown[];
       }
-      if (!recipes.length) throw new Error(`Tarif bulunamadı: ${item}`);
+      if (!recipes.length) throw new Error(`Tarif not found: ${item}`);
       try {
         await bot.craft(recipes[0] as never, 1, undefined);
         left--;
       } catch (e) {
-        throw new Error(`Craft başarısız ${item}: ${e instanceof Error ? e.message : e}`);
+        throw new Error(`Craft failed ${item}: ${e instanceof Error ? e.message : e}`);
       }
     }
   }
@@ -148,7 +148,7 @@ export class CraftService {
     if (planks < 4) {
       // craft planks from log
       const log = bot.inventory.items().find((i) => i.name.endsWith("_log"));
-      if (!log) throw new Error("Kereste için kütük yok");
+      if (!log) throw new Error("No logs for planks");
       const plankName = log.name.replace("_log", "_planks");
       const pid = bot.registry.itemsByName[plankName]?.id;
       if (pid == null) throw new Error("plank id yok");
@@ -164,7 +164,7 @@ export class CraftService {
     const item = bot.inventory.items().find((i) => i.name === "crafting_table");
     if (!item) throw new Error("masa craft edilemedi");
     const base = bot.blockAt(bot.entity.position.offset(0, -1, 0));
-    if (!base) throw new Error("yerleştirme yüzeyi yok");
+    if (!base) throw new Error("no place surface");
     await bot.equip(item, "hand");
     // place on top of block under feet offset
     try {
@@ -172,14 +172,14 @@ export class CraftService {
       const Vec3 = require("vec3");
       await bot.placeBlock(base, new Vec3(0, 1, 0));
     } catch (e) {
-      throw new Error(`Masa yerleştirilemedi: ${e instanceof Error ? e.message : e}`);
+      throw new Error(`Could not place crafting table: ${e instanceof Error ? e.message : e}`);
     }
     void token;
   }
 
   private requireBot(): Bot {
     const bot = this.instance.bot;
-    if (!bot || this.instance.status !== "online") throw new Error("Bot çevrimdışı");
+    if (!bot || this.instance.status !== "online") throw new Error("Bot offline");
     return bot;
   }
 }

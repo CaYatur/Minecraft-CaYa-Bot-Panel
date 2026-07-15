@@ -134,7 +134,7 @@ export function BuildPanel({ botId }: { botId: string }) {
 
   const start = async () => {
     if (!schematicId) {
-      toast("error", "Şema seçin");
+      toast("error", t("build.selectSchematicError"));
       return;
     }
     try {
@@ -153,7 +153,7 @@ export function BuildPanel({ botId }: { botId: string }) {
         mirrorX,
         mirrorZ
       });
-      toast("info", collectMissing ? "Malzeme toplama + inşaat kuyruğa alındı" : "İnşaat kuyruğa alındı");
+      toast("info", collectMissing ? t("build.queuedCollectAndBuild") : t("build.queuedBuild"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -161,7 +161,7 @@ export function BuildPanel({ botId }: { botId: string }) {
 
   const collectOnly = async () => {
     if (!schematicId) {
-      toast("error", "Şema seçin");
+      toast("error", t("build.selectSchematicError"));
       return;
     }
     try {
@@ -172,7 +172,7 @@ export function BuildPanel({ botId }: { botId: string }) {
         mirrorX,
         mirrorZ
       });
-      toast("info", "Eksik malzeme toplama kuyruğa alındı");
+      toast("info", t("build.queuedCollect"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -199,7 +199,7 @@ export function BuildPanel({ botId }: { botId: string }) {
         <div>
           <div className="text-sm font-semibold text-zinc-200">{t("build.title")}</div>
           <p className="text-[11px] text-zinc-500">
-            .schem · .litematic · .caya.json — döndür/aynala, scaffold temizliği, canlı blok animasyonu.
+            {t("build.subtitle", { schem: ".schem", litematic: ".litematic", caya: ".caya.json" })}
           </p>
         </div>
         <span
@@ -221,13 +221,13 @@ export function BuildPanel({ botId }: { botId: string }) {
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
-          Şema
+          {t("build.schematicLabel")}
           <select
             value={schematicId}
             onChange={(e) => setSchematicId(e.target.value)}
             className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
           >
-            <option value="">Seçiniz…</option>
+            <option value="">{t("build.selectPlaceholder")}</option>
             {schematics.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -243,22 +243,22 @@ export function BuildPanel({ botId }: { botId: string }) {
         </label>
 
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
-          Referans (origin)
+          {t("build.originLabel")}
           <select
             value={originMode}
             onChange={(e) => setOriginMode(e.target.value as typeof originMode)}
             className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
           >
-            <option value="here">Botun olduğu yer</option>
-            <option value="coords">Koordinat</option>
-            <option value="player">Oyuncunun konumu</option>
+            <option value="here">{t("build.originHere")}</option>
+            <option value="coords">{t("build.originCoords")}</option>
+            <option value="player">{t("build.originPlayer")}</option>
           </select>
         </label>
       </div>
 
       {/* transform */}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-        <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Döndür / Aynala</span>
+        <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">{t("build.transformLabel")}</span>
         <label className="flex items-center gap-1.5 text-xs text-zinc-400">
           Y°
           <select
@@ -274,15 +274,15 @@ export function BuildPanel({ botId }: { botId: string }) {
         </label>
         <label className="flex items-center gap-1.5 text-xs text-zinc-300">
           <input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />
-          Ayna X
+          {t("build.mirrorX")}
         </label>
         <label className="flex items-center gap-1.5 text-xs text-zinc-300">
           <input type="checkbox" checked={mirrorZ} onChange={(e) => setMirrorZ(e.target.checked)} />
-          Ayna Z
+          {t("build.mirrorZ")}
         </label>
         {preview && (
           <span className="mono ml-auto text-[10px] text-zinc-500">
-            önizleme {preview.size.w}×{preview.size.h}×{preview.size.l} · {preview.blockCount} blok
+            {t("build.previewLabel", { w: preview.size.w, h: preview.size.h, l: preview.size.l, count: preview.blockCount })}
           </span>
         )}
       </div>
@@ -310,7 +310,7 @@ export function BuildPanel({ botId }: { botId: string }) {
 
       {originMode === "player" && (
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
-          Oyuncu adı (yakında entity görünür olmalı)
+          {t("build.playerNameHint")}
           <input
             value={player}
             onChange={(e) => setPlayer(e.target.value)}
@@ -322,21 +322,21 @@ export function BuildPanel({ botId }: { botId: string }) {
 
       <label className="flex items-center gap-2 text-xs text-zinc-300">
         <input type="checkbox" checked={collectMissing} onChange={(e) => setCollectMissing(e.target.checked)} />
-        Önce eksik malzemeleri topla (yakın → çevre ara)
+        {t("build.collectFirstOption")}
       </label>
       <label className="flex items-center gap-2 text-xs text-zinc-300">
         <input type="checkbox" checked={allowPartial} onChange={(e) => setAllowPartial(e.target.checked)} />
-        Eksik malzemeyle de dene (kısmi inşaat)
+        {t("build.partialOption")}
       </label>
       <label className="flex flex-col gap-1 text-xs text-zinc-400">
-        Yerleştirme sırası
+        {t("build.placeOrderLabel")}
         <select
           value={placeOrder}
           onChange={(e) => setPlaceOrder(e.target.value as "nearby-first" | "layer-first")}
           className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
         >
-          <option value="nearby-first">Önce yakındakiler / envanterde olanlar (önerilen)</option>
-          <option value="layer-first">Katman sırası (serpentine mesafe)</option>
+          <option value="nearby-first">{t("build.placeOrderNearby")}</option>
+          <option value="layer-first">{t("build.placeOrderLayer")}</option>
         </select>
       </label>
 
@@ -366,7 +366,7 @@ export function BuildPanel({ botId }: { botId: string }) {
           onClick={() => void collectOnly()}
           className="rounded-lg bg-emerald-900/50 px-3 py-1.5 text-sm font-medium text-emerald-200 hover:bg-emerald-900/70 disabled:opacity-40"
         >
-          Eksikleri topla
+          {t("build.collectMissingButton")}
         </button>
         <button
           type="button"
@@ -377,7 +377,7 @@ export function BuildPanel({ botId }: { botId: string }) {
           {t("build.stop")}
         </button>
         <span className="self-center text-[10px] text-zinc-600">
-          Scaffold: {bot.config.movement.scaffoldBlocks.join(", ") || "—"}
+          {t("build.scaffoldLabel", { list: bot.config.movement.scaffoldBlocks.join(", ") || "—" })}
         </span>
       </div>
 
@@ -389,7 +389,7 @@ export function BuildPanel({ botId }: { botId: string }) {
             {build.activity || build.label || t(PHASE_KEYS[build.phase])}
           </p>
           {build.activityMaterial && (
-            <p className="mono mt-0.5 text-[10px] text-amber-600/90">malzeme: {build.activityMaterial}</p>
+            <p className="mono mt-0.5 text-[10px] text-amber-600/90">{t("build.materialLabel", { name: build.activityMaterial })}</p>
           )}
         </div>
       )}
@@ -413,20 +413,20 @@ export function BuildPanel({ botId }: { botId: string }) {
             onClick={() => void loadPreview()}
             className="ml-auto text-[10px] font-normal normal-case text-indigo-400 hover:underline"
           >
-            Yenile
+            {t("build.refreshButton")}
           </button>
         </div>
         <div className="max-h-52 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg border border-zinc-800">
           {materials.length === 0 ? (
-            <p className="p-2 text-[11px] text-zinc-600 italic">Önizleme için bot online + şema seçili olmalı.</p>
+            <p className="p-2 text-[11px] text-zinc-600 italic">{t("build.previewRequiredHint")}</p>
           ) : (
             <table className="w-full table-fixed text-left text-[11px]">
               <thead className="sticky top-0 z-10 bg-zinc-900 text-zinc-500">
                 <tr>
-                  <th className="w-[46%] px-2 py-1">Blok</th>
-                  <th className="w-[18%] px-2 py-1 text-right">Gerek</th>
-                  <th className="w-[18%] px-2 py-1 text-right">Var</th>
-                  <th className="w-[18%] px-2 py-1 text-right">Eksik</th>
+                  <th className="w-[46%] px-2 py-1">{t("build.blockColumn")}</th>
+                  <th className="w-[18%] px-2 py-1 text-right">{t("build.neededColumn")}</th>
+                  <th className="w-[18%] px-2 py-1 text-right">{t("build.haveColumn")}</th>
+                  <th className="w-[18%] px-2 py-1 text-right">{t("build.missingColumn")}</th>
                 </tr>
               </thead>
               <tbody>
