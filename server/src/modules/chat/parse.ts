@@ -151,22 +151,20 @@ function fromTranslate(obj: Record<string, unknown> | null | undefined): ParsedC
       if (username) return { kind: "player", username, text: text || componentToPlain(withArr.slice(1)) };
     }
 
-    // generic: try each with[] for a name; content = last non-name or last entry
+    // generic printf: gönderen genelde son parametre DEĞİL (son = içerik)
+    // isim: son hariç ilk bulunan name-like; yoksa ilk slot
     let username: string | undefined;
-    let nameIdx = -1;
-    for (let i = 0; i < withArr.length; i++) {
+    for (let i = 0; i < Math.max(0, withArr.length - 1); i++) {
       const n = componentToName(withArr[i]);
       if (n) {
         username = n;
-        nameIdx = i;
-        // keep last name-like (often rank then name)
+        // rank + name sırasında son name-like'ı tut (Admin, Player → Player)
       }
     }
+    if (!username && withArr.length === 1) username = componentToName(withArr[0]);
     if (username) {
-      const contentParts = withArr.filter((_, i) => i !== nameIdx);
-      // usually content is the last parameter
-      const text = componentToPlain(withArr[withArr.length - 1] !== withArr[nameIdx] ? withArr[withArr.length - 1] : contentParts[contentParts.length - 1]);
-      if (text !== undefined) return { kind: "player", username, text };
+      const text = componentToPlain(withArr[withArr.length - 1]);
+      return { kind: "player", username, text };
     }
   }
 
