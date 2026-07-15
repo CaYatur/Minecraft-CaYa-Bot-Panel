@@ -16,7 +16,9 @@
     "testserver": "node test-server/start.cjs",
     "smoke": "node scripts/smoke.mjs",
     "test:combat": "node scripts/combat-test.mjs",
-    "test:full": "node scripts/full-suite.mjs"
+    "test:full": "node scripts/full-suite.mjs",
+    "test:grok": "node scripts/grok-smoke-all.mjs",
+    "test:all": "node scripts/combat-test.mjs && node scripts/full-suite.mjs && node scripts/smoke.mjs && node scripts/movement-test.mjs && node scripts/inventory-test.mjs && node scripts/grok-smoke-all.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
