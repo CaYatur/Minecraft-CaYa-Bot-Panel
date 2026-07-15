@@ -27,13 +27,13 @@ export class GatherService {
     return this.instance.getLogger();
   }
 
-  enqueueCollectWood(count = 16, logType?: string) {
+  enqueueCollectWood(count = 16, logType?: string, priority = PRIORITY.AUTO) {
     const n = Math.max(1, Math.min(256, Math.floor(count)));
     return this.instance.tasks.enqueue(
       {
         type: "collect-wood",
         label: `odun topla ×${n}${logType ? ` (${logType})` : ""}`,
-        priority: PRIORITY.AUTO,
+        priority,
         params: { count: n, logType: logType ?? null },
         requeueOnPreempt: true
       },
@@ -41,12 +41,12 @@ export class GatherService {
     );
   }
 
-  enqueueCollectDrops(filter?: string, radius = 16) {
+  enqueueCollectDrops(filter?: string, radius = 16, priority = PRIORITY.USER) {
     return this.instance.tasks.enqueue(
       {
         type: "collect-drops",
         label: `eşya topla${filter ? `: ${filter}` : ""}`,
-        priority: PRIORITY.USER,
+        priority,
         params: { filter: filter ?? null, radius },
         requeueOnPreempt: true
       },
@@ -54,17 +54,33 @@ export class GatherService {
     );
   }
 
-  enqueueMine(ore: string, count = 8, mode: "legit" | "utility" = "legit") {
+  enqueueMine(ore: string, count = 8, mode: "legit" | "utility" = "legit", priority = PRIORITY.AUTO) {
     const n = Math.max(1, Math.min(128, Math.floor(count)));
     return this.instance.tasks.enqueue(
       {
         type: "mine",
         label: `maden: ${ore} ×${n} (${mode})`,
-        priority: PRIORITY.AUTO,
+        priority,
         params: { ore, count: n, mode },
         requeueOnPreempt: true
       },
       () => (token, report) => this.runMine(ore, n, mode, token, report)
+    );
+  }
+
+  /** Yapı malzemesi: blok/item adına göre yakında kaz + halka ara */
+  enqueueCollectBlock(blockOrItem: string, count = 8, priority = PRIORITY.USER) {
+    const n = Math.max(1, Math.min(256, Math.floor(count)));
+    const name = blockOrItem.replace(/^minecraft:/, "");
+    return this.instance.tasks.enqueue(
+      {
+        type: "collect-block",
+        label: `kaynak: ${name} ×${n}`,
+        priority,
+        params: { name, count: n },
+        requeueOnPreempt: true
+      },
+      () => (token, report) => this.runCollectBlock(name, n, token, report)
     );
   }
 
@@ -110,7 +126,7 @@ export class GatherService {
     this.log().success(`Odun toplama bitti (${got})`);
   }
 
-  private async runCollectDrops(filter: string | undefined, radius: number, token: TaskToken, report: ProgressFn) {
+  async runCollectDrops(filter: string | undefined, radius: number, token: TaskToken, report: ProgressFn) {
     const bot = this.requireBot();
     const t0 = Date.now();
     let picked = 0;
@@ -141,7 +157,67 @@ export class GatherService {
     this.log().success(`Yerdeki eşya toplama (~${picked} hedef)`);
   }
 
-  private async runMine(ore: string, need: number, mode: "legit" | "utility", token: TaskToken, report: ProgressFn) {
+  /**
+   * Blok/item adına göre topla: yakında bul → kaz; yoksa halka arama (çevre).
+   * stone → cobblestone sayımı; ore → runMine.
+   */
+  async runCollectBlock(name: string, need: number, token: TaskToken, report: ProgressFn) {
+    const bot = this.requireBot();
+    const n = name.replace(/^minecraft:/, "");
+
+    // odun
+    if (n.endsWith("_log") || n.endsWith("_stem") || n === "log") {
+      await this.runCollectWood(need, n.endsWith("_log") || n.endsWith("_stem") ? n : undefined, token, report);
+      return;
+    }
+    // cevher
+    if (n.includes("_ore") || n === "ancient_debris" || n.startsWith("raw_")) {
+      const ore = n.replace(/^deepslate_/, "").replace(/_ore$/, "").replace(/^raw_/, "");
+      await this.runMine(ore, need, "legit", token, report);
+      return;
+    }
+
+    const countHave = () => {
+      if (n === "cobblestone" || n === "stone") {
+        return this.countItems(bot, (x) => x === "cobblestone" || x === "stone");
+      }
+      return this.countItems(bot, (x) => x === n || x === n.replace(/_block$/, ""));
+    };
+
+    let got = countHave();
+    report({ done: got, total: need, label: `${n} ${got}/${need}` });
+
+    const matchBlock = (bn: string) => {
+      if (n === "cobblestone" || n === "stone") return bn === "stone" || bn === "cobblestone" || bn === "deepslate";
+      if (n.endsWith("_planks")) return bn === n || bn.endsWith("_log");
+      return bn === n || bn.includes(n);
+    };
+
+    while (got < need && !token.cancelled) {
+      let block = bot.findBlock({
+        matching: (b) => matchBlock(b.name),
+        maxDistance: 32
+      });
+      if (!block) {
+        const found = await ringSearch(this.instance, token, report, {
+          step: 28,
+          maxRadius: 112,
+          probe: (b) =>
+            Boolean(b.findBlock({ matching: (bl) => matchBlock(bl.name), maxDistance: 20 }))
+        });
+        if (!found) throw new Error(`${n} bulunamadı (çevre araması tükendi)`);
+        block = bot.findBlock({ matching: (b) => matchBlock(b.name), maxDistance: 32 });
+      }
+      if (!block) continue;
+      await this.digBlock(bot, block, token);
+      got = countHave();
+      report({ done: Math.min(got, need), total: need, label: `${n} ${got}/${need}` });
+    }
+    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    this.log().success(`Kaynak toplama bitti: ${n} ×${got}`);
+  }
+
+  async runMine(ore: string, need: number, mode: "legit" | "utility", token: TaskToken, report: ProgressFn) {
     const bot = this.requireBot();
     const oreName = ore.replace(/^minecraft:/, "");
     const blockNames = oreVariants(oreName);

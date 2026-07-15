@@ -17,6 +17,7 @@ interface SchematicMeta {
 const PHASE_TR: Record<BuildRuntime["phase"], string> = {
   idle: "Boşta",
   preparing: "Hazırlanıyor",
+  acquiring: "Malzeme toplanıyor",
   building: "İnşa ediliyor",
   cleanup: "Scaffold temizlik",
   done: "Tamam",
@@ -40,7 +41,9 @@ const emptyBuild = (): BuildRuntime => ({
   startedAt: null,
   lastBlock: null,
   recentBlocks: [],
-  transform: { rotateY: 0, mirrorX: false, mirrorZ: false }
+  transform: { rotateY: 0, mirrorX: false, mirrorZ: false },
+  placeOrder: "nearby-first",
+  collectMissing: false
 });
 
 /** Bot detay — Yapı sekmesi (şema + transform + animasyonlu ilerleme) */
@@ -56,6 +59,8 @@ export function BuildPanel({ botId }: { botId: string }) {
   const [z, setZ] = useState(0);
   const [player, setPlayer] = useState("");
   const [allowPartial, setAllowPartial] = useState(false);
+  const [collectMissing, setCollectMissing] = useState(true);
+  const [placeOrder, setPlaceOrder] = useState<"nearby-first" | "layer-first">("nearby-first");
   const [rotateY, setRotateY] = useState<0 | 90 | 180 | 270>(0);
   const [mirrorX, setMirrorX] = useState(false);
   const [mirrorZ, setMirrorZ] = useState(false);
@@ -67,7 +72,11 @@ export function BuildPanel({ botId }: { botId: string }) {
 
   const build = bot?.build ?? emptyBuild();
   const online = bot?.status === "online";
-  const busy = build.phase === "preparing" || build.phase === "building" || build.phase === "cleanup";
+  const busy =
+    build.phase === "preparing" ||
+    build.phase === "acquiring" ||
+    build.phase === "building" ||
+    build.phase === "cleanup";
 
   useEffect(() => {
     api
@@ -134,11 +143,32 @@ export function BuildPanel({ botId }: { botId: string }) {
         z,
         player: player.trim() || undefined,
         allowPartial,
+        collectMissing,
+        placeOrder,
         rotateY,
         mirrorX,
         mirrorZ
       });
-      toast("info", "İnşaat kuyruğa alındı");
+      toast("info", collectMissing ? "Malzeme toplama + inşaat kuyruğa alındı" : "İnşaat kuyruğa alındı");
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const collectOnly = async () => {
+    if (!schematicId) {
+      toast("error", "Şema seçin");
+      return;
+    }
+    try {
+      await api.post(`/api/bots/${botId}/action`, {
+        type: "collect-build-materials",
+        schematicId,
+        rotateY,
+        mirrorX,
+        mirrorZ
+      });
+      toast("info", "Eksik malzeme toplama kuyruğa alındı");
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -287,8 +317,23 @@ export function BuildPanel({ botId }: { botId: string }) {
       )}
 
       <label className="flex items-center gap-2 text-xs text-zinc-300">
+        <input type="checkbox" checked={collectMissing} onChange={(e) => setCollectMissing(e.target.checked)} />
+        Önce eksik malzemeleri topla (yakın → çevre ara)
+      </label>
+      <label className="flex items-center gap-2 text-xs text-zinc-300">
         <input type="checkbox" checked={allowPartial} onChange={(e) => setAllowPartial(e.target.checked)} />
         Eksik malzemeyle de dene (kısmi inşaat)
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-zinc-400">
+        Yerleştirme sırası
+        <select
+          value={placeOrder}
+          onChange={(e) => setPlaceOrder(e.target.value as "nearby-first" | "layer-first")}
+          className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
+        >
+          <option value="nearby-first">Önce yakındakiler / envanterde olanlar (önerilen)</option>
+          <option value="layer-first">Katman sırası (serpentine mesafe)</option>
+        </select>
       </label>
 
       {build.error && <p className="text-[11px] text-red-400">{build.error}</p>}
@@ -356,6 +401,14 @@ export function BuildPanel({ botId }: { botId: string }) {
           className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
           ▶ İnşa et
+        </button>
+        <button
+          type="button"
+          disabled={!online || busy || !schematicId || missingCount === 0}
+          onClick={() => void collectOnly()}
+          className="rounded-lg bg-emerald-900/50 px-3 py-1.5 text-sm font-medium text-emerald-200 hover:bg-emerald-900/70 disabled:opacity-40"
+        >
+          Eksikleri topla
         </button>
         <button
           type="button"

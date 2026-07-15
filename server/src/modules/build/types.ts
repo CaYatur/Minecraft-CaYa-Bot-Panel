@@ -55,7 +55,18 @@ export interface BuildOrigin {
   player?: string;
 }
 
-export type BuildPhase = "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
+export type BuildPhase =
+  | "idle"
+  | "preparing"
+  | "acquiring"
+  | "building"
+  | "cleanup"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+/** İnşa sırası: yakında/envanterde olan önce; eksik en sonda */
+export type BuildPlaceOrder = "nearby-first" | "layer-first";
 
 export interface BuildPlacedBlock {
   name: string;
@@ -90,6 +101,9 @@ export interface BuildRuntime {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
+  /** yerleştirme sırası tercihi */
+  placeOrder?: BuildPlaceOrder;
+  collectMissing?: boolean;
 }
 
 export function emptyBuildRuntime(): BuildRuntime {
@@ -109,6 +123,8 @@ export function emptyBuildRuntime(): BuildRuntime {
     startedAt: null,
     lastBlock: null,
     recentBlocks: [],
-    transform: { rotateY: 0, mirrorX: false, mirrorZ: false }
+    transform: { rotateY: 0, mirrorX: false, mirrorZ: false },
+    placeOrder: "nearby-first",
+    collectMissing: false
   };
 }

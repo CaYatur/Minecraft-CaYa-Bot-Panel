@@ -211,7 +211,15 @@ export interface BuildPlacedBlock {
 }
 
 export interface BuildRuntime {
-  phase: "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
+  phase:
+    | "idle"
+    | "preparing"
+    | "acquiring"
+    | "building"
+    | "cleanup"
+    | "done"
+    | "failed"
+    | "cancelled";
   schematicId: string | null;
   schematicName: string | null;
   origin: { x: number; y: number; z: number } | null;
@@ -232,6 +240,8 @@ export interface BuildRuntime {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
+  placeOrder?: "nearby-first" | "layer-first";
+  collectMissing?: boolean;
 }
 
 export interface BotSnapshot {

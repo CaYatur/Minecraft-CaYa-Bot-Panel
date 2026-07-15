@@ -270,7 +270,15 @@ export interface InventorySnapshot {
 
 /** Faz 14–16 — inşaat runtime (BuildService) */
 export interface BuildRuntimeSnapshot {
-  phase: "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
+  phase:
+    | "idle"
+    | "preparing"
+    | "acquiring"
+    | "building"
+    | "cleanup"
+    | "done"
+    | "failed"
+    | "cancelled";
   schematicId: string | null;
   schematicName: string | null;
   origin: { x: number; y: number; z: number } | null;

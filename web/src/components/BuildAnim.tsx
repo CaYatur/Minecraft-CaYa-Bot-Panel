@@ -6,7 +6,11 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
   const recent = build.recentBlocks ?? [];
   const processed = build.placed + (build.skipped || 0) + (build.failed || 0);
   const pct = build.total > 0 ? Math.min(100, Math.round((processed / build.total) * 100)) : 0;
-  const busy = build.phase === "building" || build.phase === "preparing" || build.phase === "cleanup";
+  const busy =
+    build.phase === "building" ||
+    build.phase === "preparing" ||
+    build.phase === "acquiring" ||
+    build.phase === "cleanup";
 
   return (
     <div className="space-y-3">

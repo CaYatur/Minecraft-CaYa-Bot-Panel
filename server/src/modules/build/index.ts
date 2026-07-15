@@ -2,11 +2,12 @@ import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { shouldSkipBlock } from "./blocks";
 import { loadParsedSchematic, materialCounts } from "./library";
-import { distToBlock, pathNear, placeBlockAt, PLACE_REACH } from "./place";
+import { distToBlock, itemNameForBlock, pathNear, placeBlockAt, PLACE_REACH } from "./place";
 import { ScaffoldTracker } from "./scaffold";
 import {
   emptyBuildRuntime,
   type BuildOrigin,
+  type BuildPlaceOrder,
   type BuildPlacedBlock,
   type BuildRuntime,
   type MaterialNeed,
@@ -79,14 +80,12 @@ export class BuildService {
         haveMap[it.name] = (haveMap[it.name] ?? 0) + it.count;
       }
     }
-    // water/lava şemada blok adı; envanterde kova
     const aliasHave = (blockName: string): number => {
-      if (haveMap[blockName] != null) return haveMap[blockName]!;
-      if (blockName === "water" || blockName === "flowing_water") return haveMap["water_bucket"] ?? 0;
-      if (blockName === "lava" || blockName === "flowing_lava") return haveMap["lava_bucket"] ?? 0;
-      if (blockName === "powder_snow") return haveMap["powder_snow_bucket"] ?? 0;
-      if (blockName === "redstone_wire") return haveMap["redstone"] ?? 0;
-      return 0;
+      const names = itemNameForBlock(blockName);
+      let best = 0;
+      for (const n of names) best = Math.max(best, haveMap[n] ?? 0);
+      if (haveMap[blockName] != null) best = Math.max(best, haveMap[blockName]!);
+      return best;
     };
     return Object.entries(needMap)
       .map(([name, need]) => {
@@ -94,6 +93,105 @@ export class BuildService {
         return { name, need, have, missing: Math.max(0, need - have) };
       })
       .sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
+  }
+
+  private countHaveItem(itemNames: string[]): number {
+    const bot = this.instance.bot;
+    if (!bot) return 0;
+    let n = 0;
+    for (const it of bot.inventory.items()) {
+      if (itemNames.includes(it.name)) n += it.count;
+    }
+    return n;
+  }
+
+  private hasItemForBlock(blockName: string): boolean {
+    return this.countHaveItem(itemNameForBlock(blockName)) > 0;
+  }
+
+  /**
+   * Eksik malzemeleri kaynak kuyruğuna ekle (sırayla USER görevleri).
+   * 1) yere düşenler  2) her eksik tür için collect/mine (yakın → halka arama)
+   */
+  enqueueCollectMissing(opts: { schematicId: string; versionHint?: string; transform?: BuildTransform }) {
+    const sid = opts.schematicId.trim();
+    if (!sid) throw new Error("Şema id gerekli");
+    const version = opts.versionHint || "1.20.4";
+
+    return this.instance.tasks.enqueue(
+      {
+        type: "build-acquire",
+        label: `eksik malzeme: ${sid.slice(0, 8)}…`,
+        priority: PRIORITY.USER,
+        params: { schematicId: sid },
+        requeueOnPreempt: false
+      },
+      () => async (token, report) => {
+        this.setPhase("acquiring", "malzeme listesi…");
+        report({ done: 0, total: 1, label: "malzeme listesi…" });
+        const parsed = await loadParsedSchematic(sid, version, opts.transform);
+        const blocks = parsed.blocks.filter((b) => !shouldSkipBlock(b.name, b.properties));
+        let mats = this.materialsFor(blocks);
+        this.runtime.materials = mats;
+        this.emit(true);
+
+        // önce yakındaki yer eşyaları
+        try {
+          report({ done: 0, total: 1, label: "yere düşenler…" });
+          await this.instance.gather.runCollectDrops(undefined, 28, token, report);
+        } catch {
+          /* best-effort */
+        }
+
+        mats = this.materialsFor(blocks);
+        const missing = mats.filter((m) => m.missing > 0);
+        if (!missing.length) {
+          this.setPhase("idle", "eksik malzeme yok");
+          report({ done: 1, total: 1, label: "eksik yok" });
+          return;
+        }
+
+        // sırayla her eksik — yakında yoksa runCollectBlock halka arar
+        let i = 0;
+        for (const m of missing) {
+          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          i++;
+          this.setPhase("acquiring", `topla ${m.name} ×${m.missing} (${i}/${missing.length})`);
+          report({ done: i - 1, total: missing.length, label: `topla ${m.name} ×${m.missing}` });
+          try {
+            await this.acquireOneMaterial(m.name, m.missing, token, report);
+          } catch (e) {
+            this.log().warn(`Malzeme toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
+          }
+          this.runtime.materials = this.materialsFor(blocks);
+          this.emit(true);
+        }
+
+        const still = this.materialsFor(blocks).filter((m) => m.missing > 0);
+        const label =
+          still.length === 0
+            ? "malzemeler tamam"
+            : `kısmi: hâlâ eksik ${still
+                .slice(0, 4)
+                .map((m) => `${m.name}×${m.missing}`)
+                .join(", ")}`;
+        this.setPhase(still.length === 0 ? "idle" : "failed", label, still.length ? label : undefined);
+        report({ done: missing.length, total: missing.length, label });
+        this.log().info("Eksik malzeme toplama bitti", label);
+      }
+    );
+  }
+
+  /** Tek malzeme topla (inline — build veya acquire görevi) */
+  private async acquireOneMaterial(
+    blockName: string,
+    count: number,
+    token: TaskToken,
+    report: ProgressFn
+  ) {
+    const item = itemNameForBlock(blockName)[0] ?? blockName;
+    const n = Math.max(1, count);
+    await this.instance.gather.runCollectBlock(item, n, token, report);
   }
 
   async previewMaterials(schematicId: string, versionHint?: string, transform?: BuildTransform) {
@@ -112,10 +210,11 @@ export class BuildService {
   }
 
   stopBuild(reason = "inşaat durduruldu") {
+    const buildTypes = new Set(["build", "build-acquire", "build-acquire-plan"]);
     const cur = this.instance.tasks.currentSummary;
-    if (cur?.type === "build") this.instance.tasks.cancel(cur.id, reason);
+    if (cur && buildTypes.has(cur.type)) this.instance.tasks.cancel(cur.id, reason);
     for (const t of this.instance.tasks.queueSummaries) {
-      if (t.type === "build") this.instance.tasks.cancel(t.id, reason);
+      if (buildTypes.has(t.type)) this.instance.tasks.cancel(t.id, reason);
     }
     // scaffold temizliği best-effort (async, iz bırakma)
     if (this.scaffolds.count && this.instance.bot && this.instance.status === "online") {
@@ -141,6 +240,10 @@ export class BuildService {
     schematicId: string;
     origin: BuildOrigin;
     allowPartial?: boolean;
+    /** eksik malzemeleri önce kuyruğa al (kaynak görevleri + inşaat) */
+    collectMissing?: boolean;
+    /** nearby-first: envanterde olan/yakın önce; layer-first: serpentine */
+    placeOrder?: BuildPlaceOrder;
     versionHint?: string;
     rotateY?: RotateY | number;
     mirrorX?: boolean;
@@ -156,12 +259,20 @@ export class BuildService {
     this.runtime.schematicId = sid;
     this.runtime.startedAt = Date.now();
     this.runtime.label = "hazırlanıyor…";
+    this.runtime.collectMissing = Boolean(opts.collectMissing);
+    this.runtime.placeOrder = opts.placeOrder === "layer-first" ? "layer-first" : "nearby-first";
     this.runtime.transform = {
       rotateY: normalizeRotateY(opts.rotateY),
       mirrorX: Boolean(opts.mirrorX),
       mirrorZ: Boolean(opts.mirrorZ)
     };
     this.emit();
+
+    const transform: BuildTransform = {
+      rotateY: normalizeRotateY(opts.rotateY),
+      mirrorX: Boolean(opts.mirrorX),
+      mirrorZ: Boolean(opts.mirrorZ)
+    };
 
     const summary = this.instance.tasks.enqueue(
       {
@@ -251,6 +362,8 @@ export class BuildService {
       schematicId: string;
       origin: BuildOrigin;
       allowPartial?: boolean;
+      collectMissing?: boolean;
+      placeOrder?: BuildPlaceOrder;
       versionHint?: string;
       rotateY?: RotateY | number;
       mirrorX?: boolean;
@@ -260,6 +373,7 @@ export class BuildService {
     report: ProgressFn
   ) {
     const version = opts.versionHint || "1.20.4";
+    const placeOrder: BuildPlaceOrder = opts.placeOrder === "layer-first" ? "layer-first" : "nearby-first";
     const transform: BuildTransform = {
       rotateY: normalizeRotateY(opts.rotateY),
       mirrorX: Boolean(opts.mirrorX),
@@ -270,6 +384,8 @@ export class BuildService {
       mirrorX: Boolean(transform.mirrorX),
       mirrorZ: Boolean(transform.mirrorZ)
     };
+    this.runtime.placeOrder = placeOrder;
+    this.runtime.collectMissing = Boolean(opts.collectMissing);
 
     try {
       this.setPhase("preparing", "şema yükleniyor…");
@@ -283,6 +399,36 @@ export class BuildService {
       this.runtime.materials = this.materialsFor(blocks);
       this.emit();
 
+      // --- eksik malzeme toplama (sıralı, yakında yoksa çevre ara) ---
+      if (opts.collectMissing) {
+        this.setPhase("acquiring", "eksik malzemeler toplanıyor…");
+        try {
+          await this.instance.gather.runCollectDrops(undefined, 24, token, report);
+        } catch {
+          /* */
+        }
+        let missingList = this.materialsFor(blocks).filter((m) => m.missing > 0);
+        let ai = 0;
+        for (const m of missingList) {
+          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          ai++;
+          this.setPhase("acquiring", `topla ${m.name} ×${m.missing} (${ai}/${missingList.length})`);
+          report({
+            done: ai - 1,
+            total: missingList.length,
+            label: `topla ${m.name} ×${m.missing}`
+          });
+          try {
+            await this.acquireOneMaterial(m.name, m.missing, token, report);
+          } catch (e) {
+            this.log().warn(`Toplanamadı: ${m.name}`, e instanceof Error ? e.message : String(e));
+          }
+          this.runtime.materials = this.materialsFor(blocks);
+          this.emit(true);
+        }
+        this.runtime.materials = this.materialsFor(blocks);
+      }
+
       const missing = this.runtime.materials.filter((m) => m.missing > 0);
       if (missing.length && !opts.allowPartial) {
         const msg = `Eksik malzeme: ${missing
@@ -291,7 +437,7 @@ export class BuildService {
           .join(", ")}${missing.length > 5 ? "…" : ""}`;
         this.setPhase("failed", msg, msg);
         this.log().warn("İnşaat başlamadı — eksik malzeme", msg);
-        throw new Error(msg + " (allowPartial ile zorla deneyebilirsiniz)");
+        throw new Error(msg + " (kısmi inşaat veya malzeme topla)");
       }
 
       const origin = this.resolveOrigin(opts.origin);
@@ -303,7 +449,7 @@ export class BuildService {
       this.setPhase("building", `inşa: ${parsed.meta.name}${rotLabel}`);
       this.log().info(
         `İnşaat başladı: ${parsed.meta.name}`,
-        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok${rotLabel}`
+        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok · sıra=${placeOrder}${rotLabel}`
       );
 
       // --- dünya koordinatları önceden hesap ---
@@ -362,18 +508,54 @@ export class BuildService {
         this.emit();
       };
 
+      /** nearby-first: envanterde olan önce, sonra mesafe; layer-first: mesafe */
+      const pickNextJob = (pending: Job[]): Job => {
+        if (placeOrder === "layer-first") {
+          let next = pending[0]!;
+          let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
+          for (const j of pending) {
+            const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
+            if (d < bestD) {
+              bestD = d;
+              next = j;
+            }
+          }
+          return next;
+        }
+        // nearby-first: önce malzeme var olanlar, onlar arasında en yakın
+        const withItem = pending.filter((j) => this.hasItemForBlock(j.name));
+        const pool = withItem.length ? withItem : pending;
+        let next = pool[0]!;
+        let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
+        for (const j of pool) {
+          const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
+          if (d < bestD) {
+            bestD = d;
+            next = j;
+          }
+        }
+        return next;
+      };
+
       /** Menzildeki tüm açık işleri bakıp koy (path açmadan) */
       const placeReachable = async (): Promise<number> => {
         let n = 0;
         const open = jobs.filter((j) => !j.done);
-        // yakından uzağa
-        open.sort(
-          (a, b) =>
+        open.sort((a, b) => {
+          if (placeOrder === "nearby-first") {
+            const ha = this.hasItemForBlock(a.name) ? 0 : 1;
+            const hb = this.hasItemForBlock(b.name) ? 0 : 1;
+            if (ha !== hb) return ha - hb;
+          }
+          return (
             distToBlock(this.instance, a.wx, a.wy, a.wz) - distToBlock(this.instance, b.wx, b.wy, b.wz)
-        );
+          );
+        });
         for (const job of open) {
           if (token.cancelled) throw new Error(token.reason ?? "iptal");
           if (distToBlock(this.instance, job.wx, job.wy, job.wz) > PLACE_REACH) continue;
+          // envanterde yoksa atla (failed spam yok) — sonda ele alınır
+          if (placeOrder === "nearby-first" && !this.hasItemForBlock(job.name)) continue;
           const res = await placeBlockAt(
             this.instance,
             job.wx,
@@ -402,18 +584,14 @@ export class BuildService {
         await placeReachable();
         if (!jobs.some((j) => !j.done)) break;
 
-        // 2) sıradaki / en yakın hedefe yürü — yürürken de koy
+        // 2) sıradaki hedefe yürü
         const pending = jobs.filter((j) => !j.done);
-        // serpentine sırada ilk bitmemiş; yoksa en yakın
-        let next = pending[0]!;
-        let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
-        for (const j of pending) {
-          const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
-          if (d < bestD) {
-            bestD = d;
-            next = j;
-          }
-        }
+        // nearby-first: sadece malzemesi olanlara yürü; hepsi eksikse en yakın
+        const walkPool =
+          placeOrder === "nearby-first"
+            ? pending.filter((j) => this.hasItemForBlock(j.name))
+            : pending;
+        const next = pickNextJob(walkPool.length ? walkPool : pending);
 
         this.runtime.label = `yürü → ${next.wx},${next.wy},${next.wz} · kalan ${pending.length}`;
         report({
@@ -516,9 +694,17 @@ export class BuildService {
 
       const label = `bitti: ${placed} kondu, ${skipped} atlandı, ${failed} başarısız, scaffold ${cleared}`;
       this.runtime.materials = this.materialsFor([]);
-      this.setPhase("done", label);
-      this.log().success(`İnşaat tamam: ${parsed.meta.name}`, label);
-      report({ done: jobs.length, total: jobs.length, label });
+      // Tam başarıda done + dur; hata varsa failed (görev de fail)
+      if (failed === 0) {
+        this.setPhase("done", label);
+        this.log().success(`İnşaat tamam: ${parsed.meta.name}`, label);
+        report({ done: jobs.length, total: jobs.length, label });
+      } else {
+        this.setPhase("failed", label, `${failed} blok yerleştirilemedi`);
+        this.log().warn(`İnşaat kısmi/hatalı: ${parsed.meta.name}`, label);
+        report({ done: jobs.length, total: jobs.length, label });
+        throw new Error(label);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       try {

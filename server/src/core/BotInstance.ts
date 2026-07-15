@@ -438,10 +438,33 @@ export class BotInstance extends EventEmitter {
             player: action.player ? String(action.player) : undefined
           },
           allowPartial: action.allowPartial === true || action.allowPartial === "true",
+          collectMissing: action.collectMissing === true || action.collectMissing === "true",
+          placeOrder: action.placeOrder === "layer-first" ? "layer-first" : "nearby-first",
           versionHint,
           rotateY: action.rotateY != null ? Number(action.rotateY) : 0,
           mirrorX: action.mirrorX === true || action.mirrorX === "true",
           mirrorZ: action.mirrorZ === true || action.mirrorZ === "true"
+        });
+      }
+      case "collect-build-materials":
+      case "build-collect-missing": {
+        const server = this.getServer(this.config.serverId);
+        const versionHint =
+          action.version != null
+            ? String(action.version)
+            : server?.version && server.version !== "auto"
+              ? server.version
+              : "1.20.4";
+        const ry = action.rotateY != null ? Number(action.rotateY) : 0;
+        const rotateY = (ry === 90 || ry === 180 || ry === 270 ? ry : 0) as 0 | 90 | 180 | 270;
+        return this.build.enqueueCollectMissing({
+          schematicId: String(action.schematicId ?? action.id ?? ""),
+          versionHint,
+          transform: {
+            rotateY,
+            mirrorX: action.mirrorX === true || action.mirrorX === "true",
+            mirrorZ: action.mirrorZ === true || action.mirrorZ === "true"
+          }
         });
       }
       case "stop-build":
