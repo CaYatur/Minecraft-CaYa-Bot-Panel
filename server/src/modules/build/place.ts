@@ -168,10 +168,40 @@ async function placeBlockAtOnce(
   const tx = target.x + 0.5;
   const ty = target.y + 0.5;
   const tz = target.z + 0.5;
-  const d = dist3(bot, tx, ty, tz);
+  let d = dist3(bot, tx, ty, tz);
 
   // yürürken yerleştir: menzil dışındaysa path açma
   if (opts?.skipPath && d > PLACE_REACH) return "outofreach";
+
+  // --- ayak altı / durduğu hücre: zıpla veya kenara çek ---
+  const occ = occupancyRelation(bot, target);
+  if (occ === "feet" || occ === "head") {
+    // tam üstünde/gövdesinde — kenara çekil, sonra koy
+    if (opts?.skipPath) return "outofreach";
+    const moved = await stepAside(instance, token, target);
+    if (!moved) {
+      // zıplayıp kule (hedef ayak hizası ve alt doluysa)
+      if (occ === "feet") {
+        const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds);
+        if (jumped) return "placed";
+      }
+      return "failed";
+    }
+    d = dist3(bot, tx, ty, tz);
+  } else if (occ === "under") {
+    // ayak altı hücre — zıplayıp alta koy / kenara çekilip koy
+    if (opts?.skipPath) {
+      // yürürken: önce zıpla-koy dene (path yok)
+      const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds);
+      if (jumped) return "placed";
+      return "outofreach";
+    }
+    const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds);
+    if (jumped) return "placed";
+    const moved = await stepAside(instance, token, target);
+    if (!moved) return "failed";
+    d = dist3(bot, tx, ty, tz);
+  }
 
   // sıvı: kova
   if (
@@ -182,7 +212,6 @@ async function placeBlockAtOnce(
       await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
     }
     try {
-      // hedef koordinata bak (hareket halinde)
       await bot.lookAt(target.offset(0.5, 0.25, 0.5), true);
       if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       bot.activateItem(false);
@@ -213,6 +242,12 @@ async function placeBlockAtOnce(
     await pathNear(instance, tx, target.y, tz, PATH_RANGE, token);
   }
 
+  // hâlâ üstündeyse bir kez daha kenara
+  if (occupancyRelation(bot, target) === "feet" || occupancyRelation(bot, target) === "head") {
+    if (opts?.skipPath) return "outofreach";
+    await stepAside(instance, token, target);
+  }
+
   let ref = findReference(bot, target);
   if (!ref) {
     if (opts?.skipPath) return "outofreach";
@@ -236,9 +271,7 @@ async function placeBlockAtOnce(
 
   ref = findReference(bot, target) ?? ref;
   try {
-    // önce hedef hücreye bak (kullanıcı isteği: o yöne bakarak koy)
     await bot.lookAt(target.offset(0.5, 0.5, 0.5), true);
-    // placeBlock ref yüzüne ihtiyaç duyar
     await bot.lookAt(ref.block.position.offset(0.5, 0.5, 0.5), true);
     await bot.placeBlock(ref.block, ref.face);
     await sleep(35);
@@ -256,6 +289,216 @@ async function placeBlockAtOnce(
     return "failed";
   } catch {
     return "failed";
+  }
+}
+
+/** Bot hedef hücreyle nasıl çakışıyor? */
+function occupancyRelation(bot: Bot, target: Vec3): "none" | "under" | "feet" | "head" {
+  if (!bot.entity) return "none";
+  const p = bot.entity.position;
+  const fx = Math.floor(p.x);
+  const fy = Math.floor(p.y);
+  const fz = Math.floor(p.z);
+  if (target.x !== fx || target.z !== fz) return "none";
+  if (target.y === fy - 1) return "under";
+  if (target.y === fy) return "feet";
+  if (target.y === fy + 1) return "head";
+  return "none";
+}
+
+/**
+ * Kenara çekil — hedef hücrenin dışına (komşu sağlam zemin).
+ */
+async function stepAside(
+  instance: BotInstance,
+  token: TaskToken,
+  awayFrom: Vec3
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity) return false;
+
+  try {
+    bot.pathfinder?.setGoal(null);
+  } catch {
+    /* */
+  }
+
+  const p = bot.entity.position;
+  const fx = Math.floor(p.x);
+  const fy = Math.floor(p.y);
+  const fz = Math.floor(p.z);
+
+  const dirs: [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1]
+  ];
+  // hedeften uzaklaşan yönleri önce dene
+  dirs.sort((a, b) => {
+    const da = Math.abs(fx + a[0] - awayFrom.x) + Math.abs(fz + a[1] - awayFrom.z);
+    const db = Math.abs(fx + b[0] - awayFrom.x) + Math.abs(fz + b[1] - awayFrom.z);
+    return db - da;
+  });
+
+  for (const [dx, dz] of dirs) {
+    if (token.cancelled) throw new Error(token.reason ?? "iptal");
+    const nx = fx + dx;
+    const nz = fz + dz;
+    const ground = bot.blockAt(v3(nx, fy - 1, nz));
+    const atFeet = bot.blockAt(v3(nx, fy, nz));
+    const atHead = bot.blockAt(v3(nx, fy + 1, nz));
+    if (!ground || isReplaceableBlock(ground.name)) continue;
+    if (atFeet && !isReplaceableBlock(atFeet.name)) continue;
+    if (atHead && !isReplaceableBlock(atHead.name)) continue;
+
+    // kısa path
+    try {
+      await pathNear(instance, nx + 0.5, fy, nz + 0.5, 0.35, token, { timeoutMs: 2500, clearGoal: true });
+    } catch {
+      /* */
+    }
+
+    const p2 = bot.entity.position;
+    if (Math.floor(p2.x) === nx && Math.floor(p2.z) === nz) return true;
+
+    // kontrol ile it
+    try {
+      await bot.lookAt(v3(nx + 0.5, fy + 0.5, nz + 0.5), true);
+      bot.setControlState("forward", true);
+      await sleep(280);
+      bot.setControlState("forward", false);
+      await sleep(40);
+    } catch {
+      try {
+        bot.setControlState("forward", false);
+      } catch {
+        /* */
+      }
+    }
+
+    const p3 = bot.entity.position;
+    if (Math.floor(p3.x) !== fx || Math.floor(p3.z) !== fz) {
+      // en azından eski hücreden çıktı
+      if (Math.floor(p3.x) !== awayFrom.x || Math.floor(p3.z) !== awayFrom.z || Math.floor(p3.y) !== awayFrom.y) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Ayak altı / kule: alttaki bloğun üst yüzüne zıplayarak koy.
+ * target = ayak altı hücre (under) VEYA ayak hizası (kule bir üst).
+ */
+async function jumpPlaceOnBelow(
+  instance: BotInstance,
+  target: Vec3,
+  item: { name: string },
+  wantName: string,
+  scaffolds: ScaffoldTracker
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity) return false;
+
+  // Yerleştirilecek yüzey: target'ın altındaki dolu blok (under için target-1 yok, target zaten under)
+  // under: stand on block at target; place replaces under → dig first usually
+  // tower: place at feet y while jumping on block at feet-1
+  const p = bot.entity.position;
+  const fx = Math.floor(p.x);
+  const fy = Math.floor(p.y);
+  const fz = Math.floor(p.z);
+
+  // Sadece aynı xz
+  if (target.x !== fx || target.z !== fz) return false;
+
+  let support = bot.blockAt(v3(target.x, target.y - 1, target.z));
+  let placeFaceUp = true;
+  let placeTarget = target;
+
+  if (target.y === fy - 1) {
+    // ayak altı: alttaki bloğa (target-1) bakıp target'a üst yüzden koy — support = target-1
+    support = bot.blockAt(v3(target.x, target.y - 1, target.z));
+    placeTarget = target;
+    if (!support || isReplaceableBlock(support.name)) {
+      // boşluk — kenar referans gerekir, zıpla-koy yetmez
+      return false;
+    }
+  } else if (target.y === fy) {
+    // ayak hizası kule: altında durduğu blok üstüne koy
+    support = bot.blockAt(v3(fx, fy - 1, fz));
+    placeTarget = target;
+    if (!support || isReplaceableBlock(support.name)) return false;
+  } else {
+    return false;
+  }
+
+  // hedef dolu ve yanlışsa kır (ayak altı — zıplarken zor; önce kenar dene değilse false)
+  const existing = bot.blockAt(placeTarget);
+  if (existing && !isReplaceableBlock(existing.name) && !namesMatch(existing.name, wantName)) {
+    return false;
+  }
+  if (existing && namesMatch(existing.name, wantName)) {
+    scaffolds.protectStructure(placeTarget.x, placeTarget.y, placeTarget.z);
+    return true;
+  }
+
+  try {
+    try {
+      bot.pathfinder?.setGoal(null);
+    } catch {
+      /* */
+    }
+    if (bot.heldItem?.name !== item.name) {
+      const inv = bot.inventory.items().find((i) => i.name === item.name);
+      if (!inv) return false;
+      await bot.equip(inv, "hand");
+    }
+
+    // aşağı bak + zıpla + alttaki bloğun üst yüzüne koy
+    await bot.look(bot.entity.yaw, 1.4, true); // aşağı
+    bot.setControlState("jump", true);
+    await sleep(100);
+    try {
+      // support üst yüzeyi = placeTarget
+      await bot.placeBlock(support, v3(0, 1, 0));
+      if (placeFaceUp) {
+        /* face up */
+      }
+      scaffolds.record(placeTarget.x, placeTarget.y, placeTarget.z, item.name);
+    } catch {
+      // ref ile dene
+      const ref = findReference(bot, placeTarget);
+      if (ref) {
+        try {
+          await bot.lookAt(ref.block.position.offset(0.5, 0.5, 0.5), true);
+          await bot.placeBlock(ref.block, ref.face);
+        } catch {
+          /* */
+        }
+      }
+    }
+    bot.setControlState("jump", false);
+    await sleep(80);
+
+    const after = bot.blockAt(placeTarget);
+    if (after && (namesMatch(after.name, wantName) || after.name === item.name || namesMatch(after.name, item.name))) {
+      scaffolds.protectStructure(placeTarget.x, placeTarget.y, placeTarget.z);
+      return true;
+    }
+    return false;
+  } catch {
+    try {
+      bot.setControlState("jump", false);
+    } catch {
+      /* */
+    }
+    return false;
   }
 }
 
