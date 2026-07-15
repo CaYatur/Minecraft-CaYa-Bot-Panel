@@ -21,6 +21,13 @@ const PROTECT_TICK_MS = 600;
 /** boşta öz savunma tarama aralığı */
 const SELF_GUARD_TICK_MS = 700;
 
+// caya-combat-mlg-stability-v2: erişilemeyen/ışınlanan hedef bekçisi.
+const caya_combat_mlg_stability_v2_combat = true;
+const UNREACHABLE_TARGET_TTL_MS = 15_000;
+const TARGET_TELEPORT_DELTA = 10;
+const APPROACH_STALL_RETRY_MS = 3_500;
+const APPROACH_STALL_ABORT_MS = 7_500;
+
 const defaultCompanion = (): CompanionState => ({
   followPlayer: null,
   followDistance: 3,
@@ -60,6 +67,8 @@ export class CombatService {
   private deadPaused = false;
   /** threats modu: yakın zamanda botu vuran oyuncular (label → expireMs) */
   private recentThreats = new Map<string, number>();
+  /** entity id → tekrar denenebileceği zaman */
+  private unreachableTargets = new Map<number, number>();
 
   constructor(private readonly instance: BotInstance) {}
 
@@ -83,9 +92,45 @@ export class CombatService {
     for (const [k, exp] of this.recentThreats) {
       if (now > exp) this.recentThreats.delete(k);
     }
+    this.pruneUnreachableTargets(now);
   }
 
-  getRuntime(): CombatRuntime {
+  private pruneUnreachableTargets(now = Date.now()) {
+    for (const [id, until] of this.unreachableTargets) {
+      if (now >= until) this.unreachableTargets.delete(id);
+    }
+  }
+
+  private isTargetTemporarilyUnreachable(entity: Entity | null | undefined): boolean {
+    if (!entity || typeof entity.id !== "number") return false;
+    const until = this.unreachableTargets.get(entity.id);
+    if (!until) return false;
+    if (Date.now() >= until) {
+      this.unreachableTargets.delete(entity.id);
+      return false;
+    }
+    return true;
+  }
+
+  private clearTargetUnreachable(entity: Entity | null | undefined) {
+    if (entity && typeof entity.id === "number") this.unreachableTargets.delete(entity.id);
+  }
+
+  private markTargetUnreachable(entity: Entity, reason: string, ttlMs = UNREACHABLE_TARGET_TTL_MS) {
+    if (typeof entity.id !== "number") return;
+    const now = Date.now();
+    const previous = this.unreachableTargets.get(entity.id) ?? 0;
+    const until = now + Math.max(2_000, ttlMs);
+    this.unreachableTargets.set(entity.id, Math.max(previous, until));
+    if (previous <= now) {
+      this.log().warn(
+        "Hedefe ulaşılamıyor — geçici olarak atlandı",
+        labelEntity(entity) + " · " + reason + " · " + Math.ceil(ttlMs / 1000) + " sn"
+      );
+    }
+  }
+
+getRuntime(): CombatRuntime {
     const protectPlayers = [...this.companion.protectPlayers];
     const protectPlayer = this.primaryProtectLabel();
     return {
@@ -649,6 +694,7 @@ export class CombatService {
     for (const id in bot.entities) {
       const e = bot.entities[id];
       if (!e || e === bot.entity) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
       const d = bot.entity.position.distanceTo(e.position);
       if (d > range) continue;
 
@@ -720,6 +766,7 @@ export class CombatService {
       for (const id in bot.entities) {
         const e = bot.entities[id];
         if (!e || e === bot.entity) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
         if (wardEntities.some((w) => w.ent === e)) continue;
         const d = wardEnt.position.distanceTo(e.position);
         if (d > settings.range) continue;
@@ -851,6 +898,11 @@ export class CombatService {
         }
 
         const entity = bot.players[playerName]?.entity;
+        if (entity && this.isTargetTemporarilyUnreachable(entity)) {
+          report({ done: 0, total: 1, label: playerName + " geçici olarak ulaşılamıyor" });
+          await sleep(500);
+          continue;
+        }
         if (!entity) {
           const inTab = Boolean(bot.players[playerName]);
           report({
@@ -1125,7 +1177,7 @@ export class CombatService {
         let entity =
           this.resolveCombatEntity(targetId, label, chase + 4) ??
           this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "all" : this.cfg().defendMode, chase) ??
-          (initial && initial.isValid !== false ? initial : null);
+          (initial && initial.isValid !== false && !this.isTargetTemporarilyUnreachable(initial) ? initial : null);
 
         if (!entity || entity.isValid === false) {
           if (lostSince == null) lostSince = Date.now();
@@ -1265,6 +1317,7 @@ export class CombatService {
     for (const id in bot.entities) {
       const e = bot.entities[id];
       if (!e || e === bot.entity) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
       const dist = bot.entity.position.distanceTo(e.position);
       if (dist > range) continue;
       if (e.username && this.isProtectedName(e.username)) continue;
@@ -1291,6 +1344,7 @@ export class CombatService {
     for (const id in bot.entities) {
       const e = bot.entities[id];
       if (!e || e === bot.entity) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
       if (!isHostileMob(String(e.name ?? e.displayName ?? ""))) continue;
       const d = bot.entity.position.distanceTo(e.position);
       if (d <= bestD) {
@@ -1343,7 +1397,7 @@ export class CombatService {
         }
       }
     }
-    if (playerEnt) {
+    if (playerEnt && !this.isTargetTemporarilyUnreachable(playerEnt)) {
       try {
         const d = bot.entity.position.distanceTo(playerEnt.position);
         if (d <= maxDist) return playerEnt;
@@ -1357,6 +1411,7 @@ export class CombatService {
     for (const id in bot.entities) {
       const e = bot.entities[id];
       if (!e || e === bot.entity) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
       if (labelEntity(e).toLowerCase() !== want) continue;
       if (e.isValid === false) continue;
       try {
@@ -1379,7 +1434,7 @@ export class CombatService {
 
     if (id != null) {
       const byId = bot.entities[id];
-      if (byId && byId.isValid !== false) {
+      if (byId && byId.isValid !== false && !this.isTargetTemporarilyUnreachable(byId)) {
         try {
           const d = bot.entity.position.distanceTo(byId.position);
           if (d <= maxDist) return byId;
@@ -1395,71 +1450,155 @@ export class CombatService {
     if (this.deadPaused) return;
     const bot = this.requireBot();
     if ((bot.health ?? 0) <= 0 || !bot.entity) return;
+    if (this.isTargetTemporarilyUnreachable(entity)) {
+      await sleep(180);
+      return;
+    }
+
     const hold = Math.max(0.8, range);
+    const chaseLimit = Math.max(12, Number(this.cfg().chaseDistance) || 24);
+    let tracked: Entity =
+      (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
+    let lastBotPos = bot.entity.position.clone();
+    let lastTargetPos = tracked.position.clone();
+    let bestDistance = bot.entity.position.distanceTo(tracked.position);
+    let lastProgressAt = Date.now();
+    let routeRetried = false;
+    let noPathSince = 0;
+
+    const setFollowGoal = (target: Entity) => {
+      try {
+        bot.pathfinder.setGoal(new goals.GoalFollow(target, hold), true);
+      } catch {
+        const p = target.position;
+        bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
+      }
+    };
+
+    const onPathUpdate = (result: { status?: string }) => {
+      const status = String(result?.status ?? "");
+      if (status === "noPath" || status === "timeout") {
+        if (!noPathSince) noPathSince = Date.now();
+      } else if (status === "success" || status === "partial") {
+        noPathSince = 0;
+      }
+    };
+
     try {
-      // canDig kapalı: hedefe kazarak değil yürüyerek/atlayarak yaklaş (İ2)
-      ensureMovement(this.instance, { allowSprintNow: true, canDig: false });
+      // Savaş hedefi kapalı/yer altında olabilir: pathfinder kontrollü biçimde kazabilir.
+      // Blok yerleştirme kapalı tutulur; rastgele scaffold ile harita bozulmaz.
+      ensureMovement(this.instance, {
+        mode: "goto",
+        allowSprintNow: true,
+        parkour: true,
+        canDig: true,
+        allowPlace: false
+      });
 
-      // GoalFollow(dynamic=true) hedefi KENDİSİ izler — döngüde goal yenilenmez
-      // (800ms'de bir setGoal, zıplama ortasında rota iptali = boşluğa düşme demekti).
-      // Yenileme yalnızca entity referansı değişince (chunk'tan çıkıp girme) yapılır.
-      let tracked: Entity =
-        (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
-      const setFollowGoal = (target: Entity) => {
-        try {
-          bot.pathfinder.setGoal(new goals.GoalFollow(target, hold), true);
-        } catch {
-          try {
-            const p = target.position;
-            bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
-          } catch {
-            /* */
-          }
-        }
-      };
+      bot.on("path_update", onPathUpdate);
       setFollowGoal(tracked);
+      const startedAt = Date.now();
 
-      const t0 = Date.now();
-      while (!token.cancelled && !this.deadPaused && Date.now() - t0 < 12_000) {
+      while (!token.cancelled && !this.deadPaused && Date.now() - startedAt < 15_000) {
         if ((bot.health ?? 0) <= 0 || !bot.entity) break;
+
         const live = typeof entity.id === "number" ? bot.entities[entity.id] : tracked;
         if (!live || live.isValid === false) break;
         if (live !== tracked) {
           tracked = live;
+          lastTargetPos = live.position.clone();
           setFollowGoal(tracked);
         }
 
-        const reach = this.cfg().reach ?? 3;
-        if (inMeleeRange(bot, live, reach)) break;
+        const now = Date.now();
+        const dist = bot.entity.position.distanceTo(live.position);
+        const targetJump = live.position.distanceTo(lastTargetPos);
 
-        // Bakış: aktif rota boyunca yaw tamamen pathfinder'a aittir.
-      // İnsanî hedef bakışı yalnızca rota ve fiziksel hız gerçekten durduğunda uygulanır.
-        try {
-        const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
-        const vx = bot.entity.velocity?.x ?? 0;
-        const vz = bot.entity.velocity?.z ?? 0;
-        const physicallyStopped = Math.hypot(vx, vz) < 0.03;
-        if (pf.isMoving?.() === false && physicallyStopped && bot.entity.onGround) {
-          await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
+        // Admin TP / anlık uzak taşıma: eski hedef konumuna sonsuza kadar rota çizme.
+        if (targetJump >= TARGET_TELEPORT_DELTA && dist > chaseLimit + 4) {
+          this.markTargetUnreachable(live, "hedef ışınlandı (" + targetJump.toFixed(1) + " blok)", 8_000);
+          break;
         }
+        if (dist > chaseLimit + 8) {
+          this.markTargetUnreachable(live, "kovalama sınırı dışında (" + dist.toFixed(1) + ">" + (chaseLimit + 8) + ")", 8_000);
+          break;
+        }
+
+        const reach = this.cfg().reach ?? 3;
+        if (inMeleeRange(bot, live, reach)) {
+          this.clearTargetUnreachable(live);
+          break;
+        }
+
+        const moved = bot.entity.position.distanceTo(lastBotPos);
+        const improved = bestDistance - dist;
+        if (moved > 0.35 || improved > 0.45) {
+          lastBotPos = bot.entity.position.clone();
+          bestDistance = Math.min(bestDistance, dist);
+          lastProgressAt = now;
+          routeRetried = false;
+          if (noPathSince && now - noPathSince < 800) noPathSince = 0;
+        }
+
+        const stalledFor = now - lastProgressAt;
+        const noPathFor = noPathSince ? now - noPathSince : 0;
+
+        if (!routeRetried && (stalledFor >= APPROACH_STALL_RETRY_MS || noPathFor >= 1_500)) {
+          routeRetried = true;
+          lastProgressAt = now;
+          noPathSince = 0;
+          ensureMovement(this.instance, {
+            mode: "goto",
+            allowSprintNow: true,
+            parkour: true,
+            canDig: true,
+            allowPlace: false
+          });
+          setFollowGoal(live);
+          this.log().debug("Savaş rotası yeniden hesaplandı", labelEntity(live));
+        } else if (stalledFor >= APPROACH_STALL_ABORT_MS || noPathFor >= 4_000) {
+          this.markTargetUnreachable(
+            live,
+            noPathFor >= 4_000 ? "güvenli rota bulunamadı" : "ilerleme yok / blok kırılamıyor"
+          );
+          break;
+        }
+
+        // Aktif rota boyunca yaw pathfinder'a aittir. Yalnızca gerçekten durunca bak.
+        try {
+          const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+          const vx = bot.entity.velocity?.x ?? 0;
+          const vz = bot.entity.velocity?.z ?? 0;
+          if (pf.isMoving?.() === false && Math.hypot(vx, vz) < 0.03 && bot.entity.onGround) {
+            await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
+          }
+        } catch {
+          /* bakış zorunlu değil */
+        }
+
+        lastTargetPos = live.position.clone();
+        await sleep(100);
+      }
+    } catch (error) {
+      this.log().debug("Yaklaşma başarısız", error instanceof Error ? error.message : String(error));
+      if (tracked?.isValid !== false) this.markTargetUnreachable(tracked, "pathfinder hatası", 6_000);
+    } finally {
+      try {
+        bot.removeListener("path_update", onPathUpdate);
       } catch {
         /* */
       }
-        await sleep(120);
-      }
       try {
-      bot.pathfinder.setGoal(null);
-    } catch {
-      /* noop */
-    }
-    await waitForPathfinderIdle(bot, token);
-    } catch (e) {
-      this.log().debug("Yaklaşma başarısız", e instanceof Error ? e.message : String(e));
-      this.clearPathfinder();
+        bot.pathfinder.setGoal(null);
+      } catch {
+        /* */
+      }
+      // Eski pathfinder kontrol paketleri boşalsın; sonraki vuruş bakışıyla çakışmasın.
+      await sleep(60);
     }
   }
 
-  private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, token: TaskToken) {
+private async fleeFrom(from: { x: number; y: number; z: number }, dist: number, token: TaskToken) {
     const bot = this.requireBot();
     const pos = bot.entity.position;
     const dx = pos.x - from.x;

@@ -91,6 +91,8 @@ interface MlgRecoverJob {
 
 /** Blok etkileşim menzili (su koyabilmek için katı bloğa bakış) */
 const BLOCK_REACH = 4.45;
+// caya-combat-mlg-stability-v2: MLG hazırlık kilidi + tahmini iniş doğrulaması.
+const caya_combat_mlg_stability_v2_fall_guard = true;
 
 const BOAT_NAMES = [
   "oak_boat",
@@ -202,6 +204,9 @@ export class FallGuardService {
   private bot: Bot | null = null;
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
+  private preEquipBusy = false;
+  private preEquippedMethod: FallMethod | null = null;
+  private lastPreEquipAt = 0;
   private reclaimBusy = false;
   private lastMlgAt = 0;
   private lastEmitAt = 0;
@@ -246,6 +251,9 @@ export class FallGuardService {
     this.bot = null;
     this.busy = false;
     this.reclaimBusy = false;
+    this.preEquipBusy = false;
+    this.preEquippedMethod = null;
+    this.lastPreEquipAt = 0;
     this.recoverJobs = [];
     this.fallPeakY = null;
     this.state = idleState();
@@ -488,11 +496,8 @@ export class FallGuardService {
     }
 
     // --- dinamik tetik penceresi ---
-    const windows = mlgWindows(chosen, Math.abs(vy), cfg.mlgTriggerBlocks);
-    // düşerken mümkün olduğunca hızlı yere bak (hazırlık + bekleme)
-    if (chosen === "water" || chosen === "powder_snow" || chosen === "boat") {
-      void snapLookDown(bot);
-    }
+    const windows = mlgWindows(chosen, Math.abs(vy), cfg.mlgTriggerBlocks, getBotPingMs(bot));
+    // Bakış ve ekipman hazırlığı preEquip kilidi altında tek sıra halinde yürür.
 
     // hazırlık: hâlâ yüksekte — kova/blok ele
     if (remaining > windows.prepareFrom) {
@@ -562,8 +567,9 @@ export class FallGuardService {
         return;
       }
 
+      const prepDeadline = Date.now() + 140;
+      while (this.preEquipBusy && Date.now() < prepDeadline) await sleep(5);
       await snapLookDown(bot);
-
       const ok = await this.executeMethod(bot, chosen, remNow);
       if (ok) {
         this.lastMlgAt = Date.now();
@@ -571,12 +577,12 @@ export class FallGuardService {
         this.log().info(`MLG başarılı: ${chosen}`, `kalan≈${remNow.toFixed(1)}`);
         this.scheduleReclaimAfterLand(chosen);
       } else {
-        this.lastMlgAt = Date.now() - 50;
+        this.lastMlgAt = 0;
         this.state.lastAction = `başarısız: ${chosen} — yeniden denenecek`;
         this.log().warn("Düşüş kurtarma yerleşmedi", `${chosen} · kalan ${remNow.toFixed(1)}`);
       }
     } catch (e) {
-      this.lastMlgAt = Date.now() - 50;
+      this.lastMlgAt = 0;
       this.state.lastAction = `hata: ${e instanceof Error ? e.message : String(e)}`;
       this.log().warn("Düşüş kurtarma başarısız", e instanceof Error ? e.message : String(e));
     } finally {
@@ -587,23 +593,37 @@ export class FallGuardService {
   }
 
   private async preEquip(bot: Bot, method: FallMethod) {
+    if (this.preEquipBusy || this.busy) return;
     const item = findItemForMethod(bot, method, this.instance.config.inventory.bannedItems);
     if (!item) return;
+
+    const now = Date.now();
+    if (
+      this.preEquippedMethod === method &&
+      bot.heldItem?.name === item.name &&
+      now - this.lastPreEquipAt < 250
+    ) {
+      return;
+    }
+
+    this.preEquipBusy = true;
     try {
-      // önce bakış (kova takmadan da yere kilitlen)
-      if (method === "water" || method === "powder_snow" || method === "boat") {
-        await snapLookDown(bot);
-      }
+      // Önce eşya; sonra tek bir bakış. Eski kod aynı 40 ms döngüsünde üst üste
+      // equip/look promise'leri başlatıp yerleştirme sırasını bozabiliyordu.
       if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       if (method === "water" || method === "powder_snow" || method === "boat") {
         await snapLookDown(bot);
       }
+      this.preEquippedMethod = method;
+      this.lastPreEquipAt = Date.now();
     } catch {
-      /* */
+      this.preEquippedMethod = null;
+    } finally {
+      this.preEquipBusy = false;
     }
   }
 
-  private async tryEquipTotem(bot: Bot) {
+private async tryEquipTotem(bot: Bot) {
     const banned = this.instance.config.inventory.bannedItems;
     if (banned.includes("totem_of_undying")) return;
     const totem = bot.inventory.items().find((i) => i.name === "totem_of_undying");
@@ -683,22 +703,18 @@ export class FallGuardService {
    */
   private async placeBucketMlg(bot: Bot, item: Item, method: FallMethod): Promise<boolean> {
     const filledName = method === "powder_snow" ? "powder_snow_bucket" : "water_bucket";
-    // düşüş öncesi / yerleştirme öncesi sayım (çoklu kova)
     const filledBefore = countItemName(bot, filledName);
     const emptyBefore = countItemName(bot, "bucket");
 
-    try {
-      await snapLookDown(bot);
-      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
-      await snapLookDown(bot);
-    } catch {
-      return false;
-    }
+    const inventorySaysPlaced = () => {
+      const filledAfter = countItemName(bot, filledName);
+      const emptyAfter = countItemName(bot, "bucket");
+      return filledAfter < filledBefore || emptyAfter > emptyBefore;
+    };
 
     const markSuccess = (x: number, y: number, z: number, why: string) => {
       const filledAfter = countItemName(bot, filledName);
       const emptyAfter = countItemName(bot, "bucket");
-      // geri al: en az bir dolu kova eksildiyse onu geri getir
       const used = Math.max(1, filledBefore - filledAfter, emptyAfter > emptyBefore ? 1 : 0);
       this.enqueueRecover(method, { x, y, z }, {
         wantFilledCount: filledAfter + used,
@@ -706,26 +722,27 @@ export class FallGuardService {
         usedBuckets: used
       });
       this.log().info(
-        `MLG su yerleşti (${why})`,
-        `${filledName} ${filledBefore}→${filledAfter} · boş ${emptyBefore}→${emptyAfter} · geri-al hedef ${filledAfter + used}`
+        "MLG su yerleşti (" + why + ")",
+        filledName + " " + filledBefore + "→" + filledAfter + " · boş " + emptyBefore + "→" + emptyAfter
       );
       return true;
     };
 
-    const inventorySaysPlaced = () => {
-      const filledAfter = countItemName(bot, filledName);
-      const emptyAfter = countItemName(bot, "bucket");
-      // dolu azaldı VEYA boş arttı (çoklu kova senaryosu)
-      return filledAfter < filledBefore || emptyAfter > emptyBefore;
-    };
+    try {
+      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
+    } catch {
+      return false;
+    }
 
-    for (let attempt = 0; attempt < 18; attempt++) {
+    const deadline = Date.now() + 850;
+    let lastTarget: { x: number; y: number; z: number } | null = null;
+
+    for (let attempt = 0; attempt < 10 && Date.now() < deadline; attempt++) {
       if (!bot.entity || this.instance.status !== "online") return false;
 
-      // envanter delta — sunucu su bloğunu gecikmeli gösterebilir
       if (inventorySaysPlaced()) {
         const p = bot.entity.position;
-        const t = findBestWaterPlaceTarget(bot, 4);
+        const t = lastTarget ?? findBestWaterPlaceTarget(bot, 4);
         return markSuccess(
           t?.x ?? Math.floor(p.x),
           t ? t.y + 1 : Math.floor(p.y),
@@ -734,76 +751,57 @@ export class FallGuardService {
         );
       }
 
-      // Yere değdi / yumuşak — yeni su DÖKME (zaten yerleşmediyse)
-      if (isEffectivelyGrounded(bot)) {
-        if (isInLiquid(bot) || hasSoftNearFeet(bot)) {
-          const p = bot.entity.position;
-          // sadece zaten suda/yumuşak — dökmeden başarı sayma; envanter değişmediyse false
-          return false;
-        }
-        this.log().info("MLG döküm iptal", "yere değdi (su dökülmedi)");
-        return false;
-      }
-
       if (isInLiquid(bot) || (method === "powder_snow" && hasPowderSnowNear(bot))) {
-        // zaten suda — dökme; envanter değişmediyse MLG gereksiz
         return false;
       }
+      if (isEffectivelyGrounded(bot)) return false;
 
       const land = findLandingBelow(bot);
-      const feetY = bot.entity.position.y;
-      const rem = land ? feetY - land.standY : 99;
-
-      if (rem > BLOCK_REACH + 0.15) {
+      const rem = land ? bot.entity.position.y - land.standY : estimateRemainingBlind(bot);
+      if (rem > BLOCK_REACH + 0.2) {
         await snapLookDown(bot);
-        await sleep(25);
+        await sleep(12);
         continue;
       }
 
       const target = findBestWaterPlaceTarget(bot, rem);
       if (!target) {
+        this.state.lastAction = "MLG: tahmini iniş altında uygun tam blok yok";
         await snapLookDown(bot);
-        this.state.lastAction = "MLG: uygun katı yok (yaprak/çit?)";
-        await sleep(30);
+        await sleep(12);
         continue;
       }
+      lastTarget = target;
 
       const solid = bot.blockAt(v3(target.x, target.y, target.z));
       const above = bot.blockAt(v3(target.x, target.y + 1, target.z));
-
       if (above && (above.name.includes("water") || above.name === "powder_snow")) {
-        return markSuccess(target.x, target.y + 1, target.z, "zaten-su");
+        // Önceden var olan suyu kendimiz yerleştirmiş gibi geri-al kuyruğuna ekleme.
+        this.state.lastAction = "MLG: iniş yüzeyi zaten yumuşak";
+        return true;
       }
-
-      if (solid && isWaterPlaceableBlock(solid)) {
-        try {
-          await bot.lookAt(v3(target.x + 0.5, target.y + 0.99, target.z + 0.5), true);
-        } catch {
-          await snapLookDown(bot);
-        }
-      } else {
-        await snapLookDown(bot);
-        await sleep(20);
+      if (!solid || !isWaterPlaceableBlock(solid)) {
+        await sleep(10);
         continue;
       }
 
-      if (bot.heldItem?.name !== item.name) {
-        const again = bot.inventory.items().find((i) => i.name === item.name);
-        if (again) {
-          try {
-            await bot.equip(again, "hand");
-            await snapLookAt(bot, target.x + 0.5, target.y + 0.99, target.z + 0.5);
-          } catch {
-            return false;
-          }
-        } else {
-          // elinde yok — belki zaten kullandı
-          if (inventorySaysPlaced()) {
-            return markSuccess(target.x, target.y + 1, target.z, "kova-bitti");
-          }
+      const held = bot.heldItem;
+      if (held?.name !== item.name) {
+        const again = bot.inventory.items().find((candidate) => candidate.name === item.name);
+        if (!again) {
+          if (inventorySaysPlaced()) return markSuccess(target.x, target.y + 1, target.z, "kova-kullanıldı");
+          return false;
+        }
+        try {
+          await bot.equip(again, "hand");
+        } catch {
           return false;
         }
       }
+
+      // Hedef her denemede güncellenir; karmaşık zeminde komşu yüksek bloğa değil,
+      // tahmini ayak izinin altındaki tam yüzeye nişan alınır.
+      await snapLookAt(bot, target.x + 0.5, target.y + 0.995, target.z + 0.5);
 
       try {
         bot.activateItem(false);
@@ -811,63 +809,55 @@ export class FallGuardService {
         try {
           await bot.activateItem();
         } catch {
-          /* */
+          /* paket yedeği aşağıda */
         }
       }
-      await sleep(50);
+
+      await sleep(18);
+      if (!inventorySaysPlaced()) {
+        try {
+          await bot.activateBlock(solid);
+        } catch {
+          /* bazı sürümlerde activateItem yeterli */
+        }
+      }
+      if (!inventorySaysPlaced() && attempt % 2 === 1) tryUseItemPacket(bot);
+      await sleep(24);
+
       try {
         bot.deactivateItem();
       } catch {
         /* */
       }
 
-      if (solid && isWaterPlaceableBlock(solid) && countItemName(bot, filledName) >= filledBefore) {
-        try {
-          await bot.activateBlock(solid);
-        } catch {
-          /* */
-        }
-        await sleep(30);
-      }
-
-      if (countItemName(bot, filledName) >= filledBefore) {
-        tryUseItemPacket(bot);
-        await sleep(30);
-      }
-
-      // kısa bekle — paket/sync
-      await sleep(40);
-
-      // 1) envanter (birincil doğruluk — çoklu kova)
       if (inventorySaysPlaced()) {
         return markSuccess(target.x, target.y + 1, target.z, "envanter-sonra");
       }
-      // 2) dünya
-      if (isInLiquid(bot) || hasWaterNear(bot, target.x, target.y + 1, target.z) || hasPowderSnowNear(bot)) {
+      if (
+        isInLiquid(bot) ||
+        hasWaterNear(bot, target.x, target.y + 1, target.z) ||
+        (method === "powder_snow" && hasPowderSnowNear(bot))
+      ) {
         return markSuccess(target.x, target.y + 1, target.z, "dünya");
       }
 
-      await sleep(30);
+      await sleep(10);
     }
 
-    // son şans envanter
-    if (inventorySaysPlaced()) {
-      const p = bot.entity?.position;
-      if (p) return markSuccess(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), "final-envanter");
-    }
-    const softOk = isInLiquid(bot) || hasSoftNearFeet(bot);
-    if (softOk && bot.entity) {
+    if (inventorySaysPlaced() && bot.entity) {
       const p = bot.entity.position;
-      return markSuccess(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), "soft");
+      const t = lastTarget;
+      return markSuccess(t?.x ?? Math.floor(p.x), t ? t.y + 1 : Math.floor(p.y), t?.z ?? Math.floor(p.z), "final");
     }
+
     this.log().warn(
       "MLG su yerleşmedi",
-      `${filledName} ${filledBefore}→${countItemName(bot, filledName)} · boş ${emptyBefore}→${countItemName(bot, "bucket")}`
+      filledName + " " + filledBefore + "→" + countItemName(bot, filledName) + " · boş " + emptyBefore + "→" + countItemName(bot, "bucket")
     );
     return false;
   }
 
-  private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
+private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     try {
       await bot.equip(item, "hand");
     } catch {
@@ -1440,28 +1430,47 @@ export function fallDamageHp(
  *
  * Hız arttıkça placeMax biraz yükselir (paket gecikmesi için lead).
  */
+function getBotPingMs(bot: Bot): number {
+  try {
+    const anyBot = bot as unknown as {
+      player?: { ping?: number };
+      players?: Record<string, { ping?: number }>;
+      username?: string;
+    };
+    const ping = Number(anyBot.player?.ping ?? anyBot.players?.[bot.username]?.ping ?? 0);
+    return Number.isFinite(ping) ? Math.max(0, Math.min(1_000, ping)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function mlgWindows(
   method: FallMethod,
   speed: number,
-  cfgBase: number
+  cfgBase: number,
+  pingMs = 0
 ): { prepareFrom: number; placeMax: number; placeMin: number } {
-  // lead: hız * ~3 tick (~150ms) mesafe
-  const lead = Math.min(1.8, speed * 0.55);
+  // Hız ve ping yalnızca hazırlığı öne çeker; gerçek tıklama blok menzili içinde kalır.
+  const motionLead = Math.min(1.9, speed * 0.62);
+  const pingLead = Math.min(0.9, (pingMs / 50) * speed * 0.12);
+  const lead = motionLead + pingLead;
+
   if (method === "water" || method === "powder_snow") {
-    // reach 4.5 — asıl yerleştirme 1.4–4.2 arası; lead ile üst
-    const placeMax = Math.min(BLOCK_REACH - 0.15, Math.max(cfgBase - 1.2, 2.2) + lead);
-    const placeMin = 0.35;
-    return { prepareFrom: Math.max(placeMax + 3, 10), placeMax, placeMin };
+    const placeMax = Math.min(BLOCK_REACH - 0.08, Math.max(cfgBase - 1.25, 2.35) + lead);
+    return {
+      prepareFrom: Math.max(placeMax + 4.5, 11.5 + pingLead),
+      placeMax,
+      placeMin: 0.18
+    };
   }
   if (method === "boat") {
-    const placeMax = Math.min(BLOCK_REACH - 0.2, 3.2 + lead * 0.8);
-    return { prepareFrom: placeMax + 4, placeMax, placeMin: 0.4 };
+    const placeMax = Math.min(BLOCK_REACH - 0.12, 3.25 + lead * 0.75);
+    return { prepareFrom: placeMax + 5, placeMax, placeMin: 0.25 };
   }
-  // blok yastık (hay/slime/cobweb): biraz daha yüksekten koy
   return {
-    prepareFrom: Math.max(cfgBase + 6, 12),
-    placeMax: Math.min(6.5, cfgBase + 1.5 + lead),
-    placeMin: 0.5
+    prepareFrom: Math.max(cfgBase + 7, 13),
+    placeMax: Math.min(6.5, cfgBase + 1.7 + lead),
+    placeMin: 0.35
   };
 }
 
@@ -1818,23 +1827,40 @@ interface LandingInfo {
 
 /** Aşağıdaki iniş yüzeyi: yumuşak (su/hay…) veya katı */
 function findLandingBelow(bot: Bot): LandingInfo | null {
+  if (!bot.entity) return null;
   const pos = bot.entity.position;
-  // ayak izi — birkaç xz dene (kenarda düşüş)
-  const bases = [
-    [Math.floor(pos.x), Math.floor(pos.z)],
-    [Math.floor(pos.x + 0.3), Math.floor(pos.z)],
-    [Math.floor(pos.x - 0.3), Math.floor(pos.z)],
-    [Math.floor(pos.x), Math.floor(pos.z + 0.3)],
-    [Math.floor(pos.x), Math.floor(pos.z - 0.3)]
-  ] as const;
+  const predicted = predictImpactXZ(bot, 8);
 
-  let best: LandingInfo | null = null;
-  for (const [x, z] of bases) {
+  const samples: Array<[number, number, number]> = [
+    [predicted.x, predicted.z, 0],
+    [predicted.x + 0.28, predicted.z, 0.1],
+    [predicted.x - 0.28, predicted.z, 0.1],
+    [predicted.x, predicted.z + 0.28, 0.1],
+    [predicted.x, predicted.z - 0.28, 0.1],
+    [pos.x, pos.z, 0.35]
+  ];
+
+  const seen = new Set<string>();
+  let best: { info: LandingInfo; score: number } | null = null;
+  for (const [sx, sz, sourcePenalty] of samples) {
+    const x = Math.floor(sx);
+    const z = Math.floor(sz);
+    const key = x + "," + z;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
     const info = scanColumn(bot, x, z, Math.floor(pos.y));
     if (!info) continue;
-    if (!best || info.standY > best.standY) best = info; // en yüksek (en yakın) zemin
+    const remaining = pos.y - info.standY;
+    if (remaining < -0.2) continue;
+
+    const impactDistance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
+    // Önce tahmini ayak izi; komşu yüksek çıkıntı yalnızca gerçekten rota üzerindeyse seçilir.
+    const score = impactDistance * 3.2 + sourcePenalty + Math.max(0, remaining) * 0.006;
+    if (!best || score < best.score) best = { info, score };
   }
-  return best;
+
+  return best?.info ?? null;
 }
 
 function scanColumn(bot: Bot, x: number, z: number, startY: number): LandingInfo | null {
@@ -1879,50 +1905,106 @@ function hasWaterPlaceableNearby(bot: Bot, maxDown: number): boolean {
  * Su koyulacak en iyi tam katı blok (x,y,z = solid block coords).
  * Yaprak/çit/slab atlanır; ayak altı tercih, yoksa 3x3 komşu.
  */
-function findBestWaterPlaceTarget(bot: Bot, maxDown: number): { x: number; y: number; z: number } | null {
+function predictImpactXZ(bot: Bot, maxTicks = 10): { x: number; z: number; ticks: number } {
+  const pos = bot.entity.position;
+  let x = pos.x;
+  let z = pos.z;
+  let vx = bot.entity.velocity?.x ?? 0;
+  let vz = bot.entity.velocity?.z ?? 0;
+  let vy = bot.entity.velocity?.y ?? -0.3;
+  let fallen = 0;
+  const landing = (() => {
+    try {
+      const current = scanColumn(bot, Math.floor(pos.x), Math.floor(pos.z), Math.floor(pos.y));
+      return current ? Math.max(0, pos.y - current.standY) : 6;
+    } catch {
+      return 6;
+    }
+  })();
+
+  let ticks = 0;
+  while (ticks < Math.max(1, maxTicks) && fallen < landing) {
+    x += vx;
+    z += vz;
+    fallen += Math.max(0, -vy);
+    vx *= 0.91;
+    vz *= 0.91;
+    vy = (vy - 0.08) * 0.98;
+    ticks++;
+  }
+  return { x, z, ticks };
+}
+
+function isReplaceableAboveForMlg(name0: string): boolean {
+  const name = name0.replace(/^minecraft:/, "");
+  if (isAirName(name) || isFallThroughName(name)) return true;
+  if (name.includes("water") || name === "powder_snow" || name === "snow") return true;
+  return false;
+}
+
+function canSeeMlgBlock(bot: Bot, block: unknown): boolean {
+  try {
+    const fn = (bot as unknown as { canSeeBlock?: (b: unknown) => boolean }).canSeeBlock;
+    return typeof fn === "function" ? fn.call(bot, block) : true;
+  } catch {
+    return true;
+  }
+}
+
+function findBestWaterPlaceTarget(
+  bot: Bot,
+  maxDown: number
+): { x: number; y: number; z: number } | null {
   if (!bot.entity) return null;
   const pos = bot.entity.position;
   const eyeY = pos.y + ((bot.entity as { eyeHeight?: number }).eyeHeight ?? 1.62);
-  const fx = Math.floor(pos.x);
-  const fz = Math.floor(pos.z);
+  const predicted = predictImpactXZ(bot, 10);
+  const landing = findLandingBelow(bot);
+  const desiredSolidY = landing?.solidY;
   const startY = Math.floor(pos.y);
-  const minY = Math.max(-64, startY - Math.ceil(Math.min(8, Math.max(2, maxDown + 2))));
+  const minY = Math.max(-64, startY - Math.ceil(Math.min(8, Math.max(2, maxDown + 1.5))));
+
+  const columns: Array<[number, number]> = [];
+  const addColumn = (x: number, z: number) => {
+    if (!columns.some(([cx, cz]) => cx === x && cz === z)) columns.push([x, z]);
+  };
+  const px = Math.floor(predicted.x);
+  const pz = Math.floor(predicted.z);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) addColumn(px + dx, pz + dz);
+  }
+  addColumn(Math.floor(pos.x), Math.floor(pos.z));
 
   let best: { x: number; y: number; z: number } | null = null;
   let bestScore = Infinity;
 
-  for (let dx = -2; dx <= 2; dx++) {
-    for (let dz = -2; dz <= 2; dz++) {
-      for (let y = startY; y >= minY; y--) {
-        const b = bot.blockAt(v3(fx + dx, y, fz + dz));
-        if (!isWaterPlaceableBlock(b)) continue;
-        // üstü su koyulabilir mi (hava veya replaceable)
-        const above = bot.blockAt(v3(fx + dx, y + 1, fz + dz));
-        if (above) {
-          const an = above.name.replace(/^minecraft:/, "");
-          if (!isAirName(an) && !an.includes("water") && !isFallThroughName(an) && !isBadWaterSurfaceName(an) && an !== "snow") {
-            // dolu üst — atla (yaprak üstü dahil — yaprak bad surface, skip if leaf above solid)
-            if (!isBadWaterSurfaceName(an)) continue;
-            // üstünde yaprak varsa bu katıya bakış engellenir — atla
-            if (an.includes("leaves") || an.includes("leaf")) continue;
-          }
-        }
-        // mesafe (göz → tepe)
-        const tx = fx + dx + 0.5;
-        const ty = y + 1;
-        const tz = fz + dz + 0.5;
-        const dist = Math.hypot(tx - pos.x, ty - eyeY, tz - pos.z);
-        if (dist > BLOCK_REACH + 0.35) continue;
-        // skor: yakın + ayak altı bonus
-        const horiz = Math.abs(dx) + Math.abs(dz);
-        const score = dist + horiz * 0.35 + (horiz === 0 ? 0 : 0.4);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: fx + dx, y, z: fz + dz };
-        }
+  for (const [x, z] of columns) {
+    const impactDistance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
+    if (impactDistance > 1.75) continue;
+
+    for (let y = startY; y >= minY; y--) {
+      const block = bot.blockAt(v3(x, y, z));
+      if (!isWaterPlaceableBlock(block)) continue;
+      if (!canSeeMlgBlock(bot, block)) continue;
+
+      const above = bot.blockAt(v3(x, y + 1, z));
+      if (above && !isReplaceableAboveForMlg(above.name)) continue;
+
+      const tx = x + 0.5;
+      const ty = y + 1;
+      const tz = z + 0.5;
+      const reach = Math.hypot(tx - pos.x, ty - eyeY, tz - pos.z);
+      if (reach > BLOCK_REACH + 0.08) continue;
+
+      const heightPenalty = desiredSolidY == null ? 0 : Math.abs(y - desiredSolidY) * 1.4;
+      const score = impactDistance * 4 + heightPenalty + reach * 0.12;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { x, y, z };
       }
     }
   }
+
   return best;
 }
 
