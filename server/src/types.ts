@@ -415,10 +415,10 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       parkourMaxGap: 3,
       ladderParkour: true,
       parkourSprint: true,
-      edgeSafety: true,
-      // 3 = pathfinder ile uyumlu; edge safety asıl drop≥4'te devreye girer
+      // kenar "geri çek" takip/goto'yu bozuyordu — varsayılan kapalı; pathfinder maxDrop kullan
+      edgeSafety: false,
       maxSafeDrop: 3,
-      bridgeGaps: true,
+      bridgeGaps: false,
       preferParkourOverBridge: true
     }
   };

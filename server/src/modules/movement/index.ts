@@ -3,7 +3,7 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
-import { handleEdgeSafety, safeMaxDropForPath } from "./edgeSafety";
+import { safeMaxDropForPath } from "./edgeSafety";
 import { easeLookAt, entityLookPoint, stepLookAlongMotion, stepLookAtEntity } from "./look";
 
 const GOTO_TIMEOUT_MS = 180_000;
@@ -99,8 +99,6 @@ function pathfinderGoal(
   });
   // kısa insanî gecikme — anında yola çıkma flag’i azaltır
   const reaction = moveCfg(instance).humanize === false || moveMode === "parkour" ? 0 : 40 + Math.floor(Math.random() * 90);
-  let edgeBusy = false;
-  let edgeTick = 0;
 
   return new Promise<void>((resolve, reject) => {
     const stopGoal = () => {
@@ -154,27 +152,14 @@ function pathfinderGoal(
         reject(new Error("Bağlantı koptu — hareket görevi sonlandı."));
         return;
       }
-      // bakış her tick; uçurum taraması seyrek (normal 1-up bozulmasın)
+      // sadece bakış — kenar güvenliği path'i bozuyordu, kaldırıldı (pathfinder maxDrop yeterli)
       void (async () => {
         try {
-          edgeTick++;
-          if (!edgeBusy && moveCfg(instance).edgeSafety !== false && edgeTick % 3 === 0) {
-            edgeBusy = true;
-            const act = await handleEdgeSafety(instance, token, { pausePath: true });
-            edgeBusy = false;
-            if (act === "jumped" || act === "bridged" || act === "backed") {
-              try {
-                bot.pathfinder.setGoal(goal);
-              } catch {
-                /* */
-              }
-            }
-          }
           const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
           if (lt) await stepLookAlongMotion(bot, lt, turnSpeed(instance));
           else await stepLookAlongMotion(bot, null, turnSpeed(instance));
         } catch {
-          edgeBusy = false;
+          /* look fail ignore */
         }
       })();
     }, 120);
@@ -358,34 +343,7 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(ent.position);
 
-          // UÇURUM: sadece gerçek void (1-up bozmaz); throttle edgeSafety içinde
-          try {
-            const act = await handleEdgeSafety(instance, token, { pausePath: true });
-            if (act === "jumped" || act === "bridged" || act === "backed") {
-              const ent2 = bot.players[playerName]?.entity;
-              if (ent2) {
-                ensureMovement(instance, {
-                  allowSprintNow: canSprint(),
-                  mode: "follow"
-                });
-                try {
-                  followBot.pathfinder.setGoal(new goals.GoalFollow(ent2, distJitter()), true);
-                } catch {
-                  /* */
-                }
-              }
-              report({
-                done: 0,
-                total: 0,
-                label: `takip ${playerName} · kenar:${act}`
-              });
-              await sleep(60);
-              continue;
-            }
-          } catch {
-            /* */
-          }
-
+          // kenar "geri çek" takibi bozuyordu — pathfinder maxDrop + parkour yeterli
           if (Math.random() < 0.05) {
             ensureMovement(instance, {
               allowSprintNow: canSprint(),
