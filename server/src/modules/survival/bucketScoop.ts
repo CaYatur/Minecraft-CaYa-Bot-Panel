@@ -64,7 +64,7 @@ export class BucketScoopService {
     if (!cfg.scoopWater && !cfg.scoopLava) return;
     if (Date.now() - this.lastAt < cfg.cooldownMs) return;
 
-    // düşerken / dövüş kaçışında / yanıyorken uğraşma
+    // düşerken / dövüş / yanıyorken uğraşma (silah elini bozma)
     if (!this.isSafe(bot)) return;
 
     const empty = countItemName(bot, "bucket");
