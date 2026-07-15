@@ -202,24 +202,22 @@ export async function executeGapJump(
     /* */
   }
 
-  // kenara hizalan: inişe doğru yürüyerek block kenarına gel
-  const edgeMs = g >= 4 ? 220 : g === 3 ? 140 : 80;
+  // kenara hizalan — acele etme (daha emin iniş)
+  const edgeMs = g >= 4 ? 280 : g === 3 ? 180 : 120;
   bot.setControlState("forward", true);
   if (g >= 3) bot.setControlState("sprint", true);
   await sleep(edgeMs);
 
-  // zıpla — 4 blokta biraz gecikmeli (momentum)
-  if (g >= 4) {
-    await sleep(60);
-  }
+  // zıpla — kısa basış, sonra bırak
+  if (g >= 4) await sleep(50);
   bot.setControlState("jump", true);
-  await sleep(g >= 4 ? 90 : 70);
+  await sleep(g >= 4 ? 85 : g === 3 ? 75 : 65);
   bot.setControlState("jump", false);
 
-  // havada sprint+forward tut
+  // havada yön tut (daha kontrollü süre)
   bot.setControlState("forward", true);
-  bot.setControlState("sprint", true);
-  const airMs = g === 2 ? 280 : g === 3 ? 380 : 480;
+  if (g >= 3) bot.setControlState("sprint", true);
+  const airMs = g === 2 ? 320 : g === 3 ? 420 : 520;
   const t0 = Date.now();
   while (Date.now() - t0 < airMs && !token.cancelled) {
     try {
@@ -254,8 +252,41 @@ export async function executeGapJump(
   return landed;
 }
 
+function findNearbyLadder(
+  bot: Bot,
+  fx: number,
+  fy: number,
+  fz: number
+): { x: number; y: number; z: number } | null {
+  for (const dy of [0, 1, -1, 2, -2]) {
+    for (const dx of [0, 1, -1]) {
+      for (const dz of [0, 1, -1]) {
+        if (isLadder(bot, fx + dx, fy + dy, fz + dz)) {
+          return { x: fx + dx, y: fy + dy, z: fz + dz };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function stillOnLadder(bot: Bot): boolean {
+  if (!bot.entity) return false;
+  const p = bot.entity.position;
+  const fx = Math.floor(p.x);
+  const fy = Math.floor(p.y);
+  const fz = Math.floor(p.z);
+  return (
+    isLadder(bot, fx, fy, fz) ||
+    isLadder(bot, fx, fy + 1, fz) ||
+    isLadder(bot, fx, fy - 1, fz) ||
+    findNearbyLadder(bot, fx, fy, fz) != null
+  );
+}
+
 /**
- * Merdiven/vine tırman: hedef Y'ye kadar, sonra kenara atla (ladder parkour).
+ * Merdiven/vine tırman — yavaş ve emin adımlar (hızlı zıplama = düşme).
+ * 1) merdivene yapış  2) kısa tırmanma darbeleri  3) tepede bekle  4) güvenli inişe çık
  */
 export async function climbLadderParkour(
   instance: BotInstance,
@@ -267,80 +298,169 @@ export async function climbLadderParkour(
   if (!bot?.entity) return false;
   ensureParkourBot(instance);
 
-  report?.({ done: 0, total: 1, label: `merdiven tırman → y=${targetY}` });
+  report?.({ done: 0, total: 1, label: `merdiven (yavaş) → y=${Math.floor(targetY)}` });
   clearControls(bot);
 
+  try {
+    bot.pathfinder.setGoal(null);
+  } catch {
+    /* */
+  }
+
   const t0 = Date.now();
-  while (!token.cancelled && Date.now() - t0 < 25_000) {
+  let stuckTicks = 0;
+  let lastY = bot.entity.position.y;
+
+  // --- 1) merdivene yaklaş ve merkezle ---
+  {
     const p = bot.entity.position;
-    const fx = Math.floor(p.x);
-    const fy = Math.floor(p.y);
-    const fz = Math.floor(p.z);
-
-    if (p.y >= targetY - 0.3) break;
-
-    // merdiven ara (etraf + ayak/göğüs)
-    let ladderPos: { x: number; y: number; z: number } | null = null;
-    for (const dy of [0, 1, -1, 2]) {
-      for (const dx of [0, 1, -1, 0, 0]) {
-        for (const dz of [0, 0, 0, 1, -1]) {
-          if (isLadder(bot, fx + dx, fy + dy, fz + dz)) {
-            ladderPos = { x: fx + dx, y: fy + dy, z: fz + dz };
-            break;
-          }
-        }
-        if (ladderPos) break;
-      }
-      if (ladderPos) break;
-    }
-
-    if (ladderPos) {
+    const ladder = findNearbyLadder(bot, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+    if (ladder) {
       try {
-        await bot.lookAt(v3(ladderPos.x + 0.5, ladderPos.y + 0.5, ladderPos.z + 0.5), true);
+        await bot.lookAt(v3(ladder.x + 0.5, ladder.y + 0.2, ladder.z + 0.5), true);
       } catch {
         /* */
       }
+      // kısa ileri — merdivene yapış
       bot.setControlState("forward", true);
-      bot.setControlState("jump", true); // tırmanma
+      await sleep(200);
+      bot.setControlState("forward", false);
       await sleep(120);
-    } else {
-      // merdiven yok — yukarı zıpla dene
-      bot.setControlState("jump", true);
-      await sleep(100);
-      bot.setControlState("jump", false);
-      await sleep(80);
     }
   }
 
-  clearControls(bot);
+  // --- 2) emin tırmanma: kısa jump darbeleri, arada bekle ---
+  while (!token.cancelled && Date.now() - t0 < 45_000) {
+    const p = bot.entity.position;
+    if (p.y >= targetY - 0.35) break;
 
-  // tepede kenara atla (ladder parkour çıkışı)
+    const fx = Math.floor(p.x);
+    const fy = Math.floor(p.y);
+    const fz = Math.floor(p.z);
+    const ladder = findNearbyLadder(bot, fx, fy, fz);
+
+    if (!ladder) {
+      // merdivenden koptu — rastgele zıplama yok, kısa bekle / hafif geri
+      clearControls(bot);
+      stuckTicks++;
+      if (stuckTicks > 8) break;
+      await sleep(200);
+      continue;
+    }
+
+    stuckTicks = 0;
+    try {
+      // merdiven gövdesine bak (yukarı değil — yapışma için)
+      await bot.lookAt(v3(ladder.x + 0.5, Math.min(p.y + 0.4, ladder.y + 0.8), ladder.z + 0.5), true);
+    } catch {
+      /* */
+    }
+
+    // merdivene doğru hafif bastır
+    bot.setControlState("forward", true);
+    await sleep(80);
+
+    // tırmanma darbesi (sürekli jump = düşme)
+    bot.setControlState("jump", true);
+    await sleep(90);
+    bot.setControlState("jump", false);
+    bot.setControlState("forward", false);
+
+    // stabilize — merdivende kalsın
+    await sleep(160);
+
+    // hâlâ merdivende mi?
+    if (!stillOnLadder(bot) && bot.entity.onGround && p.y < targetY - 1) {
+      // tekrar yapışmayı dene
+      bot.setControlState("forward", true);
+      await sleep(150);
+      bot.setControlState("forward", false);
+      await sleep(100);
+    }
+
+    // ilerleme yoksa fazla spam atlama
+    if (Math.abs(bot.entity.position.y - lastY) < 0.05) {
+      stuckTicks++;
+      await sleep(120);
+      if (stuckTicks > 12) break;
+    } else {
+      stuckTicks = 0;
+      lastY = bot.entity.position.y;
+    }
+
+    report?.({
+      done: 0,
+      total: 1,
+      label: `merdiven y=${bot.entity.position.y.toFixed(1)} → ${targetY.toFixed(0)}`
+    });
+  }
+
+  clearControls(bot);
+  await sleep(200); // tepede otur
+
+  // --- 3) güvenli çıkış: solid iniş var mı? yoksa zıplama ---
   const p = bot.entity.position;
   const fx = Math.floor(p.x);
   const fy = Math.floor(p.y);
   const fz = Math.floor(p.z);
+
+  type Land = { dx: number; dz: number; score: number };
+  const lands: Land[] = [];
   for (const [dx, dz] of [
     [1, 0],
     [-1, 0],
     [0, 1],
-    [0, -1]
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1]
   ] as const) {
-    if (isSolid(bot, fx + dx, fy - 1, fz + dz) && isAirish(bot, fx + dx, fy, fz + dz)) {
-      try {
-        await bot.lookAt(v3(fx + dx + 0.5, fy, fz + dz + 0.5), true);
-      } catch {
-        /* */
-      }
-      bot.setControlState("forward", true);
-      bot.setControlState("jump", true);
-      await sleep(150);
-      clearControls(bot);
-      break;
+    // iniş: ayak-1 solid, ayak+kafa boş
+    if (!isSolid(bot, fx + dx, fy - 1, fz + dz)) continue;
+    if (!isAirish(bot, fx + dx, fy, fz + dz)) continue;
+    if (!isAirish(bot, fx + dx, fy + 1, fz + dz)) continue;
+    // tercihen merdivenden uzak / düz
+    const score = Math.abs(dx) + Math.abs(dz);
+    lands.push({ dx, dz, score });
+  }
+  lands.sort((a, b) => a.score - b.score);
+
+  if (lands.length > 0) {
+    const { dx, dz } = lands[0]!;
+    try {
+      await bot.lookAt(v3(fx + dx + 0.5, fy, fz + dz + 0.5), true);
+    } catch {
+      /* */
     }
+    await sleep(100);
+    // küçük adım — büyük jump yok
+    bot.setControlState("forward", true);
+    await sleep(120);
+    // sadece gerekirse minik zıplama (eşik)
+    const needHop = !bot.entity.onGround || stillOnLadder(bot);
+    if (needHop) {
+      bot.setControlState("jump", true);
+      await sleep(70);
+      bot.setControlState("jump", false);
+    }
+    await sleep(180);
+    bot.setControlState("forward", false);
+    await sleep(150);
+  } else {
+    // güvenli iniş yok — merdivende kal / yavaşça bırak
+    instance.getLogger().info("Merdiven parkuru", "güvenli çıkış yok — tepede bekleniyor");
+    await sleep(300);
   }
 
-  const ok = bot.entity.position.y >= targetY - 0.8;
-  report?.({ done: 1, total: 1, label: ok ? "merdiven OK" : "merdiven kısmi" });
+  clearControls(bot);
+  await sleep(100);
+
+  const ok = bot.entity.position.y >= targetY - 1.0 || bot.entity.onGround;
+  report?.({ done: 1, total: 1, label: ok ? "merdiven OK (yavaş)" : "merdiven kısmi" });
+  if (ok) {
+    instance.getLogger().info("Merdiven parkuru tamam", `y=${bot.entity.position.y.toFixed(1)}`);
+  }
   return ok;
 }
 

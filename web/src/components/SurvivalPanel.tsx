@@ -563,8 +563,8 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           ))}
         </div>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          Goto yolu bulamazsa otomatik 2–4 blok gap jump dener. Görev: <span className="mono text-zinc-400">parkour-goto</span>{" "}
-          (x,y,z). 4 blok zor ve sunucuya göre kaçabilir.
+          Goto yolu yoksa 2–4 blok gap jump dener. Merdiven: yavaş tırman + güvenli çıkış (acele zıplama yok). Görev:{" "}
+          <span className="mono text-zinc-400">parkour-goto</span>. 4 blok sunucuya göre kaçabilir.
         </p>
 
         <div className="mt-3 border-t border-zinc-800 pt-2">
