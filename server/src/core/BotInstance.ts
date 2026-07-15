@@ -1014,7 +1014,7 @@ export class BotInstance extends EventEmitter {
 
       const plainClean = stripColorCodes(plain);
 
-      // 0) AuthMe / hoş geldin / join — her zaman sunucu (tıklmainbilir isim olsa bile)
+      // 0) AuthMe / hoş geldin / join — her zaman sunucu (clickable isim olsa bile)
       if (isLikelySystemMessage(plainClean)) {
         this.ingestServerChat(plain, ansi);
         return;

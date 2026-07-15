@@ -35,14 +35,9 @@ echo.
 echo  Hedef surum: !VERSION!
 echo.
 
-node -e "const v=process.argv[1]; if(!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)){ console.error('Gecersiz surum. Ornek: 1.0.0'); process.exit(1); }" "!VERSION!"
-if errorlevel 1 (
-  pause
-  exit /b 1
-)
-
-echo [1/4] package.json surumleri -^> !VERSION!
-node -e "const fs=require('fs'); const v=process.argv[1]; for (const f of ['package.json','server/package.json','web/package.json']) { const p=JSON.parse(fs.readFileSync(f,'utf8')); p.version=v; fs.writeFileSync(f, JSON.stringify(p,null,2)+'\n'); console.log('  '+f); }" "!VERSION!"
+REM Node -e icinde ! karakteri delayed-expansion bozar — ayri script kullan
+echo [1/4] package.json surumleri guncelleniyor...
+call node "%~dp0scripts\set-version.mjs" "!VERSION!"
 if errorlevel 1 (
   echo HATA: Surum yazilamadi.
   pause
@@ -137,7 +132,7 @@ if errorlevel 1 (
 :release
 echo.
 echo [4/4] GitHub Release...
-node "%~dp0scripts\create-github-release.mjs" "!VERSION!"
+call node "%~dp0scripts\create-github-release.mjs" "!VERSION!"
 if errorlevel 1 (
   echo HATA: GitHub release basarisiz.
   pause

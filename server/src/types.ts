@@ -220,7 +220,7 @@ export interface ChatEntry {
   self?: boolean;
   /** mesaj gövdesi (rütbesiz) */
   text: string;
-  /** isimden önce: "[Admin] [VIP] " rütbe/kmainl prefix */
+  /** Rank/channel prefix before name: "[Admin] [VIP] " */
   prefix?: string;
   /** isim ile gövde arası: " » " / ": " */
   nameSuffix?: string;

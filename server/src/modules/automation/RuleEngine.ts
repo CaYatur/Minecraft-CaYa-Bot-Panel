@@ -265,7 +265,11 @@ export class RuleEngine {
   }
 
   onChat(botId: string, username: string | undefined, text: string) {
-    // komut argümanları (arg0, arg…) for özel yol
+    // Ignore the bot's own username (defense in depth; BotManager also filters self)
+    if (this.isOwnUsername(botId, username)) {
+      log.debug("Chat ignored (own message)", `bot=${botId} · ${username}: ${String(text).slice(0, 80)}`);
+      return;
+    }
     for (const rule of this.rules) {
       if (!rule.enabled) continue;
       if (!this.appliesToBot(rule, botId)) continue;
@@ -280,6 +284,23 @@ export class RuleEngine {
         this.persist();
       }
     }
+  }
+
+  /** Bot's own Minecraft username? (follow/attack/chat self-loops) */
+  private isOwnUsername(botId: string, name: string | undefined | null): boolean {
+    if (!name?.trim()) return false;
+    const inst = this.manager.get(botId);
+    if (!inst) return false;
+    const n = name.trim().toLowerCase();
+    const cfg = inst.config.username?.toLowerCase();
+    if (cfg && n === cfg) return true;
+    try {
+      const live = inst.bot?.username?.toLowerCase();
+      if (live && n === live) return true;
+    } catch {
+      /* */
+    }
+    return false;
   }
 
   onVitals(botId: string, health: number, food: number) {
@@ -709,7 +730,7 @@ export class RuleEngine {
   }
 
   /** Aktif gelişmiş/legacy otomasyon akışlarını cancelled eder ve kısa süre yeni tetikleri susturur. */
-  cancelRunsForBot(botId: string, reason = "otomasyon cancelled edildi", suppressMs = 5_000) {
+  cancelRunsForBot(botId: string, reason = "automation cancelled", suppressMs = 5_000) {
     this.botCancelGeneration.set(botId, this.currentCancelGeneration(botId) + 1);
     this.automationSuppressedUntil.set(botId, Date.now() + Math.max(0, suppressMs));
     log.info(`Bot automations cancelled: ${botId}`, reason);
@@ -1314,7 +1335,7 @@ export class RuleEngine {
       return;
     }
     if (type === "stop_tasks") {
-      this.manager.cancelAllWork(botId, "otomasyon stop_tasks");
+      this.manager.cancelAllWork(botId, "automation stop_tasks");
       return;
     }
     if (type === "eat") {
@@ -1347,6 +1368,10 @@ export class RuleEngine {
     }
     if (type === "attack") {
       const target = interpolate(String(action.target ?? action.player ?? ctx.player ?? ctx.attacker ?? ""), ctx);
+      if (target && this.isOwnUsername(botId, target)) {
+        log.warn("attack ignored: bot cannot attack self", target);
+        return;
+      }
       if (target) inst.combat.enqueueAttackPlayer(target);
       return;
     }
@@ -1356,6 +1381,10 @@ export class RuleEngine {
     }
     if (type === "follow") {
       const p = interpolate(String(action.player ?? ctx.player ?? ""), ctx);
+      if (p && this.isOwnUsername(botId, p)) {
+        log.warn("follow ignored: bot cannot follow self", p);
+        return;
+      }
       if (p) inst.enqueueAction({ type: "follow", player: p, distance: Number(action.distance ?? 3) });
       return;
     }
@@ -1367,7 +1396,12 @@ export class RuleEngine {
         const wp = list.find((w) => w.name.toLowerCase() === name.toLowerCase() || w.id === name);
         if (wp) inst.enqueueAction({ type: "goto", x: wp.x, y: wp.y, z: wp.z, label: `waypoint: ${wp.name}` });
       } else if (action.player || ctx.player) {
-        inst.enqueueAction({ type: "goto-player", player: interpolate(String(action.player ?? ctx.player), ctx) });
+        const p = interpolate(String(action.player ?? ctx.player), ctx);
+        if (this.isOwnUsername(botId, p)) {
+          log.warn("goto-player ignored: target is the bot itself", p);
+          return;
+        }
+        inst.enqueueAction({ type: "goto-player", player: p });
       } else if (action.x != null) {
         inst.enqueueAction({ type: "goto", x: action.x, y: action.y, z: action.z });
       }

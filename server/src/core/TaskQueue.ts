@@ -82,7 +82,7 @@ export class TaskQueue extends EventEmitter {
     return this.summarize(task);
   }
 
-  cancel(id: string, reason = "cancelled edildi"): boolean {
+  cancel(id: string, reason = "cancelled"): boolean {
     const cur = this.current;
     if (cur && cur.id === id) {
       cur.token.cancelled = true;

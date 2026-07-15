@@ -4,7 +4,7 @@ export interface ParsedChat {
   kind: ChatKind;
   username?: string;
   text: string;
-  /** isimden önce görünen rütbe/prefix/kmainl: "[Admin] [VIP] " */
+  /** Rank/channel prefix before name: "[Admin] [VIP] " */
   prefix?: string;
   /** isimden sonra, mesajdan önce: " » " / ": " */
   nameSuffix?: string;
@@ -22,21 +22,21 @@ export function stripColorCodes(s: string): string {
 const MC_NAME = "[A-Za-z0-9_]{1,16}";
 
 /**
- * AuthMe / join-leave / hoş geldin / sunucu duyurusu — oyuncu sohbeti DEĞİL.
- * Bunlar isim içerse bile (tıklmainbilir prefix) sunucu mesajı kalmalı.
+ * AuthMe / join-leave / welcome / server announcements — NOT player chat.
+ * Even if they contain a clickable name prefix, stay as server messages.
  */
 export function isLikelySystemMessage(plainText: string): boolean {
   const p = stripColorCodes(plainText);
   if (!p) return true;
 
-  // AuthMe / login eklentileri
+  // AuthMe / login plugins
   if (
     /\/login\b|\/register\b|\/reg\b|\/l\b|authme|loginsecurity|nlogin/i.test(p) ||
     /lütfen.{0,40}(giriş|login|şifre|sifre)/i.test(p) ||
     /please.{0,40}(login|register|log in)/i.test(p) ||
     /başarıyla\s+giriş|basariyla\s+giris|successfully\s+logged|logged\s+in\s+successfully/i.test(p) ||
     /giriş\s+yaptınız|giris\s+yaptiniz|wrong\s+password|yanlış\s+şifre|yanlis\s+sifre/i.test(p) ||
-    /entries\s+ol|kayit\s+ol|not\s+registered|unregister/i.test(p)
+    /(kayıt|kayit)\s+ol|not\s+registered|unregister/i.test(p)
   ) {
     return true;
   }
@@ -79,18 +79,20 @@ export function isValidPlayerChatBody(text: string, plainFull?: string): boolean
 }
 
 /**
- * Plugin/vanilla düz metin formatları.
- * Sunucu prefix'i değişse de olabildiğince esnek (rank, kmainl, oklar…).
- * Not: çok gevşek kalıplar sistem mesajını oyuncuya bağlar → isLikelySystemMessage önce.
+ * Plugin/vanilla plain-text formats.
+ * Flexible on rank/channel/arrows. Loose patterns must run after isLikelySystemMessage.
  */
 const PATTERNS: Array<{ kind: ChatKind; re: RegExp }> = [
   { kind: "player", re: new RegExp(`^<(${MC_NAME})>\\s*(.*)$`, "s") },
   { kind: "whisper", re: new RegExp(`^(${MC_NAME}) whispers(?: to you)?:\\s*(.*)$`, "s") },
   { kind: "whisper", re: new RegExp(`^\\[(${MC_NAME})\\s*->\\s*(?:me|ben|you|sen)\\]\\s*(.*)$`, "is") },
-  { kind: "whisper", re: new RegExp(`^(${MC_NAME})\\s*(?:whispers|whispers|whispers).*?:\\s*(.*)$`, "is") },
-  // Name » msg / Name > msg / Name → msg  (en az bir ayırıcı karakter, boş mesaj yok)
+  {
+    kind: "whisper",
+    re: new RegExp(`^(${MC_NAME})\\s*(?:whispers|fısıldıyor|fisildiyor).*?:\\s*(.*)$`, "is")
+  },
+  // Name » msg / Name > msg / Name → msg
   { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*[»›➤→]+\\s*(.+)$`, "s") },
-  // Name > msg (tek > ama boşluksuz sayılar "a>b" plugin kmainlı)
+  // Name > msg (space after > so plugin "a>b" is not matched)
   { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*>\\s+(.+)$`, "s") },
   // [rank]… Name: msg
   { kind: "player", re: new RegExp(`^(?:\\[[^\\]]{1,40}\\]\\s*)+(${MC_NAME})\\s*[:»›]\\s+(.+)$`, "s") },
@@ -275,7 +277,7 @@ export function parseChatComponent(jsonMsg: unknown): ParsedChat | null {
         if (isValidPlayerChatBody(stripped, plain)) {
           return { kind: "player", username: fromClick.username, text: stripped };
         }
-        // tıklmainbilir isim var ama gövde sistem/boş → sunucu
+        // clickable isim var ama gövde sistem/boş → sunucu
         return { kind: "server", text: plain };
       }
 

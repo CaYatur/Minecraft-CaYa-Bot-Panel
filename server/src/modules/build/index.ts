@@ -926,7 +926,7 @@ export class BuildService {
       this.runtime.scaffoldsCleared = cleared;
 
       if (token.cancelled) {
-        this.setPhase("cancelled", "cancelled edildi");
+        this.setPhase("cancelled", "cancelled");
         throw new Error(token.reason ?? "cancelled");
       }
 
@@ -940,7 +940,7 @@ export class BuildService {
         this.log().success(`Build complete: ${parsed.meta.name}`, label);
         report({ done: jobs.length, total: jobs.length, label });
       } else {
-        this.setPhase("failed", label, `${failed} blok placeilemedi`);
+        this.setPhase("failed", label, `${failed} block(s) could not be placed`);
         this.log().warn(`Build partial/failed: ${parsed.meta.name}`, label);
         report({ done: jobs.length, total: jobs.length, label });
         throw new Error(label);
