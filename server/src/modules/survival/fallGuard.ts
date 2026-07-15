@@ -535,9 +535,9 @@ export class FallGuardService {
       } catch {
         /* */
       }
-      // yatay hareketi kes — su yanına kaçmasın
+      // tüm hareketi kes (parkur/merdiven jump+forward MLG bakışını bozmasın)
       try {
-        for (const k of ["forward", "back", "left", "right", "sprint"] as const) {
+        for (const k of ["forward", "back", "left", "right", "sprint", "jump"] as const) {
           bot.setControlState(k, false);
         }
       } catch {
@@ -1551,12 +1551,22 @@ function isEffectivelyGrounded(bot: Bot): boolean {
   const pos = bot.entity.position;
   const vy = bot.entity.velocity?.y ?? 0;
 
-  // merdiven / scaffolding / vine üzerinde
+  // merdiven / scaffolding / vine: sakin tırmanma = grounded.
+  // Hızlı aşağı (parkur/merdivenden düşüş) → grounded SAYMA — MLG devreye girebilsin.
   try {
     const at = bot.blockAt(v3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)));
-    const n = at?.name?.replace(/^minecraft:/, "") ?? "";
-    if (n === "ladder" || n === "scaffolding" || n.includes("vine") || n === "cobweb" || n === "powder_snow") {
-      return true;
+    const above = bot.blockAt(v3(Math.floor(pos.x), Math.floor(pos.y) + 1, Math.floor(pos.z)));
+    const names = [at, above].map((b) => b?.name?.replace(/^minecraft:/, "") ?? "");
+    const onClimbable = names.some(
+      (n) => n === "ladder" || n === "scaffolding" || n.includes("vine") || n === "cobweb" || n === "powder_snow"
+    );
+    if (onClimbable) {
+      // cobweb / powder snow her zaman yumuşak
+      if (names.some((n) => n === "cobweb" || n === "powder_snow")) return true;
+      // merdivende kontrollü: yavaş veya yukarı — grounded
+      if (vy > -0.38) return true;
+      // merdivenden kopup hızla düşüyor → MLG serbest
+      return false;
     }
   } catch {
     /* */
