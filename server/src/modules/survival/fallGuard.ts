@@ -83,6 +83,10 @@ export class FallGuardService {
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
   private lastMlgAt = 0;
+  private lastEmitAt = 0;
+  private lastWarnAt = 0;
+  /** Düşüş başlangıç yüksekliği (fallDistance metadata yoksa yedek) */
+  private fallPeakY: number | null = null;
   private placedWaterPos: { x: number; y: number; z: number } | null = null;
   private state: FallGuardState = idleState();
 
@@ -113,10 +117,15 @@ export class FallGuardService {
     this.bot = null;
     this.busy = false;
     this.placedWaterPos = null;
+    this.fallPeakY = null;
     this.state = idleState();
   }
 
-  private emit() {
+  private emit(force = false) {
+    const now = Date.now();
+    // düşerken socket spam olmasın (max ~5 Hz); önemli geçişlerde force
+    if (!force && now - this.lastEmitAt < 200) return;
+    this.lastEmitAt = now;
     this.instance.emit("fallGuard", { botId: this.instance.config.id, fallGuard: this.getState() });
   }
 
@@ -127,7 +136,8 @@ export class FallGuardService {
     if (!cfg.enabled) {
       if (this.state.falling || this.state.active) {
         this.state = idleState();
-        this.emit();
+        this.fallPeakY = null;
+        this.emit(true);
       }
       return;
     }
@@ -137,31 +147,41 @@ export class FallGuardService {
       if (this.placedWaterPos) {
         void this.tryPickupWater(bot);
       }
-      if (this.state.falling || this.state.active) {
+      if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
         this.state.lastAction = "iniş tamam";
-        this.emit();
+        this.fallPeakY = null;
+        this.emit(true);
       }
       return;
     }
 
     const vy = bot.entity.velocity?.y ?? 0;
-    const fallDist = Number((bot.entity as { fallDistance?: number }).fallDistance ?? 0);
-    const falling = vy < -0.35 || fallDist > 1.5;
+    const metaFall = Number((bot.entity as { fallDistance?: number }).fallDistance ?? 0);
+    const feetY = bot.entity.position.y;
+    const falling = vy < -0.35 || metaFall > 1.5;
     if (!falling) {
       if (this.state.falling) {
         this.state.falling = false;
-        this.emit();
+        this.fallPeakY = null;
+        this.emit(true);
       }
       return;
     }
 
+    // zirve yüksekliği: düşüş başında veya daha yükseğe çıktıysa güncelle
+    if (this.fallPeakY == null || feetY > this.fallPeakY) {
+      this.fallPeakY = feetY;
+    }
+
     const ground = findGroundY(bot);
-    const feetY = bot.entity.position.y;
     const remaining = ground != null ? Math.max(0, feetY - ground - 0.05) : 64;
-    const predictedFall = fallDist + remaining;
+    // meta fallDistance (+ kalan) veya peak→ground (metadata yoksa)
+    const fromPeak = ground != null && this.fallPeakY != null ? Math.max(0, this.fallPeakY - ground) : remaining;
+    const bestFall = Math.max(metaFall > 0.5 ? metaFall + Math.max(0, remaining - 0.5) : 0, fromPeak);
+
     const ff = featherFallingLevel(bot);
-    let predictedDamage = fallDamageHp(predictedFall, ff);
+    const predictedDamage = fallDamageHp(bestFall, ff);
     const health = bot.health ?? 20;
     const lethal = predictedDamage >= health - cfg.lethalHealthMargin;
     const dangerous = predictedDamage >= cfg.minDamageHp || lethal;
@@ -171,7 +191,7 @@ export class FallGuardService {
       active: this.busy,
       falling: true,
       method: this.state.method,
-      fallDistance: round1(predictedFall),
+      fallDistance: round1(bestFall),
       remainingBlocks: round1(remaining),
       predictedDamage: round1(predictedDamage),
       lethal,
@@ -184,7 +204,7 @@ export class FallGuardService {
       this.emit();
       return;
     }
-    if (!dangerous && predictedFall < 4) {
+    if (!dangerous && bestFall < 4) {
       this.emit();
       return;
     }
@@ -200,7 +220,11 @@ export class FallGuardService {
     if (method === "none") {
       this.state.lastAction = lethal ? "kurtarma yok — ölümcül düşüş!" : "kurtarma malzemesi yok";
       this.emit();
-      if (lethal) this.log().warn("Ölümcül düşüş — MLG malzemesi yok", `~${predictedDamage} HP · ${predictedFall.toFixed(1)} blok`);
+      // log spam önle: en fazla 3 sn'de bir
+      if (lethal && Date.now() - this.lastWarnAt > 3000) {
+        this.lastWarnAt = Date.now();
+        this.log().warn("Ölümcül düşüş — MLG malzemesi yok", `~${predictedDamage} HP · ${bestFall.toFixed(1)} blok`);
+      }
       return;
     }
 
@@ -228,8 +252,11 @@ export class FallGuardService {
     this.state.active = true;
     this.state.method = method;
     this.state.lastAction = `MLG: ${method}`;
-    this.emit();
-    this.log().info(`Düşüş kurtarma: ${method}`, `kalan ${remaining.toFixed(1)} · hasar≈${predictedDamage} HP${lethal ? " ÖLÜMCÜL" : ""}`);
+    this.emit(true);
+    this.log().info(
+      `Düşüş kurtarma: ${method}`,
+      `kalan ${remaining.toFixed(1)} · hasar≈${predictedDamage} HP · düşüş≈${bestFall.toFixed(1)}${lethal ? " ÖLÜMCÜL" : ""}`
+    );
 
     try {
       // pathfinder'ı kes — bakış bozulmasın
@@ -247,7 +274,7 @@ export class FallGuardService {
     } finally {
       this.busy = false;
       this.state.active = false;
-      this.emit();
+      this.emit(true);
     }
   }
 
