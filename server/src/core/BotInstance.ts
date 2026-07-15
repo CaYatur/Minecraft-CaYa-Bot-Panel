@@ -5,6 +5,7 @@ import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import {
   applyLearnedPrefix,
+  extractNameDecor,
   isLikelySystemMessage,
   isValidPlayerChatBody,
   parseChatComponent,
@@ -649,13 +650,14 @@ export class BotInstance extends EventEmitter {
         return;
       }
       if (!isValidPlayerChatBody(msg, msg)) return;
-      this.ingestPlayerChat(username, msg, "player");
+      // chat olayı genelde sadece gövde verir — prefix yok
+      this.ingestPlayerChat(username, msg, "player", undefined, undefined);
     });
     bot.on("whisper", (username: string, message: string) => {
       if (!username || message == null) return;
       const msg = String(message);
       if (!isValidPlayerChatBody(msg, msg)) return;
-      this.ingestPlayerChat(username, msg, "whisper");
+      this.ingestPlayerChat(username, msg, "whisper", undefined, undefined);
     });
 
     bot.on("message", (jsonMsg: any, position: string, sender?: unknown) => {
@@ -715,7 +717,15 @@ export class BotInstance extends EventEmitter {
           this.ingestServerChat(plain, ansi);
           return;
         }
-        this.ingestPlayerChat(username, text || plainClean, kind === "whisper" ? "whisper" : "player", ansi);
+        this.ingestPlayerChat(
+          username,
+          text || plainClean,
+          kind === "whisper" ? "whisper" : "player",
+          ansi,
+          plain,
+          fromPlain.prefix ?? fromJson?.prefix,
+          fromPlain.nameSuffix ?? fromJson?.nameSuffix
+        );
         return;
       }
 
@@ -735,12 +745,24 @@ export class BotInstance extends EventEmitter {
       if (username && kind !== "server") {
         const cleaned = applyLearnedPrefix(plain, username, text);
         if (cleaned?.text && isValidPlayerChatBody(cleaned.text, plainClean)) text = cleaned.text;
+        // plain parse prefix
+        if (fromPlain.prefix && fromPlain.username?.toLowerCase() === username.toLowerCase()) {
+          /* prefix fromPlain ile gelir */
+        }
         const body = (text || plainClean).trim();
         if (!isValidPlayerChatBody(body, plainClean)) {
           this.ingestServerChat(plain, ansi);
           return;
         }
-        this.ingestPlayerChat(username, body, kind === "whisper" ? "whisper" : "player", ansi);
+        this.ingestPlayerChat(
+          username,
+          body,
+          kind === "whisper" ? "whisper" : "player",
+          ansi,
+          plain,
+          fromPlain.prefix ?? fromJson?.prefix,
+          fromPlain.nameSuffix ?? fromJson?.nameSuffix
+        );
         return;
       }
 
@@ -763,25 +785,49 @@ export class BotInstance extends EventEmitter {
     this.emit("chatParsed", entry);
   }
 
-  /** oyuncu sohbetini tek kanaldan yaz (dedup + öğrenme) */
-  private ingestPlayerChat(username: string, message: string, kind: "player" | "whisper", ansi?: string) {
+  /**
+   * oyuncu sohbeti — rütbe/prefix + tam satır + ANSI (mümkünse) saklanır.
+   * fullPlain: oyundaki ham satır (renk kodları dahil olabilir); prefix ayrıştırması için.
+   */
+  private ingestPlayerChat(
+    username: string,
+    message: string,
+    kind: "player" | "whisper",
+    ansi?: string,
+    fullPlain?: string,
+    prefixHint?: string,
+    nameSuffixHint?: string
+  ) {
     const text = message.trimEnd();
-    if (!isValidPlayerChatBody(text, `${username}: ${text}`)) return;
+    if (!isValidPlayerChatBody(text, fullPlain ?? `${username}: ${text}`)) return;
     const key = `${kind[0]}:${username.toLowerCase()}:${text}`;
     if (!this.noteChatKey(key)) return;
     this.learnedChatUsers.add(username);
-    // set sınırla
     if (this.learnedChatUsers.size > 200) {
       const first = this.learnedChatUsers.values().next().value;
       if (first) this.learnedChatUsers.delete(first);
     }
+
+    const rawLine = fullPlain ?? text;
+    const decor = extractNameDecor(stripColorCodes(rawLine), username, text);
+    const prefix = prefixHint?.trim() ? (prefixHint.endsWith(" ") ? prefixHint : prefixHint + " ") : decor.prefix;
+    const nameSuffix = nameSuffixHint || decor.nameSuffix || ": ";
+    const body = decor.body && isValidPlayerChatBody(decor.body) ? decor.body : text;
+    const fullText =
+      stripColorCodes(rawLine).includes(username) && stripColorCodes(rawLine).length >= body.length
+        ? stripColorCodes(rawLine)
+        : `${prefix}${username}${nameSuffix}${body}`.replace(/\s+/g, " ").trim();
+
     const entry: ChatEntry = {
       ts: Date.now(),
       botId: this.config.id,
       kind,
       username,
       self: username.toLowerCase() === this.config.username.toLowerCase(),
-      text,
+      text: body,
+      prefix: prefix || undefined,
+      nameSuffix: nameSuffix || undefined,
+      fullText,
       ansi
     };
     this.pushChat(entry);

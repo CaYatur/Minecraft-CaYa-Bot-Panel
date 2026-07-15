@@ -108,7 +108,15 @@ export interface ChatEntry {
   kind: ChatKind;
   username?: string;
   self?: boolean;
+  /** mesaj gövdesi */
   text: string;
+  /** rütbe / prefix: "[Admin] " */
+  prefix?: string;
+  /** " » " / ": " */
+  nameSuffix?: string;
+  /** tam satır (prefix+isim+mesaj) */
+  fullText?: string;
+  /** renkli tam satır (ANSI) */
   ansi?: string;
 }
 

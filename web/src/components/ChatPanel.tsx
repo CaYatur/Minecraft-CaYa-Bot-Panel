@@ -15,7 +15,6 @@ export function ChatPanel({ botId }: { botId: string }) {
   const listRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
 
-  // geçmişi yükle (panel yeni açıldıysa)
   useEffect(() => {
     if (entries.length === 0) {
       api
@@ -48,7 +47,9 @@ export function ChatPanel({ botId }: { botId: string }) {
     ? entries.filter(
         (e) =>
           e.username?.toLowerCase().includes(filter.toLowerCase()) ||
-          e.text.toLowerCase().includes(filter.toLowerCase())
+          e.text.toLowerCase().includes(filter.toLowerCase()) ||
+          e.prefix?.toLowerCase().includes(filter.toLowerCase()) ||
+          e.fullText?.toLowerCase().includes(filter.toLowerCase())
       )
     : entries;
 
@@ -58,7 +59,7 @@ export function ChatPanel({ botId }: { botId: string }) {
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Ara / oyuncu filtrele…"
+          placeholder="Ara / oyuncu / rütbe filtrele…"
           className="w-56 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 outline-none focus:border-indigo-600"
         />
         {queue > 0 && (
@@ -72,28 +73,7 @@ export function ChatPanel({ botId }: { botId: string }) {
       <div ref={listRef} onScroll={onScroll} className="mono flex-1 space-y-0.5 overflow-y-auto py-2 text-[13px]">
         {visible.length === 0 && <div className="py-8 text-center text-xs text-zinc-600">Henüz mesaj yok</div>}
         {visible.map((e, i) => (
-          <div key={i} className="flex gap-2 rounded px-1 leading-relaxed hover:bg-zinc-900/60">
-            <span className="shrink-0 text-[10px] text-zinc-600 tabular-nums" style={{ paddingTop: 2 }}>
-              {fmtTime(e.ts)}
-            </span>
-            {e.kind === "server" ? (
-              <span className="text-zinc-400 italic">{e.ansi ? ansiToSpans(e.ansi) : e.text}</span>
-            ) : (
-              <span className="min-w-0 break-words">
-                {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
-                <button
-                  onClick={() => setInput(`/msg ${e.username} `)}
-                  className="mr-1 font-semibold hover:underline"
-                  style={{ color: e.self ? "#818cf8" : nameColor(e.username ?? "?") }}
-                  title={`${e.username} adlı oyuncuya fısılda`}
-                >
-                  {e.username}
-                  {e.self ? " (bot)" : ""}:
-                </button>
-                <span className="text-zinc-200">{e.text}</span>
-              </span>
-            )}
-          </div>
+          <ChatLine key={i} e={e} onMsg={(u) => setInput(`/msg ${u} `)} />
         ))}
       </div>
 
@@ -113,6 +93,50 @@ export function ChatPanel({ botId }: { botId: string }) {
           Gönder
         </button>
       </div>
+    </div>
+  );
+}
+
+function ChatLine({ e, onMsg }: { e: ChatEntry; onMsg: (username: string) => void }) {
+  return (
+    <div className="flex gap-2 rounded px-1 leading-relaxed hover:bg-zinc-900/60">
+      <span className="shrink-0 text-[10px] text-zinc-600 tabular-nums" style={{ paddingTop: 2 }}>
+        {fmtTime(e.ts)}
+      </span>
+      {e.kind === "server" ? (
+        <span className="min-w-0 break-words text-zinc-400 italic">{e.ansi ? ansiToSpans(e.ansi) : e.text}</span>
+      ) : e.ansi ? (
+        // tam renkli satır (rütbe + isim + mesaj) — oyundaki gibi
+        <span className="min-w-0 break-words">
+          {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
+          <button
+            type="button"
+            onClick={() => e.username && onMsg(e.username)}
+            className="text-left hover:underline"
+            title={e.username ? `${e.username} adlı oyuncuya fısılda` : undefined}
+          >
+            {ansiToSpans(e.ansi)}
+          </button>
+          {e.self && <span className="ml-1 text-[10px] text-indigo-400">(bot)</span>}
+        </span>
+      ) : (
+        <span className="min-w-0 break-words">
+          {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
+          {e.prefix ? <span className="text-amber-200/90">{e.prefix}</span> : null}
+          <button
+            type="button"
+            onClick={() => e.username && onMsg(e.username)}
+            className="mr-0.5 font-semibold hover:underline"
+            style={{ color: e.self ? "#818cf8" : nameColor(e.username ?? "?") }}
+            title={e.username ? `${e.username} adlı oyuncuya fısılda` : undefined}
+          >
+            {e.username}
+            {e.self ? " (bot)" : ""}
+          </button>
+          <span className="text-zinc-500">{e.nameSuffix ?? ": "}</span>
+          <span className="text-zinc-200">{e.text}</span>
+        </span>
+      )}
     </div>
   );
 }

@@ -148,8 +148,15 @@ export interface ChatEntry {
   username?: string;
   /** true when the sender is this bot itself (echo of own message) */
   self?: boolean;
+  /** mesaj gövdesi (rütbesiz) */
   text: string;
-  /** ANSI-colored variant for panel rendering (from prismarine-chat toAnsi) */
+  /** isimden önce: "[Admin] [VIP] " rütbe/kanal prefix */
+  prefix?: string;
+  /** isim ile gövde arası: " » " / ": " */
+  nameSuffix?: string;
+  /** oyunda görünen tam düz satır (prefix+isim+mesaj) */
+  fullText?: string;
+  /** ANSI-colored full line (from prismarine-chat toAnsi) — rütbe renkleri dahil */
   ansi?: string;
 }
 

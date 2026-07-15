@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef } from "react";
+import { ansiToSpans } from "../lib/ansi";
 import { fmtTime, nameColor } from "../lib/format";
 import { useAppStore } from "../stores/useAppStore";
 
-/** Tüm botların gördüğü sohbeti tek akışta gösterir (hangi bot gördü etiketiyle). */
+/** Tüm botların gördüğü sohbeti tek akışta gösterir (rütbe/prefix dahil). */
 export function AllChatPanel() {
   const chat = useAppStore((s) => s.chat);
   const bots = useAppStore((s) => s.bots);
@@ -37,13 +38,21 @@ export function AllChatPanel() {
             {bots[e.botId]?.config.username ?? "?"}
           </span>
           {e.kind === "server" ? (
-            <span className="min-w-0 break-words text-zinc-400 italic">{e.text}</span>
+            <span className="min-w-0 break-words text-zinc-400 italic">{e.ansi ? ansiToSpans(e.ansi) : e.text}</span>
+          ) : e.ansi ? (
+            <span className="min-w-0 break-words">
+              {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
+              {ansiToSpans(e.ansi)}
+              {e.self && <span className="ml-1 text-[9px] text-indigo-400">(bot)</span>}
+            </span>
           ) : (
             <span className="min-w-0 break-words">
               {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
-              <span className="mr-1 font-semibold" style={{ color: e.self ? "#818cf8" : nameColor(e.username ?? "?") }}>
-                {e.username}:
+              {e.prefix ? <span className="text-amber-200/90">{e.prefix}</span> : null}
+              <span className="mr-0.5 font-semibold" style={{ color: e.self ? "#818cf8" : nameColor(e.username ?? "?") }}>
+                {e.username}
               </span>
+              <span className="text-zinc-500">{e.nameSuffix ?? ": "}</span>
               <span className="text-zinc-200">{e.text}</span>
             </span>
           )}

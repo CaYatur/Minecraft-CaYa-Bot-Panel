@@ -4,6 +4,10 @@ export interface ParsedChat {
   kind: ChatKind;
   username?: string;
   text: string;
+  /** isimden önce görünen rütbe/prefix/kanal: "[Admin] [VIP] " */
+  prefix?: string;
+  /** isimden sonra, mesajdan önce: " » " / ": " */
+  nameSuffix?: string;
 }
 
 /** strip legacy §x / ansi leftovers */
@@ -116,10 +120,52 @@ export function parseChatMessage(plainText: string): ParsedChat {
       const username = m[1];
       const text = (m[2] ?? "").trimEnd();
       if (!isValidPlayerChatBody(text, plain)) continue;
-      return { kind: p.kind, username, text };
+      const decor = extractNameDecor(plain, username, text);
+      return { kind: p.kind, username, text, prefix: decor.prefix, nameSuffix: decor.nameSuffix };
     }
   }
   return { kind: "server", text: plain };
+}
+
+/**
+ * Düz satırdan rütbe/prefix ve ayırıcıyı çıkar.
+ * Örn: "[Admin] [VIP] Steve » merhaba" → prefix="[Admin] [VIP] ", nameSuffix=" » ", body=merhaba
+ */
+export function extractNameDecor(
+  plainFull: string,
+  username: string,
+  bodyHint?: string
+): { prefix: string; nameSuffix: string; body: string } {
+  const plain = stripColorCodes(plainFull);
+  const u = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // vanilla <Name> body
+  const vanilla = plain.match(new RegExp(`^<${u}>\\s*(.*)$`, "is"));
+  if (vanilla) {
+    return { prefix: "", nameSuffix: " ", body: (vanilla[1] ?? bodyHint ?? "").trim() };
+  }
+
+  // [rank]… Name separator body — prefix is everything before name
+  const re = new RegExp(`^(.*?)\\b(${u})\\b\\s*([:»›➤→|~\\-]{1,3})\\s*`, "i");
+  const m = plain.match(re);
+  if (!m) {
+    return { prefix: "", nameSuffix: ": ", body: (bodyHint ?? plain).trim() };
+  }
+  let prefix = (m[1] ?? "").trimEnd();
+  if (prefix && !prefix.endsWith(" ")) prefix = prefix + " ";
+  // tek başına "< " veya bozuk açı parantezi temizle
+  if (/^<\s*$/.test(prefix) || prefix === "< ") prefix = "";
+  const sep = (m[3] ?? ":").trim();
+  const nameSuffix = ` ${sep} `;
+  let body = plain.slice(m[0].length).trim();
+  if (bodyHint && bodyHint.length >= body.length && plain.includes(bodyHint)) {
+    body = bodyHint.trim();
+  }
+  return {
+    prefix,
+    nameSuffix,
+    body: body || (bodyHint ?? "").trim()
+  };
 }
 
 /**
