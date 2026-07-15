@@ -131,6 +131,10 @@ export interface BotConfig {
       lethalHealthMargin: number;
       mlgTriggerBlocks: number;
       onlyWhenDangerous: boolean;
+      autoReclaim?: boolean;
+      reclaimWater?: boolean;
+      reclaimBoat?: boolean;
+      reclaimBlocks?: boolean;
     };
     /** suda boğulmama + karaya çık (spawn/otomatik) */
     waterGuard?: {
@@ -343,7 +347,11 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         lethalHealthMargin: 2,
         // taban; gerçek su yerleştirme reach içi dinamik (fallGuard.ts)
         mlgTriggerBlocks: 5.5,
-        onlyWhenDangerous: true
+        onlyWhenDangerous: true,
+        autoReclaim: true,
+        reclaimWater: true,
+        reclaimBoat: true,
+        reclaimBlocks: true
       },
       waterGuard: {
         enabled: true,

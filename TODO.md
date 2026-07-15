@@ -642,6 +642,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Yeni bot `defendMode` varsayılan `mob` (boşta zombie savunsun); mevcut bot config’i bots.json’da kalır.
 - 2026-07-15 — Dövüş hedef çözümlemesi: mob adında **en yakın** entity + id takibi (ilk map girdisi değil) — aksi halde uzak zombie “menzilden çıktı” spam.
 - 2026-07-15 — MLG su: reach (~4.5) içinde katı bloğa bak + activateItem/activateBlock/use_item retry; erken activateItem havaya su koyamaz.
+- 2026-07-15 — MLG sonrası recover kuyruğu: su neredeyse kesin geri al; tekne/blok güvenliyse; zor durumda ertele.
 
 ---
 

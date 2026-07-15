@@ -22,7 +22,11 @@ const defaultFg = {
   minDamageHp: 4,
   lethalHealthMargin: 2,
   mlgTriggerBlocks: 5.5,
-  onlyWhenDangerous: true
+  onlyWhenDangerous: true,
+  autoReclaim: true,
+  reclaimWater: true,
+  reclaimBoat: true,
+  reclaimBlocks: true
 };
 
 const defaultWg = {
@@ -295,25 +299,68 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           Sadece tehlikeli/ölümcül düşüşte müdahale et
         </label>
 
+        <div className="mb-3 rounded-lg border border-emerald-900/30 bg-emerald-950/10 px-2 py-2">
+          <div className="mb-1.5 text-[10px] font-semibold tracking-wide text-emerald-400/90 uppercase">
+            MLG malzeme geri al
+          </div>
+          <label className="mb-1.5 flex items-center gap-2 text-xs text-zinc-300">
+            <input
+              type="checkbox"
+              checked={fg.autoReclaim !== false}
+              onChange={(e) => void patch({ fallGuard: { ...fg, autoReclaim: e.target.checked } })}
+            />
+            Otomatik geri al (iniş sonrası)
+          </label>
+          <div className="flex flex-wrap gap-3 text-xs text-zinc-400">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={fg.reclaimWater !== false}
+                disabled={fg.autoReclaim === false}
+                onChange={(e) => void patch({ fallGuard: { ...fg, reclaimWater: e.target.checked } })}
+              />
+              Su / powder snow <span className="text-emerald-500/80">(öncelikli)</span>
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={fg.reclaimBoat !== false}
+                disabled={fg.autoReclaim === false}
+                onChange={(e) => void patch({ fallGuard: { ...fg, reclaimBoat: e.target.checked } })}
+              />
+              Tekne
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={fg.reclaimBlocks !== false}
+                disabled={fg.autoReclaim === false}
+                onChange={(e) => void patch({ fallGuard: { ...fg, reclaimBlocks: e.target.checked } })}
+              />
+              Blok yastık
+            </label>
+          </div>
+          <p className="mt-1.5 text-[10px] text-zinc-600">
+            Zor durumda (yanma, kaçış, çok yakın düşman) gecikir; su neredeyse her zaman alınır. Güvenli olunca tekrar
+            dener.
+          </p>
+        </div>
+
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2 py-2 text-[11px] leading-relaxed text-zinc-500">
           <p className="mb-1 text-zinc-400">Envanterde varsa sırayla değerlendirilir:</p>
           <ul className="list-inside list-disc space-y-0.5">
             <li>
-              <b className="text-zinc-300">Su kovası</b> — klasik MLG (iniş sonrası geri alınmaya çalışılır)
+              <b className="text-zinc-300">Su kovası</b> — klasik MLG; iniş sonrası boş kova ile kaynak geri alınır
             </li>
             <li>
-              <b className="text-zinc-300">Tekne</b> — tekne MLG
+              <b className="text-zinc-300">Tekne</b> — MLG + mümkünse tekneyi kırıp topla
             </li>
             <li>
-              <b className="text-zinc-300">Saman</b> — yumuşak iniş (%80 hasar azaltma)
-            </li>
-            <li>
-              <b className="text-zinc-300">Slime / cobweb / merdiven / scaffolding / powder snow</b>
+              <b className="text-zinc-300">Saman / slime / cobweb…</b> — yumuşak iniş; güvenliyse kır-al
             </li>
           </ul>
           <p className="mt-2">
-            Feather Falling botları hesaplanır. Pathfinder düşüş anında kesilir. Malzeme yoksa log&apos;a uyarı
-            yazılır (sohbete değil, İ1).
+            Feather Falling hesaplanır. Pathfinder düşüşte kesilir. Malzeme yoksa log uyarısı (İ1, sohbet yok).
           </p>
           {fgLive?.inventoryOptions?.length ? (
             <p className="mono mt-2 text-emerald-500/80">Hazır: {fgLive.inventoryOptions.join(", ")}</p>

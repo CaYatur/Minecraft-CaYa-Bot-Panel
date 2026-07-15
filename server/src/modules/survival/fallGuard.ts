@@ -1,6 +1,7 @@
 import type { Bot } from "mineflayer";
 import type { Item } from "prismarine-item";
 import type { BotInstance } from "../../core/BotInstance";
+import { isHostileMob } from "../combat/mobs";
 import { v3 } from "../build/vec3util";
 
 /** Düşüş kurtarma yöntemi (öncelik skoru yüksek = tercih) */
@@ -40,6 +41,14 @@ export interface FallGuardConfig {
   mlgTriggerBlocks: number;
   /** Sadece tehlikeli/ölümcül düşüşte müdahale */
   onlyWhenDangerous: boolean;
+  /** MLG sonrası malzeme geri al (su neredeyse her zaman) */
+  autoReclaim: boolean;
+  /** Su/powder snow kovası — zor durum dışında kesin geri al */
+  reclaimWater: boolean;
+  /** Tekne kır / al */
+  reclaimBoat: boolean;
+  /** Hay/slime/cobweb/ladder/scaffolding kır-al */
+  reclaimBlocks: boolean;
 }
 
 export const DEFAULT_FALL_GUARD: FallGuardConfig = {
@@ -48,8 +57,31 @@ export const DEFAULT_FALL_GUARD: FallGuardConfig = {
   lethalHealthMargin: 2,
   // 4.5 blok raycast sınırına yakın erken tetik — asıl yerleştirme daha alçakta
   mlgTriggerBlocks: 5.5,
-  onlyWhenDangerous: true
+  onlyWhenDangerous: true,
+  autoReclaim: true,
+  reclaimWater: true,
+  reclaimBoat: true,
+  reclaimBlocks: true
 };
+
+/** MLG sonrası geri alınacak yerleştirme kaydı */
+interface MlgRecoverJob {
+  id: number;
+  method: FallMethod;
+  x: number;
+  y: number;
+  z: number;
+  placedAt: number;
+  /** son deneme zamanı */
+  lastTryAt: number;
+  tries: number;
+  /** bu zamana kadar dene */
+  deadline: number;
+  /** su = yüksek öncelik */
+  priority: number;
+  /** isteğe bağlı blok adı (kırılacak) */
+  blockName?: string;
+}
 
 /** Blok etkileşim menzili (su koyabilmek için katı bloğa bakış) */
 const BLOCK_REACH = 4.45;
@@ -103,17 +135,27 @@ export class FallGuardService {
   private bot: Bot | null = null;
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
+  private reclaimBusy = false;
   private lastMlgAt = 0;
   private lastEmitAt = 0;
   private lastWarnAt = 0;
   private fallPeakY: number | null = null;
-  private placedWaterPos: { x: number; y: number; z: number } | null = null;
+  private recoverJobs: MlgRecoverJob[] = [];
+  private recoverSeq = 1;
   private state: FallGuardState = idleState();
 
   constructor(private readonly instance: BotInstance) {}
 
   getState(): FallGuardState {
-    return { ...this.state, inventoryOptions: [...this.state.inventoryOptions] };
+    const reclaim =
+      this.recoverJobs.length > 0
+        ? `geri-al kuyruk:${this.recoverJobs.map((j) => j.method).join(",")}`
+        : this.state.lastAction;
+    return {
+      ...this.state,
+      lastAction: reclaim || this.state.lastAction,
+      inventoryOptions: [...this.state.inventoryOptions]
+    };
   }
 
   private cfg(): FallGuardConfig {
@@ -136,9 +178,49 @@ export class FallGuardService {
     this.timer = null;
     this.bot = null;
     this.busy = false;
-    this.placedWaterPos = null;
+    this.reclaimBusy = false;
+    this.recoverJobs = [];
     this.fallPeakY = null;
     this.state = idleState();
+  }
+
+  /** MLG yerleştirme kaydı — sonra geri alınacak */
+  private enqueueRecover(
+    method: FallMethod,
+    pos: { x: number; y: number; z: number },
+    opts?: { blockName?: string; ttlMs?: number }
+  ) {
+    const cfg = this.cfg();
+    if (!cfg.autoReclaim) return;
+    if (method === "water" || method === "powder_snow") {
+      if (!cfg.reclaimWater) return;
+    } else if (method === "boat") {
+      if (!cfg.reclaimBoat) return;
+    } else if (!cfg.reclaimBlocks) return;
+
+    // aynı nokta/method yinelenmesin
+    this.recoverJobs = this.recoverJobs.filter(
+      (j) => !(j.method === method && j.x === pos.x && j.y === pos.y && j.z === pos.z)
+    );
+
+    const now = Date.now();
+    const isWater = method === "water" || method === "powder_snow";
+    const job: MlgRecoverJob = {
+      id: this.recoverSeq++,
+      method,
+      x: Math.floor(pos.x),
+      y: Math.floor(pos.y),
+      z: Math.floor(pos.z),
+      placedAt: now,
+      lastTryAt: 0,
+      tries: 0,
+      deadline: now + (opts?.ttlMs ?? (isWater ? 20_000 : 12_000)),
+      priority: isWater ? 100 : method === "boat" ? 70 : 50,
+      blockName: opts?.blockName
+    };
+    this.recoverJobs.push(job);
+    this.recoverJobs.sort((a, b) => b.priority - a.priority || a.placedAt - b.placedAt);
+    this.log().debug("MLG geri-al kuyruğa", `${method} @${job.x},${job.y},${job.z}`);
   }
 
   private emit(force = false) {
@@ -171,14 +253,20 @@ export class FallGuardService {
       return;
     }
 
+    // --- MLG malzeme geri alma (iniş sonrası / güvenli an) ---
+    if (this.recoverJobs.length && !this.busy && !this.reclaimBusy) {
+      void this.processRecoverQueue(bot);
+    }
+
     if (bot.entity.onGround || isInLiquid(bot)) {
-      if (this.placedWaterPos) void this.tryPickupWater(bot);
       if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
-        this.state.lastAction = "iniş tamam";
+        this.state.lastAction =
+          this.recoverJobs.length > 0 ? `iniş tamam · geri-al bekliyor (${this.recoverJobs.length})` : "iniş tamam";
         this.fallPeakY = null;
         this.emit(true);
       }
+      // yere bastıktan sonra da reclaim tick'te işlenir
       return;
     }
 
@@ -193,6 +281,7 @@ export class FallGuardService {
         this.fallPeakY = null;
         this.emit(true);
       }
+      // havada değil, yerde de değil (nadir) — yine reclaim dene
       return;
     }
 
@@ -341,6 +430,8 @@ export class FallGuardService {
         this.lastMlgAt = Date.now();
         this.state.lastAction = `uygulandı: ${method}`;
         this.log().info(`MLG başarılı: ${method}`, `kalan≈${(bot.entity?.position.y ?? 0).toFixed(1)}`);
+        // iniş sonrası geri alma — su neredeyse kesin
+        this.scheduleReclaimAfterLand(method);
       } else {
         // hızlı retry izni
         this.lastMlgAt = Date.now() - 50;
@@ -392,6 +483,16 @@ export class FallGuardService {
     }
   }
 
+  /** inişten sonra reclaim tetiklensin diye (su öncelikli) */
+  private scheduleReclaimAfterLand(method: FallMethod) {
+    // place* metodları zaten enqueueRecover çağırır; burada sadece hatırlatma log
+    if (method === "water" || method === "powder_snow") {
+      this.state.lastAction = `uygulandı: ${method} · su geri alınacak`;
+    } else {
+      this.state.lastAction = `uygulandı: ${method} · malzeme geri alınacak`;
+    }
+  }
+
   /** @returns true if placement likely succeeded */
   private async executeMethod(bot: Bot, method: FallMethod, remaining: number): Promise<boolean> {
     const banned = this.instance.config.inventory.bannedItems;
@@ -416,7 +517,23 @@ export class FallGuardService {
     const ty = land
       ? Math.floor(land.standY)
       : Math.floor(feet.y - Math.min(2, Math.max(1, Math.ceil(remaining * 0.4))));
-    return this.tryPlaceAt(bot, tx, ty, tz, method);
+    const placed = await this.tryPlaceAt(bot, tx, ty, tz, method);
+    if (placed) {
+      const blockName =
+        method === "hay"
+          ? "hay_block"
+          : method === "slime"
+            ? "slime_block"
+            : method === "cobweb"
+              ? "cobweb"
+              : method === "ladder"
+                ? "ladder"
+                : method === "scaffolding"
+                  ? "scaffolding"
+                  : undefined;
+      this.enqueueRecover(method, { x: tx, y: ty, z: tz }, { blockName });
+    }
+    return placed;
   }
 
   /**
@@ -441,14 +558,14 @@ export class FallGuardService {
       if (bot.entity.onGround) return isInLiquid(bot) || hasSoftNearFeet(bot);
       if (isInLiquid(bot) || (method === "powder_snow" && hasPowderSnowNear(bot))) {
         const p = bot.entity.position;
-        this.placedWaterPos = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+        this.enqueueRecover(method, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
         return true;
       }
 
       // kova bitti mi = yerleşti
       if (!hadWaterBucket() && bot.inventory.items().some((i) => i.name === "bucket")) {
         const p = bot.entity.position;
-        this.placedWaterPos = { x: Math.floor(p.x), y: Math.floor(p.y - 0.5), z: Math.floor(p.z) };
+        this.enqueueRecover(method, { x: Math.floor(p.x), y: Math.floor(p.y - 0.5), z: Math.floor(p.z) });
         return true;
       }
 
@@ -472,7 +589,7 @@ export class FallGuardService {
 
       // zaten su var
       if (above && (above.name.includes("water") || above.name === "powder_snow")) {
-        this.placedWaterPos = { x: bx, y: solidY + 1, z: bz };
+        this.enqueueRecover(method, { x: bx, y: solidY + 1, z: bz });
         return true;
       }
 
@@ -534,18 +651,23 @@ export class FallGuardService {
 
       // doğrula
       if (isInLiquid(bot) || hasWaterNear(bot, bx, Math.floor(feetY), bz) || hasPowderSnowNear(bot)) {
-        this.placedWaterPos = { x: bx, y: solidY + 1, z: bz };
+        this.enqueueRecover(method, { x: bx, y: solidY + 1, z: bz });
         return true;
       }
       if (!hadWaterBucket()) {
-        this.placedWaterPos = { x: bx, y: solidY + 1, z: bz };
+        this.enqueueRecover(method, { x: bx, y: solidY + 1, z: bz });
         return true;
       }
 
       await sleep(40);
     }
 
-    return isInLiquid(bot) || hasSoftNearFeet(bot);
+    const softOk = isInLiquid(bot) || hasSoftNearFeet(bot);
+    if (softOk) {
+      const p = bot.entity.position;
+      this.enqueueRecover(method, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+    }
+    return softOk;
   }
 
   private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
@@ -592,10 +714,19 @@ export class FallGuardService {
         /* */
       }
       // tekne entity var mı?
-      if (nearbyBoat(bot)) return true;
+      if (nearbyBoat(bot)) {
+        const p = bot.entity.position;
+        this.enqueueRecover("boat", { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+        return true;
+      }
       await sleep(40);
     }
-    return nearbyBoat(bot);
+    if (nearbyBoat(bot)) {
+      const p = bot.entity.position;
+      this.enqueueRecover("boat", { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+      return true;
+    }
+    return false;
   }
 
   private async tryPlaceAt(bot: Bot, x: number, y: number, z: number, method: FallMethod): Promise<boolean> {
@@ -661,39 +792,355 @@ export class FallGuardService {
     }
   }
 
-  private async tryPickupWater(bot: Bot) {
-    if (!this.placedWaterPos) return;
-    const bucket = bot.inventory.items().find((i) => i.name === "bucket");
-    if (!bucket) {
-      this.placedWaterPos = null;
-      return;
+  // ---- MLG malzeme geri alma ------------------------------------------------
+
+  /**
+   * Güvenli mi? Zor durumda (can kritik, yanıyor, yakın düşman dövüşü, düşüşte)
+   * su bile gecikir; diğer malzemeler daha sıkı.
+   */
+  private isSafeToReclaim(bot: Bot, job: MlgRecoverJob): { ok: boolean; reason?: string } {
+    if (!bot.entity) return { ok: false, reason: "entity yok" };
+    if (this.busy) return { ok: false, reason: "MLG aktif" };
+    if (this.instance.status !== "online") return { ok: false, reason: "offline" };
+
+    const hp = bot.health ?? 20;
+    const isWater = job.method === "water" || job.method === "powder_snow";
+
+    // düşerken geri alma (su hariç — suda iniş sonrası alınır)
+    const vy = bot.entity.velocity?.y ?? 0;
+    const metaFall = Number((bot.entity as { fallDistance?: number }).fallDistance ?? 0);
+    if (!bot.entity.onGround && !isInLiquid(bot) && (vy < -0.4 || metaFall > 2)) {
+      return { ok: false, reason: "hâlâ düşüyor" };
     }
+
+    // ateş / lav — önce kaç
     try {
-      const pos = this.placedWaterPos;
-      for (const dy of [0, -1, 1, 2, -2]) {
-        for (const dx of [0, 1, -1]) {
-          for (const dz of [0, 1, -1]) {
-            const block = bot.blockAt(v3(pos.x + dx, pos.y + dy, pos.z + dz));
-            if (block && (block.name === "water" || block.name.includes("water"))) {
-              await bot.equip(bucket, "hand");
-              await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
-              bot.activateItem(false);
-              await sleep(80);
-              try {
-                bot.deactivateItem();
-              } catch {
-                /* */
-              }
-              this.placedWaterPos = null;
-              return;
-            }
-          }
-        }
+      if ((bot as { onFire?: boolean }).onFire) return { ok: false, reason: "yanıyor" };
+    } catch {
+      /* */
+    }
+    if (isInLavaNear(bot)) return { ok: false, reason: "lav" };
+
+    // can çok düşük — su yine de al (kova hayati); blok/tekne ertele
+    if (hp <= 4 && !isWater) return { ok: false, reason: "can kritik" };
+
+    // dövüş: yakın hostile ve can düşükse ertele (su: sadece mob ≤2.5m ve can≤6)
+    const nearThreat = nearestHostileDist(bot);
+    if (nearThreat != null) {
+      if (isWater) {
+        if (nearThreat < 2.2 && hp <= 6) return { ok: false, reason: "yakın düşman+düşük can" };
+      } else if (nearThreat < 4.5) {
+        return { ok: false, reason: "yakın düşman" };
+      }
+    }
+
+    // combat mode saldırı/savunma + çok yakın tehdit
+    try {
+      const mode = this.instance.combat?.getRuntime?.()?.mode;
+      if (mode === "fleeing") return { ok: false, reason: "kaçış" };
+      if ((mode === "attacking" || mode === "defending") && nearThreat != null && nearThreat < 3 && !isWater) {
+        return { ok: false, reason: "dövüş" };
       }
     } catch {
       /* */
     }
-    this.placedWaterPos = null;
+
+    return { ok: true };
+  }
+
+  private async processRecoverQueue(bot: Bot) {
+    if (this.reclaimBusy || !this.recoverJobs.length) return;
+    const now = Date.now();
+    // süresi dolanları at
+    this.recoverJobs = this.recoverJobs.filter((j) => j.deadline > now);
+    if (!this.recoverJobs.length) return;
+
+    // su önce
+    this.recoverJobs.sort((a, b) => b.priority - a.priority || a.placedAt - b.placedAt);
+    const job = this.recoverJobs[0]!;
+    if (now - job.lastTryAt < (job.method === "water" ? 280 : 450)) return;
+
+    const safety = this.isSafeToReclaim(bot, job);
+    if (!safety.ok) {
+      // su için daha uzun bekle; deadline'a kadar tut
+      if (job.deadline - now < 800 && (job.method === "water" || job.method === "powder_snow")) {
+        // son şans: güvenlik gevşet — sadece düşmüyorsa dene
+        if (!bot.entity?.onGround && !isInLiquid(bot)) return;
+      } else {
+        return;
+      }
+    }
+
+    this.reclaimBusy = true;
+    job.lastTryAt = now;
+    job.tries += 1;
+    try {
+      let ok = false;
+      if (job.method === "water" || job.method === "powder_snow") {
+        ok = await this.reclaimWater(bot, job);
+      } else if (job.method === "boat") {
+        ok = await this.reclaimBoat(bot, job);
+      } else {
+        ok = await this.reclaimBlock(bot, job);
+      }
+
+      if (ok) {
+        this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
+        this.state.lastAction = `geri alındı: ${job.method}`;
+        this.log().info(`MLG malzeme geri alındı: ${job.method}`, `@${job.x},${job.y},${job.z}`);
+        this.emit(true);
+      } else if (job.tries >= (job.method === "water" ? 28 : 14) || now > job.deadline) {
+        this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
+        this.state.lastAction = `geri-al vazgeçildi: ${job.method}`;
+        this.log().warn(`MLG geri-al başarısız: ${job.method}`, `${job.tries} deneme`);
+        this.emit(true);
+      } else {
+        this.state.lastAction = `geri-al deniyor: ${job.method} (#${job.tries})`;
+      }
+    } catch (e) {
+      this.log().debug("MLG geri-al hata", e instanceof Error ? e.message : String(e));
+    } finally {
+      this.reclaimBusy = false;
+    }
+  }
+
+  /** Su / powder snow kaynağını kovaya geri al — agresif tarama */
+  private async reclaimWater(bot: Bot, job: MlgRecoverJob): Promise<boolean> {
+    // zaten su kovası varsa ve yerde su yoksa tamam say
+    const hasFilled =
+      bot.inventory.items().some((i) => i.name === "water_bucket" || i.name === "powder_snow_bucket") ||
+      bot.heldItem?.name === "water_bucket" ||
+      bot.heldItem?.name === "powder_snow_bucket";
+
+    const empty = bot.inventory.items().find((i) => i.name === "bucket") ?? (bot.heldItem?.name === "bucket" ? bot.heldItem : null);
+
+    // su bloğu bul
+    const waterBlock = findWaterBlockNear(bot, job.x, job.y, job.z, 4);
+    if (!waterBlock) {
+      // su yok — belki zaten alındı veya aktı
+      if (hasFilled) return true;
+      // ayak altını da tara
+      const p = bot.entity.position;
+      const near = findWaterBlockNear(bot, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), 3);
+      if (!near) {
+        // birkaç denemeden sonra vazgeç (su aktı)
+        return job.tries > 8;
+      }
+      return this.scoopWaterBlock(bot, near, empty as Item | null, job.method);
+    }
+
+    if (!empty && hasFilled) {
+      // dolu kova var, kaynak hâlâ duruyor — yine de almaya çalışma boş kova yok
+      // boş kova yoksa bırak (başka kova yok)
+      return job.tries > 5;
+    }
+    if (!empty) return false;
+
+    return this.scoopWaterBlock(bot, waterBlock, empty as Item, job.method);
+  }
+
+  private async scoopWaterBlock(
+    bot: Bot,
+    block: { position: { x: number; y: number; z: number }; name: string },
+    empty: Item | null,
+    method: FallMethod
+  ): Promise<boolean> {
+    const bucket =
+      empty ??
+      bot.inventory.items().find((i) => i.name === "bucket") ??
+      null;
+    if (!bucket) return false;
+
+    const before =
+      bot.inventory.items().filter((i) => i.name === "water_bucket" || i.name === "powder_snow_bucket").length +
+      (bot.heldItem?.name === "water_bucket" || bot.heldItem?.name === "powder_snow_bucket" ? 1 : 0);
+
+    try {
+      if (bot.heldItem?.name !== "bucket") await bot.equip(bucket, "hand");
+    } catch {
+      return false;
+    }
+
+    // kaynağa bak (üst yarı)
+    const bx = block.position.x;
+    const by = block.position.y;
+    const bz = block.position.z;
+    try {
+      await bot.lookAt(v3(bx + 0.5, by + 0.4, bz + 0.5), true);
+    } catch {
+      try {
+        await bot.lookAt(v3(bx + 0.5, by + 0.9, bz + 0.5), true);
+      } catch {
+        /* */
+      }
+    }
+    await sleep(40);
+
+    try {
+      bot.activateItem(false);
+    } catch {
+      try {
+        await bot.activateItem();
+      } catch {
+        /* */
+      }
+    }
+    await sleep(70);
+    try {
+      bot.deactivateItem();
+    } catch {
+      /* */
+    }
+
+    // activateBlock yedek
+    try {
+      const b = bot.blockAt(v3(Math.floor(block.position.x), Math.floor(block.position.y), Math.floor(block.position.z)));
+      if (b) await bot.activateBlock(b);
+    } catch {
+      /* */
+    }
+    tryUseItemPacket(bot);
+    await sleep(60);
+
+    const after =
+      bot.inventory.items().filter((i) => i.name === "water_bucket" || i.name === "powder_snow_bucket").length +
+      (bot.heldItem?.name === "water_bucket" || bot.heldItem?.name === "powder_snow_bucket" ? 1 : 0);
+
+    if (after > before || bot.heldItem?.name === "water_bucket" || bot.heldItem?.name === "powder_snow_bucket") {
+      return true;
+    }
+
+    // su bloğu kayboldu mu?
+    const still = bot.blockAt(v3(Math.floor(block.position.x), Math.floor(block.position.y), Math.floor(block.position.z)));
+    if (!still || (!still.name.includes("water") && still.name !== "powder_snow" && still.name !== "bubble_column")) {
+      // su gitti — belki alındı
+      return after >= before && (after > 0 || method === "water");
+    }
+    return false;
+  }
+
+  private async reclaimBoat(bot: Bot, job: MlgRecoverJob): Promise<boolean> {
+    // yakındaki tekne entity
+    let boat: { id: number; position: { x: number; y: number; z: number } } | null = null;
+    let bestD = 4.5;
+    for (const id in bot.entities) {
+      const e = bot.entities[id];
+      if (!e || e === bot.entity) continue;
+      const n = String(e.name ?? e.displayName ?? "").toLowerCase();
+      if (!n.includes("boat") && !n.includes("raft")) continue;
+      const d = bot.entity.position.distanceTo(e.position);
+      if (d < bestD) {
+        bestD = d;
+        boat = e as { id: number; position: { x: number; y: number; z: number } };
+      }
+    }
+    // kayıt noktasına yakın
+    if (!boat) {
+      for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (!e) continue;
+        const n = String(e.name ?? "").toLowerCase();
+        if (!n.includes("boat") && !n.includes("raft")) continue;
+        const d = Math.hypot(e.position.x - job.x, e.position.y - job.y, e.position.z - job.z);
+        if (d < 5) {
+          boat = e as { id: number; position: { x: number; y: number; z: number } };
+          break;
+        }
+      }
+    }
+    if (!boat) {
+      // tekne yok — belki kırıldı / despawn; envanterde varsa OK
+      return (
+        job.tries > 4 ||
+        bot.inventory.items().some((i) => i.name.endsWith("_boat") || i.name.endsWith("_raft") || BOAT_NAMES.includes(i.name))
+      );
+    }
+
+    try {
+      await bot.lookAt(v3(boat.position.x, boat.position.y + 0.3, boat.position.z), true);
+      // attack = tekne kır (survival)
+      const ent = bot.entities[boat.id];
+      if (ent) {
+        bot.attack(ent);
+        await sleep(200);
+        bot.attack(ent);
+        await sleep(250);
+      }
+    } catch {
+      /* */
+    }
+
+    // yerdeki item'a doğru biraz bekle (otomatik pickup)
+    await sleep(300);
+    return (
+      !bot.entities[boat.id] ||
+      bot.inventory.items().some((i) => i.name.endsWith("_boat") || i.name.endsWith("_raft") || BOAT_NAMES.includes(i.name))
+    );
+  }
+
+  private async reclaimBlock(bot: Bot, job: MlgRecoverJob): Promise<boolean> {
+    const names = job.blockName
+      ? [job.blockName]
+      : job.method === "hay"
+        ? ["hay_block"]
+        : job.method === "slime"
+          ? ["slime_block"]
+          : job.method === "cobweb"
+            ? ["cobweb"]
+            : job.method === "ladder"
+              ? ["ladder", "vine"]
+              : job.method === "scaffolding"
+                ? ["scaffolding"]
+                : [];
+
+    // blok ara
+    let target: ReturnType<Bot["blockAt"]> = null;
+    for (const dy of [0, 1, -1, 2, -2]) {
+      for (const dx of [0, 1, -1]) {
+        for (const dz of [0, 1, -1]) {
+          const b = bot.blockAt(v3(job.x + dx, job.y + dy, job.z + dz));
+          if (!b) continue;
+          const n = b.name.replace(/^minecraft:/, "");
+          if (names.some((w) => n === w || n.includes(w))) {
+            target = b;
+            break;
+          }
+        }
+        if (target) break;
+      }
+      if (target) break;
+    }
+    // ayak altında
+    if (!target) {
+      const p = bot.entity.position;
+      for (const dy of [0, -1, 1]) {
+        const b = bot.blockAt(v3(Math.floor(p.x), Math.floor(p.y) + dy, Math.floor(p.z)));
+        if (!b) continue;
+        const n = b.name.replace(/^minecraft:/, "");
+        if (names.some((w) => n === w || n.includes(w))) {
+          target = b;
+          break;
+        }
+      }
+    }
+
+    if (!target) {
+      // blok yok — alındı veya yok oldu
+      return job.tries > 3;
+    }
+
+    try {
+      await bot.lookAt(target.position.offset(0.5, 0.5, 0.5), true);
+      // soft break
+      if (bot.canDigBlock && !bot.canDigBlock(target)) {
+        return false;
+      }
+      await bot.dig(target, true);
+      await sleep(150);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -837,6 +1284,71 @@ function isInLiquid(bot: Bot): boolean {
     /* */
   }
   return false;
+}
+
+function isInLavaNear(bot: Bot): boolean {
+  try {
+    const p = bot.entity.position;
+    for (const dy of [0, 1, -1]) {
+      for (const dx of [0, 1, -1]) {
+        for (const dz of [0, 1, -1]) {
+          const b = bot.blockAt(v3(Math.floor(p.x) + dx, Math.floor(p.y) + dy, Math.floor(p.z) + dz));
+          if (b && (b.name === "lava" || b.name.includes("lava"))) return true;
+        }
+      }
+    }
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+function nearestHostileDist(bot: Bot): number | null {
+  if (!bot.entity) return null;
+  let best: number | null = null;
+  try {
+    for (const id in bot.entities) {
+      const e = bot.entities[id];
+      if (!e || e === bot.entity) continue;
+      if (!isHostileMob(String(e.name ?? e.displayName ?? ""))) continue;
+      const d = bot.entity.position.distanceTo(e.position);
+      if (best == null || d < best) best = d;
+    }
+  } catch {
+    /* */
+  }
+  return best;
+}
+
+/** Kaynak su / powder snow bloğu ara (job civarı + ayak) */
+function findWaterBlockNear(
+  bot: Bot,
+  cx: number,
+  cy: number,
+  cz: number,
+  radius: number
+): { position: { x: number; y: number; z: number }; name: string } | null {
+  let best: { position: { x: number; y: number; z: number }; name: string } | null = null;
+  let bestScore = Infinity;
+  for (let dy = -2; dy <= 3; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const b = bot.blockAt(v3(cx + dx, cy + dy, cz + dz));
+        if (!b) continue;
+        const n = b.name.replace(/^minecraft:/, "");
+        const isWater = n === "water" || n.includes("water") || n === "bubble_column";
+        const isSnow = n === "powder_snow";
+        if (!isWater && !isSnow) continue;
+        const dist = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+        const score = dist + (isSnow ? 0.1 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { position: { x: b.position.x, y: b.position.y, z: b.position.z }, name: b.name };
+        }
+      }
+    }
+  }
+  return best;
 }
 
 function hasWaterNear(bot: Bot, x: number, y: number, z: number): boolean {

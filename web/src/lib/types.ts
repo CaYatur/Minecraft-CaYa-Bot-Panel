@@ -41,6 +41,10 @@ export interface BotConfig {
       lethalHealthMargin: number;
       mlgTriggerBlocks: number;
       onlyWhenDangerous: boolean;
+      autoReclaim?: boolean;
+      reclaimWater?: boolean;
+      reclaimBoat?: boolean;
+      reclaimBlocks?: boolean;
     };
     waterGuard?: {
       enabled: boolean;
