@@ -563,9 +563,9 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           ))}
         </div>
         <p className="text-[11px] leading-relaxed text-zinc-500">
-          Pathfinder parkour takip/goto’da açıkken atlanabilir boşluklardan atlar (safe-only değil). Yol yoksa 2–4
-          blok özel gap jump. Merdiven: path + manuel; düşünce MLG. Zıplarken bakış basılmaz (geri-at azalır).
-          Görev: <span className="mono text-zinc-400">parkour-goto</span>.
+          Dikkatli parkur: düz yolda sprint; basamak/boşluk/merdivende yavaş (sprint kapalı → atlama zamanı doğru).
+          Gap jump kenara gelince zıplar. Yol yoksa 2–4 blok özel atlama. Görev:{" "}
+          <span className="mono text-zinc-400">parkour-goto</span>.
         </p>
 
         <div className="mt-3 border-t border-zinc-800 pt-2">
