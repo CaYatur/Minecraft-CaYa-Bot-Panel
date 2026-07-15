@@ -8,8 +8,10 @@ import {
   extractNameDecor,
   isLikelySystemMessage,
   isValidPlayerChatBody,
+  lineIncludesUsername,
   parseChatComponent,
   parseChatMessage,
+  prefixFromDisplayName,
   resolveUsernameFromSender,
   stripColorCodes
 } from "../modules/chat/parse";
@@ -786,8 +788,8 @@ export class BotInstance extends EventEmitter {
   }
 
   /**
-   * oyuncu sohbeti — rütbe/prefix + tam satır + ANSI (mümkünse) saklanır.
-   * fullPlain: oyundaki ham satır (renk kodları dahil olabilir); prefix ayrıştırması için.
+   * oyuncu sohbeti — rütbe/prefix (satır + tab displayName) + gövde.
+   * Paper playerChat çoğu zaman sadece gövde + UUID verir; isim/rütbe tab listesinden gelir.
    */
   private ingestPlayerChat(
     username: string,
@@ -809,14 +811,46 @@ export class BotInstance extends EventEmitter {
     }
 
     const rawLine = fullPlain ?? text;
-    const decor = extractNameDecor(stripColorCodes(rawLine), username, text);
-    const prefix = prefixHint?.trim() ? (prefixHint.endsWith(" ") ? prefixHint : prefixHint + " ") : decor.prefix;
+    const rawClean = stripColorCodes(rawLine);
+    const decor = extractNameDecor(rawClean, username, text);
+
+    // 1) satırdan prefix  2) hint  3) tab listesi displayName (LuckPerms rütbe)
+    let prefix = "";
+    if (prefixHint?.trim()) {
+      prefix = prefixHint.endsWith(" ") ? prefixHint : prefixHint + " ";
+    } else if (decor.prefix) {
+      prefix = decor.prefix;
+    } else {
+      // tab list displayName
+      try {
+        const pl = this.bot?.players?.[username];
+        const dn =
+          pl?.displayName && typeof (pl.displayName as { toString?: () => string }).toString === "function"
+            ? String(pl.displayName)
+            : "";
+        prefix = prefixFromDisplayName(dn, username);
+      } catch {
+        prefix = "";
+      }
+    }
+
     const nameSuffix = nameSuffixHint || decor.nameSuffix || ": ";
-    const body = decor.body && isValidPlayerChatBody(decor.body) ? decor.body : text;
-    const fullText =
-      stripColorCodes(rawLine).includes(username) && stripColorCodes(rawLine).length >= body.length
-        ? stripColorCodes(rawLine)
-        : `${prefix}${username}${nameSuffix}${body}`.replace(/\s+/g, " ").trim();
+    // gövde: satırda isim yoksa plain tamamen gövdedir (1.19+ playerChat)
+    let body = text;
+    if (lineIncludesUsername(rawClean, username)) {
+      body = decor.body && isValidPlayerChatBody(decor.body) ? decor.body : text;
+    } else if (rawClean && rawClean !== username) {
+      // UUID chat: plain = sadece mesaj
+      body = rawClean;
+    }
+
+    const fullText = lineIncludesUsername(rawClean, username)
+      ? rawClean
+      : `${prefix}${username}${nameSuffix}${body}`.replace(/\s{2,}/g, " ").trim();
+
+    // ANSI: yalnızca tam satır (isim/rütbe içeriyorsa) sakla; yoksa panoda isim kaybolmasın
+    const ansiFull = ansi && lineIncludesUsername(ansi, username) ? ansi : undefined;
+    // gövde renkleri için ayrı alan yok — text düz; prefix ayrı
 
     const entry: ChatEntry = {
       ts: Date.now(),
@@ -826,9 +860,9 @@ export class BotInstance extends EventEmitter {
       self: username.toLowerCase() === this.config.username.toLowerCase(),
       text: body,
       prefix: prefix || undefined,
-      nameSuffix: nameSuffix || undefined,
+      nameSuffix: nameSuffix || ": ",
       fullText,
-      ansi
+      ansi: ansiFull
     };
     this.pushChat(entry);
     this.emit("chatParsed", entry);

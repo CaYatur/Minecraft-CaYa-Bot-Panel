@@ -131,6 +131,42 @@ export function parseChatMessage(plainText: string): ParsedChat {
  * Düz satırdan rütbe/prefix ve ayırıcıyı çıkar.
  * Örn: "[Admin] [VIP] Steve » merhaba" → prefix="[Admin] [VIP] ", nameSuffix=" » ", body=merhaba
  */
+/**
+ * Tab listesi displayName'den rütbe prefix'i: "[Kurucu] CaYatur" → prefix "[Kurucu] "
+ */
+export function prefixFromDisplayName(displayName: string | undefined, username: string): string {
+  if (!displayName) return "";
+  const plain = stripColorCodes(displayName);
+  if (!plain) return "";
+  const u = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // displayName sonunda veya içinde username
+  const re = new RegExp(`^(.*?)\\b${u}\\b\\s*$`, "i");
+  const m = plain.match(re);
+  if (m) {
+    let prefix = (m[1] ?? "").trimEnd();
+    if (prefix && !prefix.endsWith(" ")) prefix += " ";
+    return prefix;
+  }
+  // displayName = sadece rütbe + isim bitişik: "[Kurucu]Name"
+  const re2 = new RegExp(`^(.*)${u}\\s*$`, "i");
+  const m2 = plain.match(re2);
+  if (m2 && m2[1] && m2[1] !== plain) {
+    let prefix = m2[1].trimEnd();
+    if (prefix && !prefix.endsWith(" ")) prefix += " ";
+    // isimle aynıysa prefix yok
+    if (prefix.toLowerCase().includes(username.toLowerCase()) && prefix.length < username.length + 2) return "";
+    return prefix;
+  }
+  return "";
+}
+
+/** ANSI / full satır gerçekten isim içeriyor mu? (sadece gövde mi) */
+export function lineIncludesUsername(line: string | undefined, username: string | undefined): boolean {
+  if (!line || !username) return false;
+  const plain = stripColorCodes(line).toLowerCase();
+  return plain.includes(username.toLowerCase());
+}
+
 export function extractNameDecor(
   plainFull: string,
   username: string,

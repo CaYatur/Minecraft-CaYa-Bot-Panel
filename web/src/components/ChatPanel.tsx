@@ -97,7 +97,13 @@ export function ChatPanel({ botId }: { botId: string }) {
   );
 }
 
+/** Oyuncu satırı: her zaman rütbe + isim + gövde. ANSI yalnızca tam satırsa. */
 function ChatLine({ e, onMsg }: { e: ChatEntry; onMsg: (username: string) => void }) {
+  const hasFullAnsi =
+    Boolean(e.ansi) &&
+    Boolean(e.username) &&
+    e.ansi!.toLowerCase().includes(e.username!.toLowerCase());
+
   return (
     <div className="flex gap-2 rounded px-1 leading-relaxed hover:bg-zinc-900/60">
       <span className="shrink-0 text-[10px] text-zinc-600 tabular-nums" style={{ paddingTop: 2 }}>
@@ -105,17 +111,16 @@ function ChatLine({ e, onMsg }: { e: ChatEntry; onMsg: (username: string) => voi
       </span>
       {e.kind === "server" ? (
         <span className="min-w-0 break-words text-zinc-400 italic">{e.ansi ? ansiToSpans(e.ansi) : e.text}</span>
-      ) : e.ansi ? (
-        // tam renkli satır (rütbe + isim + mesaj) — oyundaki gibi
+      ) : hasFullAnsi ? (
         <span className="min-w-0 break-words">
           {e.kind === "whisper" && <span className="mr-1 text-purple-400">[fısıltı]</span>}
           <button
             type="button"
             onClick={() => e.username && onMsg(e.username)}
             className="text-left hover:underline"
-            title={e.username ? `${e.username} adlı oyuncuya fısılda` : undefined}
+            title={e.username ? `${e.username} — fısılda` : undefined}
           >
-            {ansiToSpans(e.ansi)}
+            {ansiToSpans(e.ansi!)}
           </button>
           {e.self && <span className="ml-1 text-[10px] text-indigo-400">(bot)</span>}
         </span>
@@ -126,11 +131,11 @@ function ChatLine({ e, onMsg }: { e: ChatEntry; onMsg: (username: string) => voi
           <button
             type="button"
             onClick={() => e.username && onMsg(e.username)}
-            className="mr-0.5 font-semibold hover:underline"
+            className="font-semibold hover:underline"
             style={{ color: e.self ? "#818cf8" : nameColor(e.username ?? "?") }}
-            title={e.username ? `${e.username} adlı oyuncuya fısılda` : undefined}
+            title={e.username ? `${e.username} — fısılda` : undefined}
           >
-            {e.username}
+            {e.username ?? "?"}
             {e.self ? " (bot)" : ""}
           </button>
           <span className="text-zinc-500">{e.nameSuffix ?? ": "}</span>
