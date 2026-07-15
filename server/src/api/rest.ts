@@ -3,8 +3,10 @@ import { BotManager, PanelError } from "../core/BotManager";
 import {
   ACTION_META,
   CONDITION_META,
+  CONTEXT_VARS_ALL,
+  CONTEXT_VARS_BY_TRIGGER,
+  CONTEXT_VARS_COMMON,
   findBlueprint,
-  RULE_BLUEPRINTS,
   RULE_TEMPLATES,
   TRIGGER_META
 } from "../modules/automation/RuleEngine";
@@ -386,28 +388,12 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         triggers: TRIGGER_META,
         actions: ACTION_META,
         conditions: CONDITION_META,
-        templates: RULE_TEMPLATES.map((t) => t.name).filter(Boolean),
-        blueprints: RULE_BLUEPRINTS.map((b) => ({
-          id: b.id,
-          name: b.name,
-          category: b.category,
-          description: b.description
-        })),
-        vars: [
-          "{player}",
-          "{attacker}",
-          "{text}",
-          "{item}",
-          "{count}",
-          "{delta}",
-          "{gained}",
-          "{command}",
-          "{arg}",
-          "{arg0}",
-          "{arg1}",
-          "{label}",
-          "{taskType}"
-        ]
+        // stok blueprint/şablon yok — kullanıcı kural oluşturur ve düzenler
+        templates: [] as string[],
+        blueprints: [] as Array<{ id: string; name: string; category: string; description: string }>,
+        vars: CONTEXT_VARS_ALL,
+        varsByTrigger: CONTEXT_VARS_BY_TRIGGER,
+        varsCommon: CONTEXT_VARS_COMMON
       });
     })
   );

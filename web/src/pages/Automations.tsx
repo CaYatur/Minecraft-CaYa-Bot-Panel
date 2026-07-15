@@ -12,6 +12,8 @@ interface Rule {
   trigger: Record<string, unknown>;
   conditions: Array<Record<string, unknown>>;
   actions: Array<Record<string, unknown>>;
+  elseActions?: Array<Record<string, unknown>>;
+  onErrorActions?: Array<Record<string, unknown>>;
   cooldownMs: number;
   maxTriggersPerMinute: number;
 }
@@ -24,26 +26,39 @@ interface MetaField {
   category?: string;
 }
 
-interface Blueprint {
-  id: string;
+interface ContextVarDoc {
   name: string;
-  category: string;
-  description: string;
+  desc: string;
 }
 
 interface Meta {
   triggers: MetaField[];
   actions: MetaField[];
   conditions?: MetaField[];
-  templates: string[];
-  blueprints?: Blueprint[];
+  templates?: string[];
   vars?: string[];
+  varsByTrigger?: Record<string, ContextVarDoc[]>;
+  varsCommon?: ContextVarDoc[];
 }
 
 const fieldCls =
   "rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500";
 
-type CondRow = { type: string; item?: string; threshold?: number; player?: string; radius?: number; comparison?: string; dimension?: string };
+type CondRow = {
+  type: string;
+  item?: string;
+  threshold?: number;
+  player?: string;
+  radius?: number;
+  comparison?: string;
+  dimension?: string;
+  /** task_is vb. */
+  taskType?: string;
+  /** task_label_is / combat_mode_is / status_is */
+  value?: string;
+  /** eq | neq | contains | startsWith | regex */
+  match?: string;
+};
 type ActRow = {
   type: string;
   player?: string;
@@ -60,10 +75,11 @@ type ActRow = {
   filter?: string;
   seconds?: number;
   waypoint?: string;
+  /** report_status: panel | chat | both */
+  to?: string;
 };
 
 const emptyCond = (): CondRow => ({ type: "task_idle" });
-const emptyAct = (): ActRow => ({ type: "panel_notify", message: "kural tetiklendi", level: "info" });
 
 export function Automations() {
   const bots = useAppStore((s) => s.bots);
@@ -71,13 +87,21 @@ export function Automations() {
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
 
+  const emptyAct = (): ActRow => ({
+    type: "panel_notify",
+    message: t("automations.defaultNotify"),
+    level: "info"
+  });
+
   const [rules, setRules] = useState<Rule[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [showBuilder, setShowBuilder] = useState(true);
-  const [bpCat, setBpCat] = useState<string>("all");
+  /** null = yeni kural; string = düzenlenen kural id */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [ruleEnabled, setRuleEnabled] = useState(true);
 
-  // ── Blueprint form state ──
-  const [name, setName] = useState("Yeni kural");
+  // ── Form state ──
+  const [name, setName] = useState(() => "New rule");
   const [botIds, setBotIds] = useState<string>("all");
   const [cooldownMs, setCooldownMs] = useState(3000);
   const [maxPerMin, setMaxPerMin] = useState(10);
@@ -97,7 +121,28 @@ export function Automations() {
   const [taskType, setTaskType] = useState("");
 
   const [conditions, setConditions] = useState<CondRow[]>([]);
-  const [actions, setActions] = useState<ActRow[]>([emptyAct()]);
+  const [actions, setActions] = useState<ActRow[]>([
+    { type: "panel_notify", message: "rule", level: "info" }
+  ]);
+  /** ELSE: IF tutmazsa (tek blok) */
+  const [elseActions, setElseActions] = useState<ActRow[]>([]);
+  /** ON ERROR: THEN hata verirse (tek blok) */
+  const [onErrorActions, setOnErrorActions] = useState<ActRow[]>([]);
+
+  // dil değişince varsayılan isim/bildirim (form boşken)
+  useEffect(() => {
+    if (!editingId) {
+      setName((n) =>
+        n === "Yeni kural" || n === "New rule" || n === "rule" || !n ? t("automations.defaultName") : n
+      );
+      setActions((acts) =>
+        acts.length === 1 && acts[0]?.type === "panel_notify" && (acts[0].message === "kural tetiklendi" || acts[0].message === "Rule triggered" || acts[0].message === "rule" || acts[0].message === "kural")
+          ? [emptyAct()]
+          : acts
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
 
   const botList = Object.values(bots);
   const catalogVersion = useMemo(() => {
@@ -122,14 +167,6 @@ export function Automations() {
     void load().catch(() => {});
   }, []);
 
-  const blueprints = meta?.blueprints ?? [];
-  const categories = useMemo(() => {
-    const set = new Set(blueprints.map((b) => b.category));
-    return ["all", ...[...set].sort()];
-  }, [blueprints]);
-
-  const filteredBp = blueprints.filter((b) => bpCat === "all" || b.category === bpCat);
-
   const triggers = meta?.triggers ?? [
     { type: "chat", label: "Sohbet / komut", fields: [] },
     { type: "item_gained", label: "Eşya geldi", fields: [] },
@@ -141,6 +178,46 @@ export function Automations() {
     { type: "task_idle", label: "Boşta", fields: [] },
     { type: "online", label: "Online", fields: [] }
   ];
+
+  /** Sunucu meta etiketini dil dosyasından çöz (yoksa fallback) */
+  const metaLabel = (kind: "triggers" | "conditions" | "actions", type: string, fallback?: string) => {
+    const key = `automations.${kind}.${type}`;
+    const translated = t(key);
+    return translated === key ? fallback || type : translated;
+  };
+  const metaHint = (type: string, fallback?: string) => {
+    const key = `automations.triggerHints.${type}`;
+    const translated = t(key);
+    return translated === key ? fallback : translated;
+  };
+  const catLabel = (cat?: string) => {
+    if (!cat) return "";
+    const key = `automations.actionCategories.${cat}`;
+    const translated = t(key);
+    return translated === key ? cat : translated;
+  };
+
+  const varsForTrigger: ContextVarDoc[] = meta?.varsByTrigger?.[triggerType] ?? [];
+  const varsCommon: ContextVarDoc[] = meta?.varsCommon ?? [
+    { name: "error", desc: "ON ERROR message" },
+    { name: "failedAction", desc: "failed action type" },
+    { name: "branch", desc: "then | else" }
+  ];
+
+  const copyVar = (name: string) => {
+    const token = `{${name}}`;
+    void navigator.clipboard?.writeText(token).then(
+      () => toast("info", t("automations.varsCopied", { name: token })),
+      () => toast("info", token)
+    );
+  };
+
+  /** Değişken açıklaması — önce i18n, yoksa sunucu desc */
+  const varDesc = (name: string, fallback?: string) => {
+    const key = `automations.varDesc.${name}`;
+    const translated = t(key);
+    return translated === key ? fallback || name : translated;
+  };
 
   const buildPayload = (): Partial<Rule> => {
     const trigger: Record<string, unknown> = { type: triggerType };
@@ -159,6 +236,10 @@ export function Automations() {
       trigger.radius = radius;
       if (player) trigger.player = player;
       if (from === "authorized") trigger.from = "authorized";
+    }
+    if (triggerType === "player_far" || triggerType === "follow_out_of_range") {
+      trigger.radius = radius;
+      if (player) trigger.player = player;
     }
     if (triggerType === "health_below" || triggerType === "food_below") {
       trigger.threshold = threshold;
@@ -185,68 +266,183 @@ export function Automations() {
       if (c.radius != null) o.radius = c.radius;
       if (c.comparison) o.comparison = c.comparison;
       if (c.dimension) o.dimension = c.dimension;
+      if (c.taskType) o.taskType = c.taskType;
+      if (c.value) o.value = c.value;
+      if (c.match) o.match = c.match;
+      // task_is: value alanından da taskType doldur (kullanıcı hangisini yazarsa)
+      if (c.type === "task_is") {
+        const v = (c.taskType || c.value || "").trim();
+        if (v) {
+          o.taskType = v;
+          o.value = v;
+        }
+        if (!o.match) o.match = "eq";
+      }
+      if (c.type === "task_label_is" || c.type === "combat_mode_is" || c.type === "status_is") {
+        const v = (c.value || c.taskType || "").trim();
+        if (v) o.value = v;
+        if (!o.match) o.match = c.type === "task_label_is" ? "contains" : "eq";
+      }
+      if (c.type === "follow_player_is") {
+        const v = (c.player || c.value || "").trim();
+        if (v) {
+          o.player = v;
+          o.value = v;
+        }
+        if (!o.match) o.match = "eq";
+      }
       return o;
     });
 
-    const acts = actions.map((a) => {
-      const o: Record<string, unknown> = { type: a.type };
-      if (a.player != null && a.player !== "") o.player = a.player;
-      if (a.text != null) o.text = a.text;
-      if (a.message != null) o.message = a.message;
-      if (a.level != null) o.level = a.level;
-      if (a.item != null && a.item !== "") o.item = a.item;
-      if (a.block != null && a.block !== "") o.block = a.block;
-      if (a.ore != null) o.ore = a.ore;
-      if (a.count != null && a.count !== "") o.count = a.count;
-      if (a.radius != null) o.radius = a.radius;
-      if (a.distance != null) o.distance = a.distance;
-      if (a.mode != null) o.mode = a.mode;
-      if (a.filter != null) o.filter = a.filter;
-      if (a.seconds != null) o.seconds = a.seconds;
-      if (a.waypoint != null) o.waypoint = a.waypoint;
-      return o;
-    });
+    const mapActs = (list: ActRow[]) =>
+      list.map((a) => {
+        const o: Record<string, unknown> = { type: a.type };
+        if (a.player != null && a.player !== "") o.player = a.player;
+        if (a.text != null) o.text = a.text;
+        if (a.message != null) o.message = a.message;
+        if (a.level != null) o.level = a.level;
+        if (a.item != null && a.item !== "") o.item = a.item;
+        if (a.block != null && a.block !== "") o.block = a.block;
+        if (a.ore != null) o.ore = a.ore;
+        if (a.count != null && a.count !== "") o.count = a.count;
+        if (a.radius != null) o.radius = a.radius;
+        if (a.distance != null) o.distance = a.distance;
+        if (a.mode != null) o.mode = a.mode;
+        if (a.filter != null) o.filter = a.filter;
+        if (a.seconds != null) o.seconds = a.seconds;
+        if (a.waypoint != null) o.waypoint = a.waypoint;
+        if (a.to != null && a.to !== "") o.to = a.to;
+        return o;
+      });
+
+    const acts = mapActs(actions);
 
     return {
       name,
-      enabled: true,
+      enabled: ruleEnabled,
       botIds: botIds === "all" ? "all" : [botIds],
       trigger,
       conditions: conds,
-      actions: acts.length ? acts : [{ type: "panel_notify", message: "kural", level: "info" }],
+      actions: acts.length ? acts : [{ type: "panel_notify", message: t("automations.defaultNotify"), level: "info" }],
+      elseActions: mapActs(elseActions),
+      onErrorActions: mapActs(onErrorActions),
       cooldownMs,
       maxTriggersPerMinute: maxPerMin
     };
   };
 
-  const create = async () => {
-    try {
-      await api.post("/api/rules", buildPayload());
-      await load();
-      toast("success", "Kural eklendi");
-    } catch (e) {
-      toast("error", e instanceof Error ? e.message : String(e));
-    }
+  const resetForm = () => {
+    setEditingId(null);
+    setRuleEnabled(true);
+    setName(t("automations.defaultName"));
+    setBotIds("all");
+    setCooldownMs(3000);
+    setMaxPerMin(10);
+    setTriggerType("chat");
+    setPattern("gel");
+    setMatch("command");
+    setFrom("authorized");
+    setPlayer("");
+    setCommandPrefix("/");
+    setThreshold(10);
+    setEveryMs(60_000);
+    setRadius(16);
+    setSource("all");
+    setItem("oak_log");
+    setComparison("lt");
+    setTaskType("");
+    setConditions([]);
+    setActions([emptyAct()]);
+    setElseActions([]);
+    setOnErrorActions([]);
   };
 
-  const addBlueprint = async (bp: Blueprint) => {
+  const parseActs = (raw: Array<Record<string, unknown>> | undefined): ActRow[] =>
+    (raw ?? []).map((a) => ({
+      type: String(a.type ?? "panel_notify"),
+      player: a.player != null ? String(a.player) : undefined,
+      text: a.text != null ? String(a.text) : undefined,
+      message: a.message != null ? String(a.message) : undefined,
+      level: a.level != null ? String(a.level) : undefined,
+      item: a.item != null ? String(a.item) : undefined,
+      block: a.block != null ? String(a.block) : undefined,
+      ore: a.ore != null ? String(a.ore) : undefined,
+      count: a.count as number | string | undefined,
+      radius: a.radius != null ? Number(a.radius) : undefined,
+      distance: a.distance != null ? Number(a.distance) : undefined,
+      mode: a.mode != null ? String(a.mode) : undefined,
+      filter: a.filter != null ? String(a.filter) : undefined,
+      seconds: a.seconds != null ? Number(a.seconds) : undefined,
+      waypoint: a.waypoint != null ? String(a.waypoint) : undefined,
+      to: a.to != null ? String(a.to) : undefined
+    }));
+
+  /** Mevcut kuralı forma yükle — düzenle */
+  const loadRuleIntoForm = (r: Rule) => {
+    setEditingId(r.id);
+    setShowBuilder(true);
+    setName(r.name || t("automations.defaultNameShort"));
+    setRuleEnabled(r.enabled !== false);
+    setBotIds(r.botIds === "all" || !r.botIds?.length ? "all" : Array.isArray(r.botIds) ? r.botIds[0]! : "all");
+    setCooldownMs(r.cooldownMs ?? 3000);
+    setMaxPerMin(r.maxTriggersPerMinute ?? 10);
+
+    const tr = (r.trigger ?? {}) as Record<string, unknown>;
+    setTriggerType(String(tr.type ?? "chat"));
+    setPattern(String(tr.pattern ?? ""));
+    setMatch(String(tr.match ?? "contains"));
+    const fr = tr.from;
+    if (Array.isArray(fr)) {
+      setFrom("list");
+      setPlayer(String(fr[0] ?? tr.player ?? ""));
+    } else {
+      setFrom(String(fr ?? "authorized"));
+      setPlayer(String(tr.player ?? ""));
+    }
+    setCommandPrefix(String(tr.commandPrefix ?? "/"));
+    setThreshold(Number(tr.threshold ?? 10));
+    setEveryMs(Number(tr.everyMs ?? 60_000));
+    setRadius(Number(tr.radius ?? 16));
+    setSource(String(tr.source ?? "all"));
+    setItem(String(tr.item ?? "oak_log"));
+    setComparison(String(tr.comparison ?? "lt"));
+    setTaskType(String(tr.taskType ?? ""));
+
+    setConditions(
+      (r.conditions ?? []).map((c) => ({
+        type: String(c.type ?? "task_idle"),
+        item: c.item != null ? String(c.item) : undefined,
+        threshold: c.threshold != null ? Number(c.threshold) : undefined,
+        player: c.player != null ? String(c.player) : undefined,
+        radius: c.radius != null ? Number(c.radius) : undefined,
+        comparison: c.comparison != null ? String(c.comparison) : undefined,
+        dimension: c.dimension != null ? String(c.dimension) : undefined,
+        taskType: c.taskType != null ? String(c.taskType) : undefined,
+        value: c.value != null ? String(c.value) : c.taskType != null ? String(c.taskType) : undefined,
+        match: c.match != null ? String(c.match) : undefined
+      }))
+    );
+
+    const acts = parseActs(r.actions as Array<Record<string, unknown>>);
+    setActions(acts.length ? acts : [emptyAct()]);
+    setElseActions(parseActs(r.elseActions as Array<Record<string, unknown>> | undefined));
+    setOnErrorActions(parseActs(r.onErrorActions as Array<Record<string, unknown>> | undefined));
+  };
+
+  const save = async () => {
     try {
-      await api.post(`/api/rules/templates/${encodeURIComponent(bp.id)}`, {
-        botIds: botIds === "all" ? "all" : [botIds]
-      });
-      await load();
-      toast("success", `Blueprint: ${bp.name}`);
-    } catch (e) {
-      // id fail → isim dene
-      try {
-        await api.post(`/api/rules/templates/${encodeURIComponent(bp.name)}`, {
-          botIds: botIds === "all" ? "all" : [botIds]
-        });
-        await load();
-        toast("success", `Blueprint: ${bp.name}`);
-      } catch (e2) {
-        toast("error", e2 instanceof Error ? e2.message : String(e2));
+      const payload = buildPayload();
+      if (editingId) {
+        await api.patch(`/api/rules/${editingId}`, payload);
+        toast("success", t("automations.ruleUpdated"));
+      } else {
+        await api.post("/api/rules", payload);
+        toast("success", t("automations.ruleCreated"));
       }
+      await load();
+      resetForm();
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -256,20 +452,21 @@ export function Automations() {
   };
 
   const remove = async (r: Rule) => {
-    if (!confirm(`"${r.name}" silinsin mi?`)) return;
+    if (!confirm(t("automations.deleteConfirm", { name: r.name }))) return;
     await api.del(`/api/rules/${r.id}`);
+    if (editingId === r.id) resetForm();
     await load();
   };
 
   const test = async (r: Rule) => {
     const id = botIds === "all" ? Object.keys(bots)[0] : botIds;
     if (!id) {
-      toast("error", "Test için bot gerekli");
+      toast("error", t("automations.testNeedBot"));
       return;
     }
     try {
       await api.post(`/api/rules/${r.id}/test`, { botId: id });
-      toast("info", "Kuru test — Log paneline bak");
+      toast("info", t("automations.testDry"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -279,6 +476,125 @@ export function Automations() {
     setConditions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const updateAct = (i: number, patch: Partial<ActRow>) =>
     setActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const updateElse = (i: number, patch: Partial<ActRow>) =>
+    setElseActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const updateOnError = (i: number, patch: Partial<ActRow>) =>
+    setOnErrorActions((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  /** Tek satır aksiyon editörü (THEN / ELSE / ON ERROR) */
+  const renderActRow = (
+    a: ActRow,
+    i: number,
+    onPatch: (i: number, p: Partial<ActRow>) => void,
+    onRemove: () => void
+  ) => (
+    <div key={i} className="flex flex-wrap items-end gap-2 rounded border border-zinc-800/80 bg-zinc-950/40 p-2">
+      <span className="self-center text-[10px] text-zinc-600">{i + 1}.</span>
+      <label className="flex min-w-[11rem] flex-col gap-0.5 text-xs">
+        <span className="text-zinc-500">{t("automations.actionLabel")}</span>
+        <select
+          value={a.type}
+          onChange={(e) => onPatch(i, { type: e.target.value })}
+          className={fieldCls}
+        >
+          {actionMeta.map((m) => (
+            <option key={m.type} value={m.type}>
+              {m.category ? `${catLabel(m.category)}: ` : ""}
+              {metaLabel("actions", m.type, m.label)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {["goto", "follow", "attack", "protect", "social-follow", "social-attack", "unfollow"].includes(a.type) && (
+        <input
+          value={a.player ?? (a.type === "unfollow" ? "" : "{player}")}
+          onChange={(e) => onPatch(i, { player: e.target.value })}
+          placeholder={a.type === "unfollow" ? t("automations.phUnfollow") : t("automations.phPlayerArg")}
+          className={`${fieldCls} w-36`}
+        />
+      )}
+      {a.type === "send_chat" && (
+        <input
+          value={a.text ?? ""}
+          onChange={(e) => onPatch(i, { text: e.target.value })}
+          placeholder={t("automations.phMessageError")}
+          className={`${fieldCls} min-w-[12rem] flex-1`}
+        />
+      )}
+      {a.type === "panel_notify" && (
+        <input
+          value={a.message ?? ""}
+          onChange={(e) => onPatch(i, { message: e.target.value })}
+          placeholder={t("automations.phNotifyError")}
+          className={`${fieldCls} min-w-[12rem] flex-1`}
+        />
+      )}
+      {(a.type === "report_status" || a.type === "bot_status" || a.type === "durum-raporu") && (
+        <>
+          <input
+            value={a.message ?? ""}
+            onChange={(e) => onPatch(i, { message: e.target.value })}
+            placeholder={t("automations.phReportStatus")}
+            className={`${fieldCls} min-w-[14rem] flex-1`}
+          />
+          <select
+            value={a.to ?? "panel"}
+            onChange={(e) => onPatch(i, { to: e.target.value })}
+            className={`${fieldCls} w-28`}
+            title={t("automations.reportStatusTo")}
+          >
+            <option value="panel">{t("automations.reportToPanel")}</option>
+            <option value="chat">{t("automations.reportToChat")}</option>
+            <option value="both">{t("automations.reportToBoth")}</option>
+          </select>
+        </>
+      )}
+      {["collect", "collect_item", "craft", "withdraw", "mine"].includes(a.type) && (
+        <>
+          {a.type === "mine" ? (
+            <ItemPicker
+              version={catalogVersion}
+              kind="ores"
+              value={String(a.ore ?? "iron")}
+              onChange={(n) => onPatch(i, { ore: n.replace(/_ore$/, "") })}
+            />
+          ) : (
+            <ItemPicker
+              version={catalogVersion}
+              kind={a.type === "collect" || a.type === "collect_item" ? "blocks" : "items"}
+              value={String(a.item ?? a.block ?? "oak_log")}
+              onChange={(n) => onPatch(i, { item: n, block: n })}
+            />
+          )}
+          <input
+            value={a.count ?? 16}
+            onChange={(e) => onPatch(i, { count: e.target.value })}
+            placeholder={t("automations.phCount")}
+            className={`${fieldCls} w-24`}
+          />
+        </>
+      )}
+      {["clear-mobs", "hunt", "collect_drops"].includes(a.type) && (
+        <input
+          type="number"
+          value={a.radius ?? 16}
+          onChange={(e) => onPatch(i, { radius: Number(e.target.value) })}
+          className={`${fieldCls} w-20`}
+        />
+      )}
+      {a.type === "wait" && (
+        <input
+          type="number"
+          value={a.seconds ?? 1}
+          onChange={(e) => onPatch(i, { seconds: Number(e.target.value) })}
+          className={`${fieldCls} w-20`}
+        />
+      )}
+      <button type="button" onClick={onRemove} className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40">
+        ✕
+      </button>
+    </div>
+  );
 
   const summaryTrigger = () => {
     if (triggerType === "chat") {
@@ -288,6 +604,8 @@ export function Automations() {
     if (triggerType === "item_gained") return `+${item || "herhangi"} (≥${threshold || 1})`;
     if (triggerType === "item_count") return `${item} ${comparison} ${threshold}`;
     if (triggerType === "attacked") return `saldırı · ${source}`;
+    if (triggerType === "player_far") return `${player || "@follow"} > ${radius}m`;
+    if (triggerType === "follow_out_of_range") return `takip menzil dışı (>${radius}m)`;
     return triggerType;
   };
 
@@ -296,7 +614,7 @@ export function Automations() {
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-bold text-zinc-100">{t("automations.title")}</h1>
         <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">
-          {rules.length} kural · {blueprints.length} blueprint
+          {t("automations.rulesCount", { n: rules.length })}
         </span>
         <button
           onClick={() => void load()}
@@ -305,67 +623,67 @@ export function Automations() {
           {t("common.refresh")}
         </button>
         <button
-          onClick={() => setShowBuilder((v) => !v)}
+          onClick={() => {
+            resetForm();
+            setShowBuilder(true);
+          }}
           className="rounded-lg bg-indigo-600/80 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
         >
-          {showBuilder ? "Blueprint gizle" : "Blueprint oluşturucu"}
+          {t("automations.newRule")}
+        </button>
+        <button
+          onClick={() => setShowBuilder((v) => !v)}
+          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+        >
+          {showBuilder ? t("automations.hideForm") : t("automations.showForm")}
         </button>
       </div>
 
-      {/* ── Blueprint galerisi ── */}
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <div className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Blueprint şablonlar</div>
-          <div className="flex flex-wrap gap-1">
-            {categories.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setBpCat(c)}
-                className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium ${
-                  bpCat === c ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                }`}
-              >
-                {c === "all" ? "Tümü" : c}
-              </button>
-            ))}
-          </div>
-        </div>
-        <p className="mb-3 text-[11px] text-zinc-500">
-          Tek tıkla kural ekle: sohbet komutu, saldırı, eşya geldi/azaldı, toplama başarısı…
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filteredBp.map((bp) => (
-            <button
-              key={bp.id}
-              type="button"
-              onClick={() => void addBlueprint(bp)}
-              className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-left transition hover:border-indigo-700/60 hover:bg-indigo-950/20"
-            >
-              <div className="text-[10px] font-medium tracking-wide text-indigo-400/80 uppercase">{bp.category}</div>
-              <div className="mt-0.5 text-sm font-semibold text-zinc-200">{bp.name}</div>
-              <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-zinc-500">{bp.description}</p>
-              <div className="mt-2 text-[10px] text-indigo-400">+ Ekle</div>
-            </button>
-          ))}
-          {filteredBp.length === 0 && (
-            <p className="col-span-full text-sm text-zinc-600 italic">Blueprint yüklenemedi — sunucu meta?</p>
-          )}
-        </div>
-      </section>
-
-      {/* ── WHEN → IF → THEN builder ── */}
+      {/* ── WHEN → IF → THEN builder (oluştur / düzenle) ── */}
       {showBuilder && (
-        <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
+        <section
+          className={`space-y-3 rounded-xl border p-4 ${
+            editingId
+              ? "border-amber-800/50 bg-amber-950/10"
+              : "border-zinc-800 bg-zinc-900/50"
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
+              {editingId ? t("automations.editRule") : t("automations.createRule")}
+            </div>
+            {editingId && (
+              <span className="mono rounded bg-amber-950/50 px-2 py-0.5 text-[10px] text-amber-300/90">
+                {t("automations.editingId", { id: editingId.slice(0, 8) })}
+              </span>
+            )}
+            <label
+              className={`ml-auto flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1 select-none ${
+                ruleEnabled
+                  ? "border-emerald-800/50 bg-emerald-950/30 text-emerald-200"
+                  : "border-zinc-700 bg-zinc-900 text-zinc-500"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={ruleEnabled}
+                onChange={(e) => setRuleEnabled(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-600 text-emerald-500 focus:ring-emerald-600"
+              />
+              <span className="text-xs font-medium">
+                {ruleEnabled ? t("automations.enabledActive") : t("automations.disabled")}
+              </span>
+            </label>
+          </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Kural adı</span>
+              <span className="text-zinc-400">{t("automations.ruleName")}</span>
               <input value={name} onChange={(e) => setName(e.target.value)} className={fieldCls} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Bot</span>
+              <span className="text-zinc-400">{t("automations.bot")}</span>
               <select value={botIds} onChange={(e) => setBotIds(e.target.value)} className={fieldCls}>
-                <option value="all">Tümü</option>
+                <option value="all">{t("automations.botAll")}</option>
                 {botList.map((b) => (
                   <option key={b.config.id} value={b.config.id}>
                     {b.config.username}
@@ -374,7 +692,7 @@ export function Automations() {
               </select>
             </label>
             <label className="flex w-28 flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Soğuma ms</span>
+              <span className="text-zinc-400">{t("automations.cooldownMs")}</span>
               <input
                 type="number"
                 value={cooldownMs}
@@ -383,7 +701,7 @@ export function Automations() {
               />
             </label>
             <label className="flex w-28 flex-col gap-1 text-sm">
-              <span className="text-zinc-400">Max/dk</span>
+              <span className="text-zinc-400">{t("automations.maxPerMin")}</span>
               <input
                 type="number"
                 value={maxPerMin}
@@ -395,28 +713,62 @@ export function Automations() {
 
           {/* Pipeline visual */}
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-2 text-xs">
-            <span className="rounded bg-amber-950/50 px-2 py-1 font-semibold text-amber-300">WHEN</span>
+            <span className="rounded bg-amber-950/50 px-2 py-1 font-semibold text-amber-300">
+              {t("automations.pipelineWhen")}
+            </span>
             <span className="mono text-zinc-300">{summaryTrigger()}</span>
             <span className="text-zinc-600">→</span>
-            <span className="rounded bg-sky-950/50 px-2 py-1 font-semibold text-sky-300">IF</span>
-            <span className="text-zinc-400">{conditions.length ? conditions.map((c) => c.type).join(" · ") : "—"}</span>
+            <span className="rounded bg-sky-950/50 px-2 py-1 font-semibold text-sky-300">
+              {t("automations.pipelineIf")}
+            </span>
+            <span className="text-zinc-400">
+              {conditions.length
+                ? conditions.map((c) => metaLabel("conditions", c.type, c.type)).join(" · ")
+                : "—"}
+            </span>
             <span className="text-zinc-600">→</span>
-            <span className="rounded bg-emerald-950/50 px-2 py-1 font-semibold text-emerald-300">THEN</span>
-            <span className="text-zinc-400">{actions.map((a) => a.type).join(" · ")}</span>
+            <span className="rounded bg-emerald-950/50 px-2 py-1 font-semibold text-emerald-300">
+              {t("automations.pipelineThen")}
+            </span>
+            <span className="text-zinc-400">
+              {actions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+            </span>
+            {elseActions.length > 0 && (
+              <>
+                <span className="text-zinc-600">/</span>
+                <span className="rounded bg-violet-950/50 px-2 py-1 font-semibold text-violet-300">
+                  {t("automations.pipelineElse")}
+                </span>
+                <span className="text-zinc-400">
+                  {elseActions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+                </span>
+              </>
+            )}
+            {onErrorActions.length > 0 && (
+              <>
+                <span className="text-zinc-600">·</span>
+                <span className="rounded bg-red-950/50 px-2 py-1 font-semibold text-red-300">
+                  {t("automations.pipelineOnErr")}
+                </span>
+                <span className="text-zinc-400">
+                  {onErrorActions.map((a) => metaLabel("actions", a.type, a.type)).join(" · ")}
+                </span>
+              </>
+            )}
           </div>
 
           {/* WHEN */}
           <div className="rounded-lg border border-amber-900/40 bg-amber-950/10 p-3">
             <div className="mb-2 text-[10px] font-semibold tracking-wide text-amber-400/90 uppercase">
-              1 · WHEN — Tetikleyici
+              1 · {t("automations.when")}
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <label className="flex flex-col gap-1 text-sm">
-                <span className="text-zinc-400">Tür</span>
+                <span className="text-zinc-400">{t("automations.triggerType")}</span>
                 <select value={triggerType} onChange={(e) => setTriggerType(e.target.value)} className={fieldCls}>
                   {triggers.map((tr) => (
-                    <option key={tr.type} value={tr.type}>
-                      {tr.label}
+                    <option key={tr.type} value={tr.type} title={metaHint(tr.type, tr.hint)}>
+                      {metaLabel("triggers", tr.type, tr.label)}
                     </option>
                   ))}
                 </select>
@@ -425,27 +777,27 @@ export function Automations() {
               {triggerType === "chat" && (
                 <>
                   <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-zinc-400">Desen / komut adı</span>
+                    <span className="text-zinc-400">{t("automations.pattern")}</span>
                     <input
                       value={pattern}
                       onChange={(e) => setPattern(e.target.value)}
-                      placeholder="gel | topla"
+                      placeholder={t("automations.phPattern")}
                       className={fieldCls}
                     />
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-zinc-400">Eşleşme</span>
+                    <span className="text-zinc-400">{t("automations.match")}</span>
                     <select value={match} onChange={(e) => setMatch(e.target.value)} className={fieldCls}>
-                      <option value="command">komut (/slash)</option>
-                      <option value="startsWith">ile başlar</option>
-                      <option value="contains">içerir</option>
-                      <option value="exact">tam eşit</option>
-                      <option value="regex">regex</option>
+                      <option value="command">{t("automations.matchCommand")}</option>
+                      <option value="startsWith">{t("automations.matchStartsWith")}</option>
+                      <option value="contains">{t("automations.matchContains")}</option>
+                      <option value="exact">{t("automations.matchExact")}</option>
+                      <option value="regex">{t("automations.matchRegex")}</option>
                     </select>
                   </label>
                   {match === "command" && (
                     <label className="flex flex-col gap-1 text-sm">
-                      <span className="text-zinc-400">Komut öneki</span>
+                      <span className="text-zinc-400">{t("automations.commandPrefix")}</span>
                       <input
                         value={commandPrefix}
                         onChange={(e) => setCommandPrefix(e.target.value)}
@@ -455,11 +807,11 @@ export function Automations() {
                     </label>
                   )}
                   <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-zinc-400">Kimden</span>
+                    <span className="text-zinc-400">{t("automations.from")}</span>
                     <select value={from} onChange={(e) => setFrom(e.target.value)} className={fieldCls}>
-                      <option value="authorized">Yetkililer (İ3)</option>
-                      <option value="anyone">Herkes</option>
-                      <option value="list">Belirli kişi</option>
+                      <option value="authorized">{t("automations.fromAuthorized")}</option>
+                      <option value="anyone">{t("automations.fromAnyone")}</option>
+                      <option value="list">{t("automations.fromList")}</option>
                     </select>
                   </label>
                 </>
@@ -468,13 +820,22 @@ export function Automations() {
               {(triggerType === "chat" ||
                 triggerType === "attacked" ||
                 triggerType === "player_nearby" ||
+                triggerType === "player_far" ||
                 from === "list") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Belirli oyuncu</span>
+                  <span className="text-zinc-400">
+                    {triggerType === "player_far"
+                      ? t("automations.playerFarHint")
+                      : t("automations.specificPlayer")}
+                  </span>
                   <input
                     value={player}
                     onChange={(e) => setPlayer(e.target.value)}
-                    placeholder="opsiyonel isim"
+                    placeholder={
+                      triggerType === "player_far"
+                        ? t("automations.playerFarPlaceholder")
+                        : t("automations.phOptionalName")
+                    }
                     className={fieldCls}
                   />
                 </label>
@@ -482,11 +843,11 @@ export function Automations() {
 
               {triggerType === "attacked" && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Kaynak</span>
+                  <span className="text-zinc-400">{t("automations.source")}</span>
                   <select value={source} onChange={(e) => setSource(e.target.value)} className={fieldCls}>
-                    <option value="all">Hepsi</option>
-                    <option value="player">Oyuncu</option>
-                    <option value="mob">Mob</option>
+                    <option value="all">{t("automations.sourceAll")}</option>
+                    <option value="player">{t("automations.sourcePlayer")}</option>
+                    <option value="mob">{t("automations.sourceMob")}</option>
                   </select>
                 </label>
               )}
@@ -495,17 +856,17 @@ export function Automations() {
                 <>
                   <div className="flex flex-col gap-1 text-sm">
                     <span className="text-zinc-400">
-                      {triggerType === "item_gained" ? "Eşya (boş = herhangi)" : "Eşya"}
+                      {triggerType === "item_gained" ? t("automations.itemAny") : t("automations.item")}
                     </span>
                     <ItemPicker version={catalogVersion} kind="items" value={item} onChange={setItem} />
                   </div>
                   {triggerType === "item_count" && (
                     <label className="flex flex-col gap-1 text-sm">
-                      <span className="text-zinc-400">Karşılaştırma</span>
+                      <span className="text-zinc-400">{t("automations.comparison")}</span>
                       <select value={comparison} onChange={(e) => setComparison(e.target.value)} className={fieldCls}>
-                        <option value="lt">&lt; azsa</option>
+                        <option value="lt">&lt;</option>
                         <option value="lte">≤</option>
-                        <option value="gt">&gt; fazlaysa</option>
+                        <option value="gt">&gt;</option>
                         <option value="gte">≥</option>
                         <option value="eq">=</option>
                       </select>
@@ -513,7 +874,7 @@ export function Automations() {
                   )}
                   <label className="flex flex-col gap-1 text-sm">
                     <span className="text-zinc-400">
-                      {triggerType === "item_gained" ? "Min artım" : "Eşik adet"}
+                      {triggerType === "item_gained" ? t("automations.minGain") : t("automations.threshold")}
                     </span>
                     <input
                       type="number"
@@ -527,7 +888,7 @@ export function Automations() {
 
               {(triggerType === "health_below" || triggerType === "food_below") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Eşik</span>
+                  <span className="text-zinc-400">{t("automations.threshold")}</span>
                   <input
                     type="number"
                     value={threshold}
@@ -539,7 +900,7 @@ export function Automations() {
 
               {triggerType === "interval" && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Her (ms)</span>
+                  <span className="text-zinc-400">{t("automations.everyMs")}</span>
                   <input
                     type="number"
                     value={everyMs}
@@ -549,9 +910,15 @@ export function Automations() {
                 </label>
               )}
 
-              {triggerType === "player_nearby" && (
+              {(triggerType === "player_nearby" ||
+                triggerType === "player_far" ||
+                triggerType === "follow_out_of_range") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Yarıçap</span>
+                  <span className="text-zinc-400">
+                    {triggerType === "player_far" || triggerType === "follow_out_of_range"
+                      ? t("automations.farDistance")
+                      : t("automations.radius")}
+                  </span>
                   <input
                     type="number"
                     value={radius}
@@ -560,49 +927,113 @@ export function Automations() {
                   />
                 </label>
               )}
+              {triggerType === "follow_out_of_range" && (
+                <p className="sm:col-span-2 text-[10px] text-zinc-500">{t("automations.followOutHint")}</p>
+              )}
 
               {(triggerType === "task_done" || triggerType === "task_failed") && (
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-zinc-400">Görev tipi (opsiyonel)</span>
+                  <span className="text-zinc-400">{t("automations.taskType")}</span>
                   <input
                     value={taskType}
                     onChange={(e) => setTaskType(e.target.value)}
-                    placeholder="collect-wood | mine | craft"
+                    placeholder={t("automations.phTaskType")}
                     className={fieldCls}
                   />
                 </label>
               )}
             </div>
             {match === "command" && triggerType === "chat" && (
-              <p className="mt-2 text-[10px] text-amber-600/90">
-                Örn. <span className="mono text-amber-400">/topla cobblestone 32</span> → pattern{" "}
-                <span className="mono">topla</span>, aksiyonda item={"{arg0}"} count={"{arg1}"}
-              </p>
+              <p className="mt-2 text-[10px] text-amber-600/90">{t("automations.varsExample")}</p>
             )}
+
+            {/* Context değişkenleri — bu tetik + sonraki aksiyon (i18n) */}
+            <div className="mt-3 rounded-lg border border-zinc-700/80 bg-zinc-950/50 p-2.5">
+              <div className="mb-1 text-[10px] font-semibold tracking-wide text-zinc-400 uppercase">
+                {t("automations.varsTitle")}
+              </div>
+              <p className="mb-1 text-[10px] leading-relaxed text-zinc-500">{t("automations.varsHow")}</p>
+              <p className="mb-2 text-[10px] leading-relaxed text-zinc-500">{t("automations.howToUseVars")}</p>
+              <div className="mb-2 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1.5">
+                <div className="mb-1 text-[10px] font-medium text-zinc-400">{t("automations.chainExamplesTitle")}</div>
+                <ul className="space-y-0.5 text-[10px] text-zinc-500">
+                  <li>· {t("automations.chainEx1")}</li>
+                  <li>· {t("automations.chainEx2")}</li>
+                  <li>· {t("automations.chainEx3")}</li>
+                  <li>· {t("automations.chainEx4")}</li>
+                  <li>· {t("automations.chainEx5")}</li>
+                  <li>· {t("automations.chainEx6")}</li>
+                </ul>
+                <div className="mt-1.5 border-t border-zinc-800 pt-1.5 text-[10px] text-indigo-300/80">
+                  <div className="font-medium text-indigo-300/90">{t("automations.statusRecipeTitle")}</div>
+                  <div className="text-zinc-500">{t("automations.statusRecipe")}</div>
+                  <div className="mt-1 font-medium text-indigo-300/90">{t("automations.taskEqualsRecipeTitle")}</div>
+                  <div className="text-zinc-500">{t("automations.taskEqualsRecipe")}</div>
+                </div>
+              </div>
+              <div className="mb-1 text-[10px] text-amber-500/90">{t("automations.varsForTrigger")}</div>
+              {varsForTrigger.length === 0 ? (
+                <p className="mb-2 text-[10px] text-zinc-600 italic">{t("automations.varsNone")}</p>
+              ) : (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {varsForTrigger.map((v) => (
+                    <button
+                      key={v.name}
+                      type="button"
+                      title={`${varDesc(v.name, v.desc)} · ${t("automations.varsClick")}`}
+                      onClick={() => copyVar(v.name)}
+                      className="max-w-[14rem] rounded border border-amber-900/40 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/50"
+                    >
+                      <span className="mono text-[11px] font-medium text-amber-200">{`{${v.name}}`}</span>
+                      <span className="mt-0.5 block text-[9px] leading-tight text-zinc-500">
+                        {varDesc(v.name, v.desc)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="mb-1 text-[10px] text-zinc-500">{t("automations.varsAlways")}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {varsCommon.map((v) => (
+                  <button
+                    key={v.name}
+                    type="button"
+                    title={`${varDesc(v.name, v.desc)} · ${t("automations.varsClick")}`}
+                    onClick={() => copyVar(v.name)}
+                    className="max-w-[14rem] rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-left hover:border-zinc-500"
+                  >
+                    <span className="mono text-[11px] font-medium text-zinc-300">{`{${v.name}}`}</span>
+                    <span className="mt-0.5 block text-[9px] leading-tight text-zinc-600">
+                      {varDesc(v.name, v.desc)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* IF */}
           <div className="rounded-lg border border-sky-900/40 bg-sky-950/10 p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <div className="text-[10px] font-semibold tracking-wide text-sky-400/90 uppercase">
-                2 · IF — Koşullar (hepsi doğru olmalı)
+                2 · {t("automations.if")}
               </div>
               <button
                 type="button"
                 onClick={() => setConditions((c) => [...c, emptyCond()])}
                 className="ml-auto rounded bg-sky-900/40 px-2 py-0.5 text-[10px] text-sky-200 hover:bg-sky-900/60"
               >
-                + Koşul
+                {t("automations.addCondition")}
               </button>
             </div>
             {conditions.length === 0 && (
-              <p className="text-[11px] text-zinc-600 italic">Koşul yok — tetik her zaman aksiyon çalıştırır.</p>
+              <p className="text-[11px] text-zinc-600 italic">{t("automations.noCondition")}</p>
             )}
             <div className="space-y-2">
               {conditions.map((c, i) => (
                 <div key={i} className="flex flex-wrap items-end gap-2 rounded border border-zinc-800/80 bg-zinc-950/40 p-2">
                   <label className="flex min-w-[10rem] flex-col gap-0.5 text-xs">
-                    <span className="text-zinc-500">Tür</span>
+                    <span className="text-zinc-500">{t("automations.typeLabel")}</span>
                     <select
                       value={c.type}
                       onChange={(e) => updateCond(i, { type: e.target.value })}
@@ -610,7 +1041,7 @@ export function Automations() {
                     >
                       {conditionMeta.map((m) => (
                         <option key={m.type} value={m.type}>
-                          {m.label}
+                          {metaLabel("conditions", m.type, m.label)}
                         </option>
                       ))}
                     </select>
@@ -627,13 +1058,29 @@ export function Automations() {
                       />
                     </div>
                   )}
+                  {c.type === "item_count" && (
+                    <label className="flex w-24 flex-col gap-0.5 text-xs">
+                      <span className="text-zinc-500">{t("automations.comparison")}</span>
+                      <select
+                        value={c.comparison ?? "gte"}
+                        onChange={(e) => updateCond(i, { comparison: e.target.value })}
+                        className={fieldCls}
+                      >
+                        <option value="lt">&lt;</option>
+                        <option value="lte">≤</option>
+                        <option value="eq">=</option>
+                        <option value="gte">≥</option>
+                        <option value="gt">&gt;</option>
+                      </select>
+                    </label>
+                  )}
                   {(c.type === "health_below" ||
                     c.type === "health_above" ||
                     c.type === "food_below" ||
                     c.type === "food_above" ||
                     c.type === "item_count") && (
                     <label className="flex w-20 flex-col gap-0.5 text-xs">
-                      <span className="text-zinc-500">Eşik</span>
+                      <span className="text-zinc-500">{t("automations.threshold")}</span>
                       <input
                         type="number"
                         value={c.threshold ?? 10}
@@ -642,19 +1089,20 @@ export function Automations() {
                       />
                     </label>
                   )}
-                  {c.type === "player_near" && (
+                  {(c.type === "player_near" || c.type === "player_far") && (
                     <>
                       <input
                         value={c.player ?? ""}
                         onChange={(e) => updateCond(i, { player: e.target.value })}
-                        placeholder="oyuncu"
-                        className={`${fieldCls} w-28`}
+                        placeholder={t("automations.phPlayerNear")}
+                        className={`${fieldCls} w-32`}
                       />
                       <input
                         type="number"
                         value={c.radius ?? 16}
                         onChange={(e) => updateCond(i, { radius: Number(e.target.value) })}
                         className={`${fieldCls} w-20`}
+                        title={t("automations.radius")}
                       />
                     </>
                   )}
@@ -664,6 +1112,72 @@ export function Automations() {
                       onChange={(e) => updateCond(i, { dimension: e.target.value })}
                       className={`${fieldCls} w-32`}
                     />
+                  )}
+                  {/* Görev tipi / etiket / mod / status string eşleşmeleri */}
+                  {(c.type === "task_is" ||
+                    c.type === "task_label_is" ||
+                    c.type === "combat_mode_is" ||
+                    c.type === "status_is" ||
+                    c.type === "follow_player_is") && (
+                    <>
+                      <label className="flex min-w-[9rem] flex-1 flex-col gap-0.5 text-xs">
+                        <span className="text-zinc-500">
+                          {c.type === "task_is"
+                            ? t("automations.condTaskType")
+                            : c.type === "task_label_is"
+                              ? t("automations.condTaskLabel")
+                              : c.type === "combat_mode_is"
+                                ? t("automations.condCombatMode")
+                                : c.type === "status_is"
+                                  ? t("automations.condBotStatus")
+                                  : t("automations.condFollowPlayer")}
+                        </span>
+                        <input
+                          value={
+                            c.type === "task_is"
+                              ? (c.taskType ?? c.value ?? "")
+                              : c.type === "follow_player_is"
+                                ? (c.player ?? c.value ?? "")
+                                : (c.value ?? c.taskType ?? "")
+                          }
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (c.type === "task_is") updateCond(i, { taskType: v, value: v });
+                            else if (c.type === "follow_player_is") updateCond(i, { player: v, value: v });
+                            else updateCond(i, { value: v });
+                          }}
+                          placeholder={
+                            c.type === "task_is"
+                              ? t("automations.phCondTaskType")
+                              : c.type === "task_label_is"
+                                ? t("automations.phCondTaskLabel")
+                                : c.type === "combat_mode_is"
+                                  ? t("automations.phCondCombatMode")
+                                  : c.type === "status_is"
+                                    ? t("automations.phCondBotStatus")
+                                    : t("automations.phCondFollowPlayer")
+                          }
+                          className={fieldCls}
+                        />
+                      </label>
+                      <label className="flex w-28 flex-col gap-0.5 text-xs">
+                        <span className="text-zinc-500">{t("automations.stringMatch")}</span>
+                        <select
+                          value={
+                            c.match ??
+                            (c.type === "task_label_is" ? "contains" : "eq")
+                          }
+                          onChange={(e) => updateCond(i, { match: e.target.value })}
+                          className={fieldCls}
+                        >
+                          <option value="eq">{t("automations.matchEq")}</option>
+                          <option value="neq">{t("automations.matchNeq")}</option>
+                          <option value="contains">{t("automations.matchContainsCond")}</option>
+                          <option value="startsWith">{t("automations.matchStartsWithCond")}</option>
+                          <option value="regex">{t("automations.matchRegexCond")}</option>
+                        </select>
+                      </label>
+                    </>
                   )}
                   <button
                     type="button"
@@ -681,169 +1195,256 @@ export function Automations() {
           <div className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <div className="text-[10px] font-semibold tracking-wide text-emerald-400/90 uppercase">
-                3 · THEN — Aksiyonlar (sırayla)
+                3 · {t("automations.then")}
               </div>
               <button
                 type="button"
                 onClick={() => setActions((a) => [...a, emptyAct()])}
                 className="ml-auto rounded bg-emerald-900/40 px-2 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-900/60"
               >
-                + Aksiyon
+                {t("automations.addAction")}
               </button>
             </div>
             <div className="space-y-2">
-              {actions.map((a, i) => (
-                <div key={i} className="flex flex-wrap items-end gap-2 rounded border border-zinc-800/80 bg-zinc-950/40 p-2">
-                  <span className="self-center text-[10px] text-zinc-600">{i + 1}.</span>
-                  <label className="flex min-w-[11rem] flex-col gap-0.5 text-xs">
-                    <span className="text-zinc-500">Aksiyon</span>
-                    <select
-                      value={a.type}
-                      onChange={(e) => updateAct(i, { type: e.target.value })}
-                      className={fieldCls}
-                    >
-                      {actionMeta.map((m) => (
-                        <option key={m.type} value={m.type}>
-                          {m.category ? `${m.category}: ` : ""}
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {["goto", "follow", "attack", "protect", "social-follow", "social-attack"].includes(a.type) && (
-                    <input
-                      value={a.player ?? "{player}"}
-                      onChange={(e) => updateAct(i, { player: e.target.value })}
-                      placeholder="{player} / {arg0}"
-                      className={`${fieldCls} w-36`}
-                    />
-                  )}
-                  {a.type === "send_chat" && (
-                    <input
-                      value={a.text ?? ""}
-                      onChange={(e) => updateAct(i, { text: e.target.value })}
-                      placeholder="mesaj"
-                      className={`${fieldCls} min-w-[12rem] flex-1`}
-                    />
-                  )}
-                  {a.type === "panel_notify" && (
-                    <input
-                      value={a.message ?? ""}
-                      onChange={(e) => updateAct(i, { message: e.target.value })}
-                      placeholder="bildirim"
-                      className={`${fieldCls} min-w-[12rem] flex-1`}
-                    />
-                  )}
-                  {["collect", "collect_item", "craft", "withdraw", "mine"].includes(a.type) && (
-                    <>
-                      {a.type === "mine" ? (
-                        <ItemPicker
-                          version={catalogVersion}
-                          kind="ores"
-                          value={String(a.ore ?? "iron")}
-                          onChange={(n) => updateAct(i, { ore: n.replace(/_ore$/, "") })}
-                        />
-                      ) : (
-                        <ItemPicker
-                          version={catalogVersion}
-                          kind={a.type === "collect" || a.type === "collect_item" ? "blocks" : "items"}
-                          value={String(a.item ?? a.block ?? "oak_log")}
-                          onChange={(n) => updateAct(i, { item: n, block: n })}
-                        />
-                      )}
-                      <input
-                        value={a.count ?? 16}
-                        onChange={(e) => updateAct(i, { count: e.target.value })}
-                        placeholder="adet / {arg1}"
-                        className={`${fieldCls} w-24`}
-                      />
-                    </>
-                  )}
-                  {["clear-mobs", "hunt", "collect_drops"].includes(a.type) && (
-                    <input
-                      type="number"
-                      value={a.radius ?? 16}
-                      onChange={(e) => updateAct(i, { radius: Number(e.target.value) })}
-                      className={`${fieldCls} w-20`}
-                      title="yarıçap"
-                    />
-                  )}
-                  {a.type === "wait" && (
-                    <input
-                      type="number"
-                      value={a.seconds ?? 1}
-                      onChange={(e) => updateAct(i, { seconds: Number(e.target.value) })}
-                      className={`${fieldCls} w-20`}
-                      title="saniye"
-                    />
-                  )}
+              {actions.map((a, i) =>
+                renderActRow(a, i, updateAct, () => setActions((rows) => rows.filter((_, j) => j !== i)))
+              )}
+            </div>
+          </div>
+
+          {/* ELSE — tek dal */}
+          <div className="rounded-lg border border-violet-900/40 bg-violet-950/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div className="text-[10px] font-semibold tracking-wide text-violet-300/90 uppercase">
+                4 · {t("automations.else")}
+              </div>
+              {elseActions.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setElseActions([emptyAct()])}
+                  className="ml-auto rounded bg-violet-900/40 px-2 py-0.5 text-[10px] text-violet-200 hover:bg-violet-900/60"
+                >
+                  {t("automations.addElse")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setElseActions([])}
+                  className="ml-auto rounded bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-200"
+                >
+                  {t("automations.removeElse")}
+                </button>
+              )}
+            </div>
+            {elseActions.length === 0 ? (
+              <p className="text-[11px] text-zinc-600 italic">{t("automations.noElse")}</p>
+            ) : (
+              <div className="space-y-2">
+                {elseActions.map((a, i) =>
+                  renderActRow(a, i, updateElse, () => setElseActions((rows) => rows.filter((_, j) => j !== i)))
+                )}
+                {elseActions.length < 3 && (
                   <button
                     type="button"
-                    onClick={() => setActions((rows) => rows.filter((_, j) => j !== i))}
-                    className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40"
+                    onClick={() => setElseActions((a) => [...a, emptyAct()])}
+                    className="text-[10px] text-violet-400 hover:underline"
                   >
-                    ✕
+                    {t("automations.addElseAction")}
                   </button>
-                </div>
-              ))}
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ON ERROR — tek blok */}
+          <div className="rounded-lg border border-red-900/40 bg-red-950/10 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div className="text-[10px] font-semibold tracking-wide text-red-300/90 uppercase">
+                5 · {t("automations.onError")}
+              </div>
+              {onErrorActions.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOnErrorActions([
+                      {
+                        type: "panel_notify",
+                        message: t("automations.errorNotify"),
+                        level: "error"
+                      }
+                    ])
+                  }
+                  className="ml-auto rounded bg-red-900/40 px-2 py-0.5 text-[10px] text-red-200 hover:bg-red-900/60"
+                >
+                  {t("automations.addOnError")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setOnErrorActions([])}
+                  className="ml-auto rounded bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-200"
+                >
+                  {t("automations.removeOnError")}
+                </button>
+              )}
             </div>
+            {onErrorActions.length === 0 ? (
+              <p className="text-[11px] text-zinc-600 italic">{t("automations.noOnError")}</p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[10px] text-red-400/80">{t("automations.onErrorHint")}</p>
+                {onErrorActions.map((a, i) =>
+                  renderActRow(a, i, updateOnError, () =>
+                    setOnErrorActions((rows) => rows.filter((_, j) => j !== i))
+                  )
+                )}
+                {onErrorActions.length < 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setOnErrorActions((a) => [...a, emptyAct()])}
+                    className="text-[10px] text-red-400 hover:underline"
+                  >
+                    {t("automations.addErrorAction")}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => void create()}
+              onClick={() => void save()}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
             >
-              Kuralı kaydet
+              {editingId ? t("automations.saveChanges") : t("automations.createRule")}
             </button>
+            {editingId && (
+              <button
+                type="button"
+                onClick={() => resetForm()}
+                className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
+              >
+                {t("automations.cancelEdit")}
+              </button>
+            )}
+            {!editingId && (
+              <button
+                type="button"
+                onClick={() => resetForm()}
+                className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-700"
+              >
+                {t("automations.clearForm")}
+              </button>
+            )}
             <p className="text-[10px] text-zinc-600">
-              Değişkenler: {(meta?.vars ?? ["{player}", "{arg0}", "{item}", "{delta}"]).join(" ")}
+              {t("automations.variables")}:{" "}
+              {(
+                meta?.vars ?? [
+                  "{player}",
+                  "{task}",
+                  "{taskType}",
+                  "{label}",
+                  "{arg0}",
+                  "{arg1}",
+                  "{item}",
+                  "{delta}",
+                  "{error}"
+                ]
+              ).join(" ")}
             </p>
           </div>
         </section>
       )}
 
-      {/* ── Mevcut kurallar ── */}
+      {/* ── Mevcut kurallar (düzenle / sil) ── */}
       <div className="space-y-2">
+        <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          {t("automations.savedRules")}
+        </div>
         {rules.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-800 py-12 text-zinc-500">
             <span className="text-3xl">⚙️</span>
-            <p className="text-sm">Henüz kural yok. Blueprint ekle veya oluşturucu kullan.</p>
+            <p className="text-sm">{t("automations.empty")}</p>
           </div>
         )}
         {rules.map((r) => (
           <div
             key={r.id}
-            className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3"
+            className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
+              editingId === r.id
+                ? "border-amber-700/50 bg-amber-950/20"
+                : "border-zinc-800 bg-zinc-900/50"
+            }`}
           >
-            <button
-              onClick={() => void toggle(r)}
-              className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium ${
-                r.enabled ? "bg-emerald-950/60 text-emerald-300" : "bg-zinc-800 text-zinc-500"
+            <label
+              className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 select-none ${
+                r.enabled
+                  ? "border-emerald-800/50 bg-emerald-950/30"
+                  : "border-zinc-700 bg-zinc-900/60"
               }`}
+              title={r.enabled ? t("automations.toggleOn") : t("automations.toggleOff")}
             >
-              {r.enabled ? "AÇIK" : "KAPALI"}
-            </button>
+              <input
+                type="checkbox"
+                checked={Boolean(r.enabled)}
+                onChange={() => void toggle(r)}
+                className="h-4 w-4 rounded border-zinc-600 bg-zinc-900 text-emerald-500 focus:ring-emerald-600"
+              />
+              <span
+                className={`text-xs font-medium ${
+                  r.enabled ? "text-emerald-300" : "text-zinc-500"
+                }`}
+              >
+                {r.enabled ? t("automations.enabled") : t("automations.disabled")}
+              </span>
+            </label>
             <div className="min-w-0 flex-1">
-              <div className="font-medium text-zinc-200">{r.name}</div>
+              <div className={`font-medium ${r.enabled ? "text-zinc-200" : "text-zinc-500"}`}>
+                {r.name}
+              </div>
               <div className="mono mt-0.5 truncate text-[11px] text-zinc-500">
-                WHEN {(r.trigger as { type?: string }).type}
-                {r.conditions?.length ? ` · IF ${r.conditions.length}` : ""}
-                {` · THEN ${r.actions?.map((a) => (a as { type?: string }).type).join(", ")}`}
+                {t("automations.pipelineWhen")}{" "}
+                {metaLabel(
+                  "triggers",
+                  String((r.trigger as { type?: string }).type ?? ""),
+                  String((r.trigger as { type?: string }).type ?? "")
+                )}
+                {r.conditions?.length
+                  ? ` · ${t("automations.pipelineIf")} ${r.conditions.length}`
+                  : ""}
+                {` · ${t("automations.pipelineThen")} ${r.actions
+                  ?.map((a) => metaLabel("actions", String((a as { type?: string }).type ?? ""), String((a as { type?: string }).type ?? "")))
+                  .join(", ")}`}
+                {(r.elseActions?.length ?? 0) > 0
+                  ? ` · ${t("automations.pipelineElse")}`
+                  : ""}
+                {(r.onErrorActions?.length ?? 0) > 0
+                  ? ` · ${t("automations.pipelineOnErr")}`
+                  : ""}
               </div>
             </div>
+            <button
+              onClick={() => loadRuleIntoForm(r)}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium ${
+                editingId === r.id
+                  ? "bg-amber-700 text-white"
+                  : "bg-zinc-800 text-indigo-300 hover:bg-zinc-700"
+              }`}
+            >
+              {t("automations.edit")}
+            </button>
             <button
               onClick={() => void test(r)}
               className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200"
             >
-              Test
+              {t("automations.test")}
             </button>
             <button
               onClick={() => void remove(r)}
               className="rounded-lg bg-zinc-800 px-2.5 py-1 text-xs text-red-400 hover:bg-red-950/40"
             >
-              Sil
+              {t("automations.delete")}
             </button>
           </div>
         ))}

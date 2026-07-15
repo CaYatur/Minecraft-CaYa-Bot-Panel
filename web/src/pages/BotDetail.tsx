@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
@@ -28,6 +28,9 @@ export function BotDetail() {
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("chat");
+  /** yetkili oyuncular — virgülle ayrılmış metin */
+  const [authText, setAuthText] = useState("");
+  const [authSaving, setAuthSaving] = useState(false);
 
   const TABS: { id: Tab; label: string }[] = [
     { id: "chat", label: t("botDetail.tabs.chat") },
@@ -39,6 +42,12 @@ export function BotDetail() {
     { id: "work", label: t("botDetail.tabs.work") },
     { id: "build", label: t("botDetail.tabs.build") }
   ];
+
+  // bot değişince yetkili listesini senkronla
+  useEffect(() => {
+    if (!bot) return;
+    setAuthText((bot.config.authorizedPlayers ?? []).join(", "));
+  }, [id, bot?.config.authorizedPlayers?.join(",")]);
 
   if (!bot) {
     return (
@@ -55,6 +64,23 @@ export function BotDetail() {
   const running = bot.status !== "stopped";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
+
+  const saveAuthorized = async () => {
+    const list = authText
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setAuthSaving(true);
+    try {
+      await api.patch(`/api/bots/${id}`, { authorizedPlayers: list });
+      await refresh();
+      toast("success", t("botDetail.authorizedSaved", { n: list.length }));
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setAuthSaving(false);
+    }
+  };
 
   const toggle = async () => {
     try {
@@ -156,6 +182,50 @@ export function BotDetail() {
           📍 {fmtPos(bot.runtime.position)}{" "}
           <span className="text-zinc-600">({dimensionLabel(bot.runtime.dimension)})</span>
         </div>
+      </div>
+
+      {/* Yetkili oyuncular — otomasyon sohbet komutları (İ3) */}
+      <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/15 px-4 py-3">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <div className="text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">
+            {t("botDetail.authorized")}
+          </div>
+          <span className="text-[10px] text-zinc-500">{t("botDetail.authorizedHint")}</span>
+        </div>
+        <p className="mb-2 text-[11px] leading-relaxed text-zinc-500">{t("botDetail.authorizedHelp")}</p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={authText}
+            onChange={(e) => setAuthText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void saveAuthorized();
+            }}
+            placeholder={t("botDetail.authorizedPlaceholder")}
+            className="min-w-[14rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+          />
+          <button
+            type="button"
+            disabled={authSaving}
+            onClick={() => void saveAuthorized()}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+          >
+            {authSaving ? "…" : t("botDetail.authorizedSave")}
+          </button>
+        </div>
+        {(bot.config.authorizedPlayers ?? []).length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(bot.config.authorizedPlayers ?? []).map((p) => (
+              <span
+                key={p}
+                className="rounded-full bg-indigo-950/60 px-2 py-0.5 text-[10px] text-indigo-200"
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-[10px] text-amber-500/90">{t("botDetail.authorizedEmpty")}</p>
+        )}
       </div>
 
       <NearbyPlayers botId={id} />

@@ -19,6 +19,10 @@ export type TriggerType =
   | "item_gained"
   | "attacked"
   | "player_nearby"
+  /** oyuncu menzil DIŞINDA (uzak) — radius'tan fazla veya görünmüyor */
+  | "player_far"
+  /** takip edilen oyuncu takip mesafesinin / radius dışına çıktı */
+  | "follow_out_of_range"
   | "player_joined"
   | "player_left"
   | "inventory_full"
@@ -56,6 +60,16 @@ export interface RuleCondition {
     | "not_has_item"
     | "task_idle"
     | "task_busy"
+    /** Aktif görev tipi: mine | gather | craft | none… */
+    | "task_is"
+    /** Aktif görev etiketi (label) eşleşmesi */
+    | "task_label_is"
+    /** Dövüş / companion modu: idle | attacking | following… */
+    | "combat_mode_is"
+    /** Takip edilen oyuncu adı eşleşmesi */
+    | "follow_player_is"
+    /** Bot bağlantı durumu: online | stopped… */
+    | "status_is"
     | "health_below"
     | "health_above"
     | "food_below"
@@ -64,6 +78,9 @@ export interface RuleCondition {
     | "online"
     | "offline"
     | "player_near"
+    | "player_far"
+    | "following"
+    | "not_following"
     | "item_count"
     | "time_day"
     | "time_night";
@@ -73,6 +90,16 @@ export interface RuleCondition {
   player?: string;
   radius?: number;
   comparison?: "lt" | "lte" | "gt" | "gte" | "eq";
+  /** task_is / task_done tarzı: görev tipi (mine, craft, none…) — | ile VEYA listesi */
+  taskType?: string;
+  /** Genel string hedef (etiket, mod, status…) — taskType yoksa burası */
+  value?: string;
+  /**
+   * String eşleşme:
+   * eq (varsayılan) | neq | contains | startsWith | regex
+   * eq/neq/contains/startsWith: value içinde | ile VEYA (mine|gather)
+   */
+  match?: "eq" | "neq" | "contains" | "startsWith" | "regex";
 }
 
 export interface RuleAction {
@@ -87,7 +114,18 @@ export interface AutomationRule {
   botIds: string[] | "all";
   trigger: RuleTrigger;
   conditions: RuleCondition[];
+  /** IF koşulları doğruysa */
   actions: RuleAction[];
+  /**
+   * ELSE: tetik oldu ama IF koşulları tutmadıysa (tek dal — opsiyonel).
+   * Boşsa hiçbir şey yapılmaz.
+   */
+  elseActions?: RuleAction[];
+  /**
+   * HATA: THEN aksiyonlarından biri hata verirse çalışır (tek blok — opsiyonel).
+   * ctx.error ile hata mesajı gelir.
+   */
+  onErrorActions?: RuleAction[];
   cooldownMs: number;
   maxTriggersPerMinute: number;
 }
@@ -121,12 +159,14 @@ export class RuleEngine {
   create(partial: Partial<AutomationRule>): AutomationRule {
     const rule: AutomationRule = {
       id: newId(),
-      name: partial.name || "Yeni kural",
+      name: partial.name || "New rule",
       enabled: partial.enabled ?? true,
       botIds: partial.botIds ?? "all",
       trigger: partial.trigger ?? { type: "chat", pattern: "gel", match: "contains", from: "authorized" },
       conditions: partial.conditions ?? [],
-      actions: partial.actions ?? [{ type: "panel_notify", message: "kural tetiklendi", level: "info" }],
+      actions: partial.actions ?? [{ type: "panel_notify", message: "Rule triggered", level: "info" }],
+      elseActions: partial.elseActions ?? [],
+      onErrorActions: partial.onErrorActions ?? [],
       cooldownMs: partial.cooldownMs ?? 3000,
       maxTriggersPerMinute: partial.maxTriggersPerMinute ?? 10
     };
@@ -179,13 +219,7 @@ export class RuleEngine {
       try {
         const hit = this.matchChatDetailed(rule, botId, username, text);
         if (!hit) continue;
-        if (!this.conditionsOk(rule, botId)) continue;
-        if (!this.rateOk(rule)) continue;
-        void this.execute(rule, botId, {
-          player: username ?? "",
-          text,
-          ...hit
-        });
+        this.tryFire(rule, botId, { player: username ?? "", text, ...hit });
       } catch (e) {
         log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
         rule.enabled = false;
@@ -195,8 +229,19 @@ export class RuleEngine {
   }
 
   onVitals(botId: string, health: number, food: number) {
-    this.fireMatching(botId, "health_below", {}, (rule) => rule.trigger.type === "health_below" && health <= (rule.trigger.threshold ?? 6));
-    this.fireMatching(botId, "food_below", {}, (rule) => rule.trigger.type === "food_below" && food <= (rule.trigger.threshold ?? 6));
+    const ctx = { health: String(health), food: String(food) };
+    this.fireMatching(
+      botId,
+      "health_below",
+      ctx,
+      (rule) => rule.trigger.type === "health_below" && health <= (rule.trigger.threshold ?? 6)
+    );
+    this.fireMatching(
+      botId,
+      "food_below",
+      ctx,
+      (rule) => rule.trigger.type === "food_below" && food <= (rule.trigger.threshold ?? 6)
+    );
   }
 
   onBotEvent(botId: string, kind: "spawned" | "died") {
@@ -260,15 +305,26 @@ export class RuleEngine {
 
   onTaskEvent(botId: string, kind: "done" | "failed", taskType: string, label: string) {
     const t = kind === "done" ? "task_done" : "task_failed";
-    this.fireMatching(botId, t, { taskType, label }, (rule) => {
-      if (rule.trigger.type !== t) return false;
-      const want = (rule.trigger.taskType ?? "").trim();
-      if (!want) return true;
-      // "collect-wood|collect-block|mine" veya tek tip; includes eşleşmesi
-      const aliases = want.split("|").map((s) => s.trim().toLowerCase()).filter(Boolean);
-      const got = taskType.toLowerCase();
-      return aliases.some((a) => got === a || got.includes(a) || a.includes(got));
-    });
+    this.fireMatching(
+      botId,
+      t,
+      {
+        taskType,
+        label,
+        task: taskType,
+        taskLabel: label,
+        status: kind
+      },
+      (rule) => {
+        if (rule.trigger.type !== t) return false;
+        const want = (rule.trigger.taskType ?? "").trim();
+        if (!want) return true;
+        // "collect-wood|collect-block|mine" veya tek tip; includes eşleşmesi
+        const aliases = want.split("|").map((s) => s.trim().toLowerCase()).filter(Boolean);
+        const got = taskType.toLowerCase();
+        return aliases.some((a) => got === a || got.includes(a) || a.includes(got));
+      }
+    );
   }
 
   onItemCountTick(botId: string) {
@@ -282,9 +338,7 @@ export class RuleEngine {
         if (!item) continue;
         const count = countItem(inst, item);
         if (!compare(count, rule.trigger.comparison ?? "lte", rule.trigger.threshold ?? 0)) continue;
-        if (!this.conditionsOk(rule, botId)) continue;
-        if (!this.rateOk(rule)) continue;
-        void this.execute(rule, botId, { item, count: String(count) });
+        this.tryFire(rule, botId, { item, count: String(count) });
       } catch (e) {
         log.error(`item_count kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
       }
@@ -334,9 +388,7 @@ export class RuleEngine {
           return n === want || n.includes(want) || want.includes(n);
         });
         if (!hit) continue;
-        if (!this.conditionsOk(rule, botId)) continue;
-        if (!this.rateOk(rule)) continue;
-        void this.execute(rule, botId, {
+        this.tryFire(rule, botId, {
           item: hit.item,
           count: String(hit.count),
           delta: String(hit.delta),
@@ -359,15 +411,103 @@ export class RuleEngine {
       if (!this.appliesToBot(rule, botId)) continue;
       try {
         if (!match(rule)) continue;
-        if (!this.conditionsOk(rule, botId)) continue;
-        if (!this.rateOk(rule)) continue;
-        void this.execute(rule, botId, ctx);
+        this.tryFire(rule, botId, ctx);
       } catch (e) {
         log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
         rule.enabled = false;
         this.persist();
       }
     }
+  }
+
+  /**
+   * Tetik eşleşti → rate limit → IF/ELSE.
+   * IF tutmazsa elseActions (varsa); THEN hata verirse onErrorActions.
+   * Her ateşte canlı bot durumu (görev, takip, can…) context’e eklenir → {task} sohbette de dolar.
+   */
+  private tryFire(rule: AutomationRule, botId: string, ctx: Record<string, string>) {
+    if (!this.rateOk(rule)) return;
+    const full = { ...this.liveBotContext(botId), ...ctx };
+    const ok = this.conditionsOk(rule, botId);
+    if (ok) {
+      void this.execute(rule, botId, { ...full, branch: "then" }, "then");
+    } else if (rule.elseActions && rule.elseActions.length > 0) {
+      void this.execute(rule, botId, { ...full, branch: "else" }, "else");
+    }
+  }
+
+  /**
+   * Her kural çalışmasında kullanılabilir anlık bot durumu.
+   * Sohbet “bot durum” + IF task_busy → THEN “Görev: {task} {label}” gibi senaryolar için.
+   */
+  private liveBotContext(botId: string): Record<string, string> {
+    const inst = this.manager.get(botId);
+    if (!inst) {
+      return {
+        task: "none",
+        taskType: "none",
+        label: "—",
+        taskLabel: "—",
+        taskState: "none",
+        hasTask: "0",
+        busy: "0",
+        idle: "1",
+        queueLength: "0",
+        status: "unknown",
+        health: "0",
+        food: "0",
+        combatMode: "idle",
+        mode: "idle",
+        activeTarget: "",
+        followPlayer: "",
+        followDistance: "0",
+        protectPlayers: "",
+        position: "",
+        dimension: ""
+      };
+    }
+    const cur = inst.tasks.currentSummary;
+    const queue = inst.tasks.queueSummaries ?? [];
+    const combat = inst.combat.getRuntime();
+    const rt = inst.runtime;
+    const pos = rt.position;
+    const busy = Boolean(cur);
+    return {
+      // görev
+      task: cur?.type ?? "none",
+      taskType: cur?.type ?? "none",
+      label: cur?.label ?? "—",
+      taskLabel: cur?.label ?? "—",
+      taskState: cur?.state ?? "idle",
+      hasTask: busy ? "1" : "0",
+      busy: busy ? "1" : "0",
+      idle: busy ? "0" : "1",
+      queueLength: String(queue.length),
+      queueTypes: queue
+        .slice(0, 5)
+        .map((q) => q.type)
+        .join(","),
+      // bot
+      bot: inst.config.username,
+      botId: inst.config.id,
+      status: inst.status,
+      health: String(rt.health ?? 0),
+      food: String(rt.food ?? 0),
+      dimension: rt.dimension ?? "",
+      position:
+        pos != null
+          ? `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
+          : "",
+      // dövüş / companion
+      combatMode: combat.mode ?? "idle",
+      mode: combat.mode ?? "idle",
+      activeTarget: combat.activeTarget ?? "",
+      followPlayer: combat.companion?.followPlayer ?? "",
+      followDistance: String(combat.companion?.followDistance ?? 3),
+      protectPlayers: (combat.companion?.protectPlayers ?? []).join(","),
+      attacking: combat.mode === "attacking" ? "1" : "0",
+      following: combat.companion?.followPlayer ? "1" : "0"
+    };
   }
 
   private rewireIntervals() {
@@ -380,7 +520,7 @@ export class RuleEngine {
         const bots = rule.botIds === "all" ? [...this.manager.bots.keys()] : rule.botIds;
         for (const botId of bots) {
           try {
-            if (this.conditionsOk(rule, botId) && this.rateOk(rule)) void this.execute(rule, botId, {});
+            this.tryFire(rule, botId, {});
           } catch (e) {
             log.error(`Interval kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
           }
@@ -389,11 +529,102 @@ export class RuleEngine {
       this.intervals.set(rule.id, timer);
     }
 
-    // item_count polling for all bots every 20s
+    // item_count / item_gained polling
     const itemTimer = setInterval(() => {
       for (const id of this.manager.bots.keys()) this.onItemCountTick(id);
     }, 20_000);
     this.intervals.set("__item_count_poll__", itemTimer);
+
+    // oyuncu uzak / takip menzil dışı — sık poll
+    const distTimer = setInterval(() => {
+      for (const id of this.manager.bots.keys()) this.onDistanceTick(id);
+    }, 2_500);
+    this.intervals.set("__distance_poll__", distTimer);
+  }
+
+  /**
+   * player_far + follow_out_of_range tetikleri.
+   * player boş veya @follow → companion takip hedefi.
+   */
+  onDistanceTick(botId: string) {
+    const inst = this.manager.get(botId);
+    if (!inst || inst.status !== "online" || !inst.bot?.entity) return;
+
+    for (const rule of this.rules) {
+      if (!rule.enabled) continue;
+      if (!this.appliesToBot(rule, botId)) continue;
+      const t = rule.trigger.type;
+      if (t !== "player_far" && t !== "follow_out_of_range") continue;
+
+      try {
+        const companion = inst.combat.getRuntime().companion;
+        let playerName = String(rule.trigger.player ?? "").trim();
+        if (!playerName || playerName === "@follow" || playerName === "{follow}") {
+          playerName = companion?.followPlayer ?? "";
+        }
+        if (playerName === "@protect" || playerName === "{protect}") {
+          playerName =
+            companion?.protectPlayer ?? companion?.protectPlayers?.[0] ?? companion?.followPlayer ?? "";
+        }
+
+        if (t === "follow_out_of_range") {
+          if (!companion?.followPlayer) continue;
+          playerName = companion.followPlayer;
+        }
+        if (!playerName) continue;
+
+        const dist = this.getPlayerDistance(botId, playerName);
+        const followDist = Math.max(1, Number(companion?.followDistance ?? 3));
+        // radius yoksa: takip mesafesi + 4 blok tolerans
+        const limit =
+          rule.trigger.radius != null
+            ? Number(rule.trigger.radius)
+            : t === "follow_out_of_range"
+              ? followDist + 4
+              : 24;
+
+        // görünmüyor veya limitten uzak = far
+        const isFar = dist == null || dist > limit;
+        if (!isFar) continue;
+
+        this.tryFire(rule, botId, {
+          player: playerName,
+          distance: dist != null ? String(Math.round(dist * 10) / 10) : "∞",
+          radius: String(limit),
+          followDistance: String(followDist)
+        });
+      } catch (e) {
+        log.error(`Mesafe kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
+  /** Oyuncu mesafesi; entity yoksa null (chunk dışı / çok uzak) */
+  private getPlayerDistance(botId: string, playerName: string): number | null {
+    const inst = this.manager.get(botId);
+    const bot = inst?.bot;
+    if (!bot?.entity || !playerName) return null;
+    const want = playerName.toLowerCase();
+    let ent = bot.players[playerName]?.entity;
+    if (!ent) {
+      for (const [n, p] of Object.entries(bot.players)) {
+        if (n.toLowerCase() === want && p.entity) {
+          ent = p.entity;
+          break;
+        }
+      }
+    }
+    if (!ent?.position) return null;
+    try {
+      return bot.entity.position.distanceTo(ent.position);
+    } catch {
+      return null;
+    }
+  }
+
+  private isFollowing(botId: string): boolean {
+    const c = this.manager.get(botId)?.combat.getRuntime().companion;
+    return Boolean(c?.followPlayer);
   }
 
   private appliesToBot(rule: AutomationRule, botId: string) {
@@ -490,6 +721,43 @@ export class RuleEngine {
       if (c.type === "offline" && inst.status === "online") return false;
       if (c.type === "task_idle" && inst.tasks.currentSummary) return false;
       if (c.type === "task_busy" && !inst.tasks.currentSummary) return false;
+      // Görev tipi: task_is — value/taskType = "mine" veya "mine|gather|craft", match=eq|neq|contains…
+      if (c.type === "task_is") {
+        const cur = inst.tasks.currentSummary;
+        const actual = cur?.type ?? "none";
+        const expected = String(c.taskType ?? c.value ?? c.item ?? "").trim();
+        if (!expected) return false;
+        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      }
+      // Görev etiketi: "Oak topla" contains "oak" vb.
+      if (c.type === "task_label_is") {
+        const cur = inst.tasks.currentSummary;
+        const actual = cur?.label ?? "";
+        const expected = String(c.value ?? c.taskType ?? c.item ?? "").trim();
+        if (!expected) return false;
+        if (!stringMatches(actual, expected, c.match ?? "contains")) return false;
+      }
+      // Dövüş modu: idle | attacking | following | defending…
+      if (c.type === "combat_mode_is") {
+        const actual = String(inst.combat.getRuntime().mode ?? "idle");
+        const expected = String(c.value ?? c.taskType ?? "").trim();
+        if (!expected) return false;
+        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      }
+      // Takip edilen oyuncu
+      if (c.type === "follow_player_is") {
+        const actual = String(inst.combat.getRuntime().companion?.followPlayer ?? "");
+        const expected = String(c.player ?? c.value ?? "").trim();
+        if (!expected) return false;
+        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      }
+      // Bot status: online | stopped | connecting…
+      if (c.type === "status_is") {
+        const actual = String(inst.status ?? "");
+        const expected = String(c.value ?? c.taskType ?? "").trim();
+        if (!expected) return false;
+        if (!stringMatches(actual, expected, c.match ?? "eq")) return false;
+      }
       if (c.type === "health_below" && inst.runtime.health > (c.threshold ?? 10)) return false;
       if (c.type === "health_above" && inst.runtime.health < (c.threshold ?? 10)) return false;
       if (c.type === "food_below" && inst.runtime.food > (c.threshold ?? 10)) return false;
@@ -504,14 +772,28 @@ export class RuleEngine {
       if (c.type === "item_count" && c.item) {
         if (!compare(countItem(inst, c.item), c.comparison ?? "gte", c.threshold ?? 1)) return false;
       }
-      if (c.type === "player_near" && c.player) {
-        const bot = inst.bot;
-        if (!bot?.entity) return false;
-        const ent = bot.players[c.player]?.entity;
-        if (!ent) return false;
-        const d = bot.entity.position.distanceTo(ent.position);
-        if (d > (c.radius ?? 16)) return false;
+      if (c.type === "player_near") {
+        const name =
+          c.player?.trim() ||
+          inst.combat.getRuntime().companion?.followPlayer ||
+          "";
+        if (!name) return false;
+        const d = this.getPlayerDistance(botId, name);
+        if (d == null || d > (c.radius ?? 16)) return false;
       }
+      if (c.type === "player_far") {
+        const name =
+          c.player?.trim() ||
+          inst.combat.getRuntime().companion?.followPlayer ||
+          "";
+        if (!name) return false;
+        const d = this.getPlayerDistance(botId, name);
+        const limit = c.radius ?? 16;
+        // görünmüyor veya limitten uzak
+        if (!(d == null || d > limit)) return false;
+      }
+      if (c.type === "following" && !this.isFollowing(botId)) return false;
+      if (c.type === "not_following" && this.isFollowing(botId)) return false;
       if (c.type === "time_day" || c.type === "time_night") {
         const bot = inst.bot;
         if (!bot) return false;
@@ -524,15 +806,47 @@ export class RuleEngine {
     return true;
   }
 
-  private async execute(rule: AutomationRule, botId: string, ctx: Record<string, string>) {
+  private async execute(
+    rule: AutomationRule,
+    botId: string,
+    ctx: Record<string, string>,
+    branch: "then" | "else" = "then"
+  ) {
     const inst = this.manager.get(botId);
     if (!inst) return;
-    log.info(`Kural tetik: ${rule.name}`, `bot=${inst.config.username}`);
-    for (const action of rule.actions) {
+    const list =
+      branch === "else"
+        ? rule.elseActions ?? []
+        : rule.actions ?? [];
+    if (!list.length) return;
+
+    log.info(
+      `Kural tetik: ${rule.name}`,
+      `bot=${inst.config.username} · ${branch === "else" ? "ELSE" : "THEN"}`
+    );
+
+    for (const action of list) {
       try {
         await this.runAction(inst.config.id, action, ctx);
       } catch (e) {
-        log.error(`Aksiyon hata (${action.type})`, e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        log.error(`Aksiyon hata (${action.type})`, msg);
+        // THEN sırasında hata → tek onError bloğu (bir kez)
+        if (branch === "then" && rule.onErrorActions && rule.onErrorActions.length > 0) {
+          const errCtx = { ...ctx, error: msg, failedAction: String(action.type) };
+          log.warn(`onError bloğu: ${rule.name}`, msg);
+          for (const errAct of rule.onErrorActions) {
+            try {
+              await this.runAction(inst.config.id, errAct, errCtx);
+            } catch (e2) {
+              log.error(
+                `onError aksiyon hata (${errAct.type})`,
+                e2 instanceof Error ? e2.message : String(e2)
+              );
+            }
+          }
+        }
+        break; // zinciri durdur
       }
     }
   }
@@ -558,6 +872,35 @@ export class RuleEngine {
     }
     if (type === "send_chat") {
       inst.sendChat(interpolate(String(action.text ?? ""), ctx));
+      return;
+    }
+    // Tek aksiyonda bot durumu özeti (sohbet veya panel)
+    if (type === "report_status" || type === "bot_status" || type === "durum-raporu") {
+      const live = this.liveBotContext(botId);
+      const merged = { ...live, ...ctx };
+      const line =
+        action.message != null && String(action.message).trim()
+          ? interpolate(String(action.message), merged)
+          : [
+              `bot=${merged.bot}`,
+              `status=${merged.status}`,
+              `task=${merged.task}`,
+              `label=${merged.label}`,
+              `queue=${merged.queueLength}`,
+              `hp=${merged.health}`,
+              `food=${merged.food}`,
+              `mode=${merged.combatMode}`,
+              merged.followPlayer ? `follow=${merged.followPlayer}` : null,
+              merged.activeTarget ? `target=${merged.activeTarget}` : null,
+              merged.position ? `pos=${merged.position}` : null
+            ]
+              .filter(Boolean)
+              .join(" · ");
+      const dest = String(action.to ?? action.channel ?? "panel"); // panel | chat | both
+      if (dest === "chat" || dest === "both") inst.sendChat(line);
+      if (dest !== "chat") {
+        log.info(`Durum: ${line}`);
+      }
       return;
     }
     if (type === "wait") {
@@ -668,6 +1011,59 @@ export class RuleEngine {
       inst.enqueueAction({ type: "stop" });
       return;
     }
+    // herhangi bir işi iptal et (aktif görev + kuyruk + pathfinder; companion korunur)
+    if (
+      type === "cancel_work" ||
+      type === "cancel_any" ||
+      type === "işi-iptal" ||
+      type === "cancel_current_work"
+    ) {
+      inst.tasks.cancelAll("otomasyon: işi iptal");
+      try {
+        const bot = inst.bot;
+        if (bot?.pathfinder) {
+          bot.pathfinder.setGoal(null);
+          (bot.pathfinder as { stop?(): void }).stop?.();
+        }
+        bot?.clearControlStates();
+      } catch {
+        /* */
+      }
+      return;
+    }
+    // sadece aktif görev
+    if (
+      type === "leave_task" ||
+      type === "cancel_task" ||
+      type === "görev-bırak" ||
+      type === "abort_current"
+    ) {
+      const cur = inst.tasks.currentSummary;
+      if (cur) inst.tasks.cancel(cur.id, "otomasyon: görev bırak");
+      return;
+    }
+    if (type === "unfollow" || type === "cancel_follow" || type === "takip-iptal") {
+      const follow = inst.combat.getRuntime().companion?.followPlayer;
+      const p = interpolate(String(action.player ?? follow ?? ctx.player ?? ""), ctx);
+      if (p) {
+        inst.enqueueAction({ type: "social-follow", player: p, enabled: false });
+      } else {
+        inst.combat.clearCompanion("otomasyon unfollow");
+      }
+      // pathfinder da dursun
+      inst.enqueueAction({ type: "stop" });
+      return;
+    }
+    if (
+      type === "abort_all" ||
+      type === "cancel_all" ||
+      type === "her-şeyi-bırak" ||
+      type === "leave_all"
+    ) {
+      // takip + dövüş companion + tüm görevler + pathfinder
+      inst.resetAllWork("otomasyon: her şeyi bırak");
+      return;
+    }
     if (type === "reset-work" || type === "reset_work" || type === "soft-reset") {
       inst.resetAllWork("otomasyon reset-work");
       return;
@@ -742,6 +1138,50 @@ function compare(value: number, op: string, thr: number): boolean {
   }
 }
 
+/**
+ * String koşul eşleşmesi.
+ * eq/contains/startsWith: value içinde | ile VEYA listesi (mine|gather).
+ * neq: listedeki hiçbirine eşit değilse true.
+ * regex: value tam regex deseni (i flag).
+ */
+function stringMatches(
+  actual: string,
+  expected: string,
+  mode: "eq" | "neq" | "contains" | "startsWith" | "regex" | string = "eq"
+): boolean {
+  const a = String(actual ?? "");
+  const e = String(expected ?? "").trim();
+  if (!e) return false;
+  if (mode === "regex") {
+    try {
+      return new RegExp(e, "i").test(a);
+    } catch {
+      return false;
+    }
+  }
+  const al = a.toLowerCase();
+  const parts = e
+    .split("|")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length) return false;
+  switch (mode) {
+    case "neq":
+    case "not_eq":
+    case "ne":
+      return !parts.some((p) => al === p);
+    case "contains":
+      return parts.some((p) => al.includes(p));
+    case "startsWith":
+    case "starts_with":
+      return parts.some((p) => al.startsWith(p));
+    case "eq":
+    case "exact":
+    default:
+      return parts.some((p) => al === p);
+  }
+}
+
 function interpolate(s: string, ctx: Record<string, string>) {
   return s.replace(/\{(\w+)\}/g, (_, k) => ctx[k] ?? "");
 }
@@ -764,6 +1204,18 @@ export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: str
   },
   { type: "attacked", label: "Bot saldırıya uğradı", fields: ["source", "player"], hint: "mob | player | all" },
   { type: "player_nearby", label: "Yakında oyuncu", fields: ["radius", "player", "from"] },
+  {
+    type: "player_far",
+    label: "Oyuncu uzakta (menzil dışı)",
+    fields: ["player", "radius"],
+    hint: "Mesafe > radius veya oyuncu görünmüyor. player boş = takip edilen (@follow)"
+  },
+  {
+    type: "follow_out_of_range",
+    label: "Takip: hedef menzil dışı",
+    fields: ["radius"],
+    hint: "Takip varken hedef followDistance+4 (veya radius) dışına çıkınca. THEN: unfollow / abort_all"
+  },
   { type: "player_joined", label: "Oyuncu girdi (tab)", fields: [] },
   { type: "player_left", label: "Oyuncu çıktı (tab)", fields: [] },
   { type: "health_below", label: "Can eşiğin altında", fields: ["threshold"] },
@@ -793,11 +1245,48 @@ export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: str
   { type: "task_failed", label: "Görev başarısız", fields: ["taskType"] }
 ];
 
-export const CONDITION_META: Array<{ type: RuleCondition["type"]; label: string; fields: string[] }> = [
+export const CONDITION_META: Array<{
+  type: RuleCondition["type"];
+  label: string;
+  fields: string[];
+  hint?: string;
+}> = [
   { type: "online", label: "Bot online", fields: [] },
   { type: "offline", label: "Bot offline", fields: [] },
   { type: "task_idle", label: "Görev yok (boşta)", fields: [] },
   { type: "task_busy", label: "Görev çalışıyor", fields: [] },
+  {
+    type: "task_is",
+    label: "Görev tipi eşittir / eşleşir",
+    fields: ["taskType", "match"],
+    hint: "mine | gather | craft | none… | ile VEYA. match: eq | neq | contains | startsWith | regex"
+  },
+  {
+    type: "task_label_is",
+    label: "Görev etiketi eşleşir",
+    fields: ["value", "match"],
+    hint: "UI etiketinde ara (contains varsayılan). Örn. value=oak match=contains"
+  },
+  {
+    type: "combat_mode_is",
+    label: "Dövüş modu eşittir",
+    fields: ["value", "match"],
+    hint: "idle | attacking | following | defending…"
+  },
+  {
+    type: "follow_player_is",
+    label: "Takip edilen oyuncu",
+    fields: ["player", "match"],
+    hint: "player=Steve veya Steve|Alex"
+  },
+  {
+    type: "status_is",
+    label: "Bot durumu eşittir",
+    fields: ["value", "match"],
+    hint: "online | stopped | connecting…"
+  },
+  { type: "following", label: "Takip ediyor", fields: [] },
+  { type: "not_following", label: "Takip etmiyor", fields: [] },
   { type: "health_below", label: "Can ≤ eşik", fields: ["threshold"] },
   { type: "health_above", label: "Can ≥ eşik", fields: ["threshold"] },
   { type: "food_below", label: "Açlık ≤ eşik", fields: ["threshold"] },
@@ -806,6 +1295,7 @@ export const CONDITION_META: Array<{ type: RuleCondition["type"]; label: string;
   { type: "not_has_item", label: "Eşya yok", fields: ["item"] },
   { type: "item_count", label: "Eşya adedi", fields: ["item", "comparison", "threshold"] },
   { type: "player_near", label: "Oyuncu yakında", fields: ["player", "radius"] },
+  { type: "player_far", label: "Oyuncu uzakta", fields: ["player", "radius"] },
   { type: "in_dimension", label: "Boyut", fields: ["dimension"] },
   { type: "time_day", label: "Gündüz", fields: [] },
   { type: "time_night", label: "Gece", fields: [] }
@@ -814,12 +1304,32 @@ export const CONDITION_META: Array<{ type: RuleCondition["type"]; label: string;
 export const ACTION_META: Array<{ type: string; label: string; fields: string[]; category?: string }> = [
   { type: "send_chat", label: "Sohbete yaz", fields: ["text"], category: "Sohbet" },
   { type: "panel_notify", label: "Panel bildirimi", fields: ["message", "level"], category: "Sohbet" },
+  {
+    type: "report_status",
+    label: "Bot durumu raporu (panel/sohbet)",
+    fields: ["to", "message"],
+    category: "Sohbet"
+  },
   { type: "goto", label: "Git (oyuncu/waypoint/xyz)", fields: ["player", "waypoint", "x", "y", "z"], category: "Hareket" },
   { type: "follow", label: "Takip et", fields: ["player", "distance"], category: "Hareket" },
   { type: "social-follow", label: "Takip (toggle companion)", fields: ["player", "distance"], category: "Hareket" },
-  { type: "stop", label: "Hareket/dövüş stop", fields: [], category: "Hareket" },
-  { type: "reset-work", label: "Tüm işleri sıfırla", fields: [], category: "Hareket" },
+  { type: "unfollow", label: "Takibi bırak", fields: ["player"], category: "Hareket" },
+  {
+    type: "cancel_work",
+    label: "Herhangi bir işi iptal et (görev+yürüme)",
+    fields: [],
+    category: "Hareket"
+  },
+  { type: "leave_task", label: "Sadece aktif görevi bırak", fields: [], category: "Hareket" },
   { type: "stop_tasks", label: "Görev kuyruğunu temizle", fields: [], category: "Hareket" },
+  { type: "stop", label: "Hareket/pathfinder durdur", fields: [], category: "Hareket" },
+  {
+    type: "abort_all",
+    label: "Her şeyi bırak (görev+takip+path)",
+    fields: [],
+    category: "Hareket"
+  },
+  { type: "reset-work", label: "Tüm işleri sıfırla (soft-reset)", fields: [], category: "Hareket" },
   { type: "wait", label: "Bekle (sn)", fields: ["seconds"], category: "Hareket" },
   { type: "attack", label: "Saldır", fields: ["player"], category: "Dövüş" },
   { type: "social-attack", label: "Saldır (toggle)", fields: ["player"], category: "Dövüş" },
@@ -852,3 +1362,116 @@ export const ACTION_META: Array<{ type: string; label: string; fields: string[];
   { type: "deposit", label: "Depoya bırak", fields: ["filter"], category: "İş" },
   { type: "withdraw", label: "Depodan al", fields: ["item", "count"], category: "İş" }
 ];
+
+/** Aksiyon metinlerinde {var} — tetikleyiciye göre hangi veriler gelir */
+export type ContextVarDoc = { name: string; desc: string };
+
+export const CONTEXT_VARS_COMMON: ContextVarDoc[] = [
+  // canlı bot durumu — her tetikleyicide
+  { name: "task", desc: "Aktif görev tipi veya none" },
+  { name: "taskType", desc: "task ile aynı" },
+  { name: "label", desc: "Aktif görev etiketi veya —" },
+  { name: "taskLabel", desc: "label ile aynı" },
+  { name: "taskState", desc: "running | idle | none…" },
+  { name: "hasTask", desc: "1 = görev var, 0 = yok" },
+  { name: "busy", desc: "1 = meşgul" },
+  { name: "idle", desc: "1 = boşta" },
+  { name: "queueLength", desc: "Kuyruktaki görev sayısı" },
+  { name: "queueTypes", desc: "Kuyruk tipleri (virgüllü)" },
+  { name: "bot", desc: "Bot kullanıcı adı" },
+  { name: "status", desc: "online | stopped | …" },
+  { name: "health", desc: "Can" },
+  { name: "food", desc: "Açlık" },
+  { name: "dimension", desc: "Boyut" },
+  { name: "position", desc: "x,y,z" },
+  { name: "combatMode", desc: "idle | attacking | following…" },
+  { name: "mode", desc: "combatMode ile aynı" },
+  { name: "activeTarget", desc: "Dövüş hedefi" },
+  { name: "followPlayer", desc: "Takip edilen oyuncu" },
+  { name: "followDistance", desc: "Takip mesafesi" },
+  { name: "following", desc: "1 = takip açık" },
+  { name: "protectPlayers", desc: "Korunanlar" },
+  { name: "branch", desc: "then | else" },
+  { name: "error", desc: "ON ERROR: hata mesajı" },
+  { name: "failedAction", desc: "ON ERROR: hata veren aksiyon tipi" }
+];
+
+export const CONTEXT_VARS_BY_TRIGGER: Record<string, ContextVarDoc[]> = {
+  chat: [
+    { name: "player", desc: "Mesajı yazan oyuncu" },
+    { name: "text", desc: "Ham sohbet metni" },
+    { name: "command", desc: "Komut adı (match=command, örn. gel)" },
+    { name: "arg", desc: "Komuttan sonraki tüm argümanlar (boşluklu)" },
+    { name: "args", desc: "arg ile aynı" },
+    { name: "arg0", desc: "1. argüman — /topla cobble 32 → cobble" },
+    { name: "arg1", desc: "2. argüman — /topla cobble 32 → 32" },
+    { name: "arg2", desc: "3. argüman" }
+  ],
+  attacked: [
+    { name: "attacker", desc: "Saldıran mob/oyuncu etiketi" },
+    { name: "player", desc: "attacker ile aynı (uyumluluk)" }
+  ],
+  player_nearby: [
+    { name: "player", desc: "Yaklaşan oyuncu" },
+    { name: "distance", desc: "Mesafe (blok, tam sayı)" }
+  ],
+  player_far: [
+    { name: "player", desc: "Uzak oyuncu / takip hedefi" },
+    { name: "distance", desc: "Mesafe veya ∞ (görünmüyor)" },
+    { name: "radius", desc: "Kural eşiği" },
+    { name: "followDistance", desc: "Companion takip mesafesi" }
+  ],
+  follow_out_of_range: [
+    { name: "player", desc: "Takip edilen oyuncu" },
+    { name: "distance", desc: "Mesafe veya ∞" },
+    { name: "radius", desc: "Uzak eşiği" },
+    { name: "followDistance", desc: "Ayarlanan takip mesafesi" }
+  ],
+  player_joined: [{ name: "player", desc: "Giren oyuncu" }],
+  player_left: [{ name: "player", desc: "Çıkan oyuncu" }],
+  health_below: [
+    { name: "health", desc: "Anlık can" },
+    { name: "food", desc: "Anlık açlık" }
+  ],
+  food_below: [
+    { name: "health", desc: "Anlık can" },
+    { name: "food", desc: "Anlık açlık" }
+  ],
+  item_count: [
+    { name: "item", desc: "İzlenen eşya adı" },
+    { name: "count", desc: "Envanterdeki adet" }
+  ],
+  item_gained: [
+    { name: "item", desc: "Artan eşya" },
+    { name: "gained", desc: "item ile aynı" },
+    { name: "count", desc: "Yeni toplam adet" },
+    { name: "delta", desc: "Ne kadar arttı (+N)" }
+  ],
+  task_done: [
+    { name: "task", desc: "Görev tipi (taskType ile aynı)" },
+    { name: "taskType", desc: "Görev tipi: collect-wood, mine, craft…" },
+    { name: "label", desc: "Görev etiketi (UI label)" },
+    { name: "taskLabel", desc: "label ile aynı" },
+    { name: "status", desc: "done" }
+  ],
+  task_failed: [
+    { name: "task", desc: "Görev tipi" },
+    { name: "taskType", desc: "Görev tipi" },
+    { name: "label", desc: "Görev etiketi" },
+    { name: "taskLabel", desc: "label ile aynı" },
+    { name: "status", desc: "failed" }
+  ],
+  inventory_full: [],
+  interval: [],
+  bot_spawned: [],
+  bot_died: []
+};
+
+export const CONTEXT_VARS_ALL: string[] = [
+  ...new Set(
+    [
+      ...CONTEXT_VARS_COMMON.map((v) => v.name),
+      ...Object.values(CONTEXT_VARS_BY_TRIGGER).flatMap((list) => list.map((v) => v.name))
+    ].map((n) => `{${n}}`)
+  )
+].sort();
