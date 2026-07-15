@@ -191,7 +191,7 @@ export interface InventorySnapshot {
   ts: number;
 }
 
-/** Faz 14 — inşaat runtime (BuildService) */
+/** Faz 14–16 — inşaat runtime (BuildService) */
 export interface BuildRuntimeSnapshot {
   phase: "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
   schematicId: string | null;
@@ -200,12 +200,34 @@ export interface BuildRuntimeSnapshot {
   placed: number;
   total: number;
   skipped: number;
+  failed?: number;
   scaffoldsPlaced: number;
   scaffoldsCleared: number;
   materials: Array<{ name: string; need: number; have: number; missing: number }>;
   label: string;
   error?: string;
   startedAt: number | null;
+  lastBlock?: {
+    name: string;
+    x: number;
+    y: number;
+    z: number;
+    status: "placed" | "skipped" | "failed";
+    t: number;
+  } | null;
+  recentBlocks?: Array<{
+    name: string;
+    x: number;
+    y: number;
+    z: number;
+    status: "placed" | "skipped" | "failed";
+    t: number;
+  }>;
+  transform?: {
+    rotateY: 0 | 90 | 180 | 270;
+    mirrorX: boolean;
+    mirrorZ: boolean;
+  };
 }
 
 export interface BotSnapshot {

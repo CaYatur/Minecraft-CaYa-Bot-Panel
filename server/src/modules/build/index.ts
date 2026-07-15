@@ -6,14 +6,15 @@ import { ScaffoldTracker } from "./scaffold";
 import {
   emptyBuildRuntime,
   type BuildOrigin,
+  type BuildPlacedBlock,
   type BuildRuntime,
   type MaterialNeed,
   type SchematicBlock
 } from "./types";
+import { normalizeRotateY, type BuildTransform, type RotateY } from "./transform";
 
 /**
- * Faz 14 — Şema inşaat servisi.
- * Yerleştirme + scaffold defteri + malzeme raporu + progress emit.
+ * Faz 14–16 — Şema inşaat: schem/litematic/caya + transform + progress + scaffold.
  */
 export class BuildService {
   private runtime: BuildRuntime = emptyBuildRuntime();
@@ -26,7 +27,10 @@ export class BuildService {
     return {
       ...this.runtime,
       materials: this.runtime.materials.map((m) => ({ ...m })),
-      origin: this.runtime.origin ? { ...this.runtime.origin } : null
+      origin: this.runtime.origin ? { ...this.runtime.origin } : null,
+      lastBlock: this.runtime.lastBlock ? { ...this.runtime.lastBlock } : null,
+      recentBlocks: this.runtime.recentBlocks.map((b) => ({ ...b })),
+      transform: { ...this.runtime.transform }
     };
   }
 
@@ -45,7 +49,11 @@ export class BuildService {
     this.emit();
   }
 
-  /** Envantere göre malzeme tablosu */
+  private pushBlockEvent(ev: BuildPlacedBlock) {
+    this.runtime.lastBlock = ev;
+    this.runtime.recentBlocks = [...this.runtime.recentBlocks.slice(-15), ev];
+  }
+
   materialsFor(blocks: SchematicBlock[]): MaterialNeed[] {
     const needMap = materialCounts(blocks);
     const bot = this.instance.bot;
@@ -63,26 +71,43 @@ export class BuildService {
       .sort((a, b) => b.missing - a.missing || a.name.localeCompare(b.name));
   }
 
-  async previewMaterials(schematicId: string, versionHint?: string) {
-    const parsed = await loadParsedSchematic(schematicId, versionHint);
+  async previewMaterials(schematicId: string, versionHint?: string, transform?: BuildTransform) {
+    const parsed = await loadParsedSchematic(schematicId, versionHint, transform);
     return {
       meta: parsed.meta,
       materials: this.materialsFor(parsed.blocks),
       blockCount: parsed.blocks.length,
-      size: { w: parsed.width, h: parsed.height, l: parsed.length }
+      size: { w: parsed.width, h: parsed.height, l: parsed.length },
+      transform: {
+        rotateY: normalizeRotateY(transform?.rotateY),
+        mirrorX: Boolean(transform?.mirrorX),
+        mirrorZ: Boolean(transform?.mirrorZ)
+      }
     };
   }
 
   stopBuild(reason = "inşaat durduruldu") {
-    this.runtime.phase = this.runtime.phase === "idle" ? "idle" : "cancelled";
-    this.runtime.label = reason;
-    this.runtime.error = reason;
-    // cancel build tasks
     const cur = this.instance.tasks.currentSummary;
     if (cur?.type === "build") this.instance.tasks.cancel(cur.id, reason);
     for (const t of this.instance.tasks.queueSummaries) {
       if (t.type === "build") this.instance.tasks.cancel(t.id, reason);
     }
+    // scaffold temizliği best-effort (async, iz bırakma)
+    if (this.scaffolds.count && this.instance.bot && this.instance.status === "online") {
+      const bot = this.instance.bot;
+      const tracker = this.scaffolds;
+      this.scaffolds = new ScaffoldTracker();
+      void tracker.cleanup(bot, { cancelled: false }).then((n) => {
+        this.runtime.scaffoldsCleared += n;
+        this.log().info("Durdurma sonrası scaffold temizliği", `${n} blok`);
+        this.emit();
+      });
+    } else {
+      this.scaffolds.clear();
+    }
+    this.runtime.phase = this.runtime.phase === "idle" ? "idle" : "cancelled";
+    this.runtime.label = reason;
+    this.runtime.error = reason;
     this.emit();
     this.log().info("İnşaat durduruldu", reason);
   }
@@ -90,21 +115,27 @@ export class BuildService {
   enqueueBuild(opts: {
     schematicId: string;
     origin: BuildOrigin;
-    /** malzeme eksikse yine de dene */
     allowPartial?: boolean;
     versionHint?: string;
+    rotateY?: RotateY | number;
+    mirrorX?: boolean;
+    mirrorZ?: boolean;
   }) {
     const sid = opts.schematicId.trim();
     if (!sid) throw new Error("Şema id gerekli");
 
-    // önceki build iptal
     this.stopBuild("yeni inşaat başlıyor");
-    this.scaffolds.clear();
+    this.scaffolds = new ScaffoldTracker();
     this.runtime = emptyBuildRuntime();
     this.runtime.phase = "preparing";
     this.runtime.schematicId = sid;
     this.runtime.startedAt = Date.now();
     this.runtime.label = "hazırlanıyor…";
+    this.runtime.transform = {
+      rotateY: normalizeRotateY(opts.rotateY),
+      mirrorX: Boolean(opts.mirrorX),
+      mirrorZ: Boolean(opts.mirrorZ)
+    };
     this.emit();
 
     const summary = this.instance.tasks.enqueue(
@@ -139,9 +170,7 @@ export class BuildService {
       if (!ent) {
         const inTab = Boolean(bot.players[name]);
         throw new Error(
-          inTab
-            ? `${name} menzil dışında — konum bilinmiyor (yakınlaşın)`
-            : `${name} sunucuda görünmüyor`
+          inTab ? `${name} menzil dışında — konum bilinmiyor (yakınlaşın)` : `${name} sunucuda görünmüyor`
         );
       }
       return {
@@ -150,7 +179,6 @@ export class BuildService {
         z: Math.floor(ent.position.z)
       };
     }
-    // coords
     if (origin.x == null || origin.y == null || origin.z == null) {
       throw new Error("Koordinat origin için x,y,z gerekli");
     }
@@ -162,7 +190,6 @@ export class BuildService {
   }
 
   private sortBlocks(blocks: SchematicBlock[]): SchematicBlock[] {
-    // alt katman önce, sonra z, sonra x — destekli inşaat
     return [...blocks].sort((a, b) => a.dy - b.dy || a.dz - b.dz || a.dx - b.dx);
   }
 
@@ -172,20 +199,28 @@ export class BuildService {
       origin: BuildOrigin;
       allowPartial?: boolean;
       versionHint?: string;
+      rotateY?: RotateY | number;
+      mirrorX?: boolean;
+      mirrorZ?: boolean;
     },
     token: TaskToken,
     report: ProgressFn
   ) {
-    const version =
-      opts.versionHint ||
-      (() => {
-        // sunucu sürümü bot üzerinden bilinmeyebilir — default
-        return "1.20.4";
-      })();
+    const version = opts.versionHint || "1.20.4";
+    const transform: BuildTransform = {
+      rotateY: normalizeRotateY(opts.rotateY),
+      mirrorX: Boolean(opts.mirrorX),
+      mirrorZ: Boolean(opts.mirrorZ)
+    };
+    this.runtime.transform = {
+      rotateY: transform.rotateY ?? 0,
+      mirrorX: Boolean(transform.mirrorX),
+      mirrorZ: Boolean(transform.mirrorZ)
+    };
 
     try {
       this.setPhase("preparing", "şema yükleniyor…");
-      const parsed = await loadParsedSchematic(opts.schematicId, version);
+      const parsed = await loadParsedSchematic(opts.schematicId, version, transform);
       this.runtime.schematicName = parsed.meta.name;
       const blocks = this.sortBlocks(parsed.blocks);
       this.runtime.total = blocks.length;
@@ -202,19 +237,17 @@ export class BuildService {
         this.log().warn("İnşaat başlamadı — eksik malzeme", msg);
         throw new Error(msg + " (allowPartial ile zorla deneyebilirsiniz)");
       }
-      if (missing.length) {
-        this.log().warn(
-          "Eksik malzemeyle kısmi inşaat",
-          missing.map((m) => `${m.name}×${m.missing}`).join(", ")
-        );
-      }
 
       const origin = this.resolveOrigin(opts.origin);
       this.runtime.origin = origin;
-      this.setPhase("building", `inşa: ${parsed.meta.name}`);
+      const rotLabel =
+        transform.rotateY || transform.mirrorX || transform.mirrorZ
+          ? ` · R${transform.rotateY ?? 0}${transform.mirrorX ? " mX" : ""}${transform.mirrorZ ? " mZ" : ""}`
+          : "";
+      this.setPhase("building", `inşa: ${parsed.meta.name}${rotLabel}`);
       this.log().info(
         `İnşaat başladı: ${parsed.meta.name}`,
-        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok`
+        `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok${rotLabel}`
       );
 
       let placed = 0;
@@ -228,29 +261,36 @@ export class BuildService {
         const wy = origin.y + b.dy;
         const wz = origin.z + b.dz;
 
-        report({
-          done: i,
-          total: blocks.length,
-          label: `${b.name} @ ${wx},${wy},${wz}`
-        });
+        report({ done: i, total: blocks.length, label: `${b.name} @ ${wx},${wy},${wz}` });
         this.runtime.placed = placed;
         this.runtime.skipped = skipped;
+        this.runtime.failed = failed;
         this.runtime.label = `yerleştir: ${b.name} (${i + 1}/${blocks.length})`;
         this.runtime.scaffoldsPlaced = this.scaffolds.count;
-        // malzeme anlık
         this.runtime.materials = this.materialsFor(blocks.slice(i));
         this.emit();
 
         const res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds);
+        const ev: BuildPlacedBlock = {
+          name: b.name,
+          x: wx,
+          y: wy,
+          z: wz,
+          status: res,
+          t: Date.now()
+        };
+        this.pushBlockEvent(ev);
+
         if (res === "placed") placed++;
         else if (res === "skipped") skipped++;
         else failed++;
 
         this.runtime.placed = placed;
         this.runtime.skipped = skipped;
+        this.runtime.failed = failed;
+        this.emit();
       }
 
-      // scaffold temizliği
       this.setPhase("cleanup", "geçici bloklar temizleniyor…");
       this.log().info("Scaffold temizliği", `${this.scaffolds.count} kayıt`);
       const cleared = await this.scaffolds.cleanup(this.instance.bot!, token, (c, t) => {
@@ -267,15 +307,12 @@ export class BuildService {
       }
 
       const label = `bitti: ${placed} kondu, ${skipped} atlandı, ${failed} başarısız, scaffold ${cleared}`;
-      this.runtime.placed = placed;
-      this.runtime.skipped = skipped;
       this.runtime.materials = this.materialsFor([]);
       this.setPhase("done", label);
       this.log().success(`İnşaat tamam: ${parsed.meta.name}`, label);
       report({ done: blocks.length, total: blocks.length, label });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // best-effort cleanup
       try {
         if (this.scaffolds.count && this.instance.bot) {
           this.setPhase("cleanup", "iptal — scaffold temizliği…");
@@ -300,6 +337,15 @@ export class BuildService {
   }
 }
 
-export { listSchematics, getSchematicMeta, deleteSchematic, addSchematicFromBase64, addCayaJsonSchematic, loadParsedSchematic, materialCounts } from "./library";
-export type { BuildOrigin, BuildRuntime, MaterialNeed, SchematicMeta, SchematicBlock } from "./types";
+export {
+  listSchematics,
+  getSchematicMeta,
+  deleteSchematic,
+  addSchematicFromBase64,
+  addCayaJsonSchematic,
+  loadParsedSchematic,
+  materialCounts
+} from "./library";
+export type { BuildOrigin, BuildRuntime, MaterialNeed, SchematicMeta, SchematicBlock, BuildPlacedBlock } from "./types";
 export { emptyBuildRuntime } from "./types";
+export type { BuildTransform, RotateY } from "./transform";

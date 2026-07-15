@@ -1,6 +1,6 @@
-/** Şema kütüphanesi + inşaat runtime tipleri (Faz 14) */
+/** Şema kütüphanesi + inşaat runtime tipleri (Faz 14–16) */
 
-export type SchematicFormat = "schem" | "caya-json";
+export type SchematicFormat = "schem" | "caya-json" | "litematic";
 
 export interface SchematicMeta {
   id: string;
@@ -57,6 +57,15 @@ export interface BuildOrigin {
 
 export type BuildPhase = "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
 
+export interface BuildPlacedBlock {
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  status: "placed" | "skipped" | "failed";
+  t: number;
+}
+
 export interface BuildRuntime {
   phase: BuildPhase;
   schematicId: string | null;
@@ -65,12 +74,22 @@ export interface BuildRuntime {
   placed: number;
   total: number;
   skipped: number;
+  failed: number;
   scaffoldsPlaced: number;
   scaffoldsCleared: number;
   materials: MaterialNeed[];
   label: string;
   error?: string;
   startedAt: number | null;
+  /** son yerleştirilen blok (UI animasyon) */
+  lastBlock: BuildPlacedBlock | null;
+  /** son N blok izi */
+  recentBlocks: BuildPlacedBlock[];
+  transform: {
+    rotateY: 0 | 90 | 180 | 270;
+    mirrorX: boolean;
+    mirrorZ: boolean;
+  };
 }
 
 export function emptyBuildRuntime(): BuildRuntime {
@@ -82,10 +101,14 @@ export function emptyBuildRuntime(): BuildRuntime {
     placed: 0,
     total: 0,
     skipped: 0,
+    failed: 0,
     scaffoldsPlaced: 0,
     scaffoldsCleared: 0,
     materials: [],
     label: "",
-    startedAt: null
+    startedAt: null,
+    lastBlock: null,
+    recentBlocks: [],
+    transform: { rotateY: 0, mirrorX: false, mirrorZ: false }
   };
 }

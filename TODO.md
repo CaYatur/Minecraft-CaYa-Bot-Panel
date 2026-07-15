@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 15 ✅* Düşüş kurtarma / MLG**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 16 ✅* Litematic + transform + build anim + audit**
 
 ---
 
@@ -262,6 +262,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
 | 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (inşaat fiziği Paper) |
 | 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
+| 16 | Litematic + döndür/aynala + build anim + güvenlik audit | ✅ Bitti* |
 
 ---
 
@@ -484,6 +485,31 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Typecheck temiz.
 - [ ] Paper saha: su MLG + saman iniş + malzeme yok uyarısı.
 
+### Faz 16 — Litematic + Transform + Build UI + Audit ✅*
+
+> Litematica `.litematic`, döndürme/aynalama, MC-tarzı blok yerleştirme animasyonu;
+> güvenlik/sızıntı/eksik denetimi ve kapatma.
+
+#### 16.A — Format & transform
+- [x] `.litematic` NBT parser (Regions, packed BlockStates, palette).
+- [x] `rotateY` 0/90/180/270 + `mirrorX` / `mirrorZ`; preview + build.
+- [x] Yükleme: path traversal engeli; max 25MB; max ~150k blok; body limit 32mb.
+
+#### 16.B — UI
+- [x] `BuildAnim` — isometrik küp + yerleştirme animasyonu + progress şeridi.
+- [x] BuildPanel transform kontrolleri; Schematics `.litematic` accept.
+
+#### 16.C — Audit düzeltmeleri
+- [x] Şema upload 1mb JSON limit → 32mb (önce büyük schem/litematic kırılıyordu).
+- [x] `resolveSchematicFile` / `assertSchematicId` path traversal kapatıldı.
+- [x] stop-build scaffold cleanup best-effort (iz bırakmama).
+- [x] Build runtime `lastBlock` / `recentBlocks` / `failed` / `transform` panelle senkron.
+- [x] Typecheck temiz.
+
+#### 16.D — Kabul
+- [x] Typecheck; örnek şema + UI; litematic kod yolu.
+- [ ] Paper: gerçek .litematic dosyası + rotate 90° saha.
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -601,6 +627,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Paper sohbet isimleri: 1.19+ `playerChat` gönderici UUID + `chat`/`whisper` olayları + JSON/clickEvent + öğrenilmiş prefix; sadece `message.toString()` yetmez (isim ayrı alanda).
 - 2026-07-15 — Faz 14 yapı: kendi `BuildService` (mineflayer-builder değil); şema global kütüphane `data/schematics`; scaffold defteri + cleanup zorunlu; progress `bot:build`.
 - 2026-07-15 — Faz 15 düşüş: FallGuard tick-bazlı (TaskQueue değil) — MLG milisaniye ister; SURVIVAL öncelikli pathfinder kesme.
+- 2026-07-15 — Faz 16: litematic kendi NBT parser; express JSON 32mb (şema base64); path basename-only; block cap DoS.
 
 ---
 
@@ -789,3 +816,15 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 4. TODO + typecheck.
 
 **Sınır:** Timing Paper’da ayarlanmalı; lag’li sunucuda MLG kaçabilir.
+
+### 2026-07-15 — Grok 4.5 — Faz 16 Litematic + transform + anim + audit
+
+**İstek:** litematic; build animasyonu; döndür/aynala; tüm kod audit (açık/sızıntı/eksik).
+
+**Yapılanlar:**
+1. `litematic.ts` packed BlockStates parser; `transform.ts` rotate/mirror.
+2. pathSafe + body limit + block caps; stop scaffold cleanup.
+3. BuildAnim CSS isometrik küpler; BuildPanel transform.
+4. TODO §7/§8/§14/§15 güncellendi.
+
+**Audit bulguları kapatıldı:** JSON 1mb schem kırılması; path traversal riski; stop’ta scaffold unutulması; progress’te lastBlock yokluğu.

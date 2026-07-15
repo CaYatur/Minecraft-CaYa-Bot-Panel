@@ -43,7 +43,8 @@ function main() {
   manager.boot();
 
   const app = express();
-  app.use(express.json({ limit: "1mb" }));
+  // şema yükleme base64 için büyük body; diğer rotalar da aynı limit (localhost panel)
+  app.use(express.json({ limit: "32mb" }));
   app.use("/api", createRestRouter(manager, supportedVersions));
   app.use("/api", restErrorHandler);
 

@@ -382,7 +382,10 @@ export class BotInstance extends EventEmitter {
             player: action.player ? String(action.player) : undefined
           },
           allowPartial: action.allowPartial === true || action.allowPartial === "true",
-          versionHint: action.version ? String(action.version) : undefined
+          versionHint: action.version ? String(action.version) : undefined,
+          rotateY: action.rotateY != null ? Number(action.rotateY) : 0,
+          mirrorX: action.mirrorX === true || action.mirrorX === "true",
+          mirrorZ: action.mirrorZ === true || action.mirrorZ === "true"
         });
       }
       case "stop-build":

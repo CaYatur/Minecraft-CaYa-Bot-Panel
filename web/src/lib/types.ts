@@ -149,6 +149,15 @@ export interface InventorySnapshot {
   ts: number;
 }
 
+export interface BuildPlacedBlock {
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  status: "placed" | "skipped" | "failed";
+  t: number;
+}
+
 export interface BuildRuntime {
   phase: "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
   schematicId: string | null;
@@ -157,12 +166,20 @@ export interface BuildRuntime {
   placed: number;
   total: number;
   skipped: number;
+  failed?: number;
   scaffoldsPlaced: number;
   scaffoldsCleared: number;
   materials: Array<{ name: string; need: number; have: number; missing: number }>;
   label: string;
   error?: string;
   startedAt: number | null;
+  lastBlock?: BuildPlacedBlock | null;
+  recentBlocks?: BuildPlacedBlock[];
+  transform?: {
+    rotateY: 0 | 90 | 180 | 270;
+    mirrorX: boolean;
+    mirrorZ: boolean;
+  };
 }
 
 export interface BotSnapshot {

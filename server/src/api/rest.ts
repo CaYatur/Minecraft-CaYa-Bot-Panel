@@ -418,15 +418,18 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
 
   r.post(
     "/schematics",
-    h((req, res) => {
+    h(async (req, res) => {
       const body = req.body ?? {};
       if (Array.isArray(body.blocks)) {
+        if (body.blocks.length > 150_000) throw new PanelError("En fazla 150000 blok");
         res.json(addCayaJsonSchematic({ name: String(body.name || "Şema"), blocks: body.blocks, note: body.note }));
         return;
       }
       if (!body.dataBase64) throw new PanelError("dataBase64 veya blocks gerekli");
+      // base64 boyutu kaba kontrol (≈ 25MB binary)
+      if (String(body.dataBase64).length > 36 * 1024 * 1024) throw new PanelError("Dosya çok büyük (max ~25MB)");
       res.json(
-        addSchematicFromBase64({
+        await addSchematicFromBase64({
           name: String(body.name || "Şema"),
           filename: body.filename ? String(body.filename) : undefined,
           dataBase64: String(body.dataBase64),
@@ -463,7 +466,16 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       const schematicId = String(req.query.schematicId ?? "");
       if (!schematicId) throw new PanelError("schematicId gerekli");
       const version = String(req.query.version ?? "1.20.4");
-      res.json(await inst.build.previewMaterials(schematicId, version));
+      const rotateY = req.query.rotateY != null ? Number(req.query.rotateY) : 0;
+      const mirrorX = req.query.mirrorX === "1" || req.query.mirrorX === "true";
+      const mirrorZ = req.query.mirrorZ === "1" || req.query.mirrorZ === "true";
+      res.json(
+        await inst.build.previewMaterials(schematicId, version, {
+          rotateY: (rotateY as 0 | 90 | 180 | 270) || 0,
+          mirrorX,
+          mirrorZ
+        })
+      );
     })
   );
 

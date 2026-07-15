@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { BuildRuntime } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
+import { BuildAnim } from "./BuildAnim";
 
 interface SchematicMeta {
   id: string;
@@ -31,14 +32,18 @@ const emptyBuild = (): BuildRuntime => ({
   placed: 0,
   total: 0,
   skipped: 0,
+  failed: 0,
   scaffoldsPlaced: 0,
   scaffoldsCleared: 0,
   materials: [],
   label: "",
-  startedAt: null
+  startedAt: null,
+  lastBlock: null,
+  recentBlocks: [],
+  transform: { rotateY: 0, mirrorX: false, mirrorZ: false }
 });
 
-/** Bot detay — Yapı sekmesi (şema seç + origin + ilerleme + malzeme) */
+/** Bot detay — Yapı sekmesi (şema + transform + animasyonlu ilerleme) */
 export function BuildPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
@@ -51,6 +56,9 @@ export function BuildPanel({ botId }: { botId: string }) {
   const [z, setZ] = useState(0);
   const [player, setPlayer] = useState("");
   const [allowPartial, setAllowPartial] = useState(false);
+  const [rotateY, setRotateY] = useState<0 | 90 | 180 | 270>(0);
+  const [mirrorX, setMirrorX] = useState(false);
+  const [mirrorZ, setMirrorZ] = useState(false);
   const [preview, setPreview] = useState<{
     materials: Array<{ name: string; need: number; have: number; missing: number }>;
     blockCount: number;
@@ -88,16 +96,23 @@ export function BuildPanel({ botId }: { botId: string }) {
     try {
       const server = servers.find((s) => s.id === bot?.config.serverId);
       const version = server?.version && server.version !== "auto" ? server.version : "1.20.4";
+      const q = new URLSearchParams({
+        schematicId,
+        version,
+        rotateY: String(rotateY),
+        mirrorX: mirrorX ? "1" : "0",
+        mirrorZ: mirrorZ ? "1" : "0"
+      });
       const r = await api.get<{
         materials: Array<{ name: string; need: number; have: number; missing: number }>;
         blockCount: number;
         size: { w: number; h: number; l: number };
-      }>(`/api/bots/${botId}/build/preview?schematicId=${encodeURIComponent(schematicId)}&version=${encodeURIComponent(version)}`);
+      }>(`/api/bots/${botId}/build/preview?${q}`);
       setPreview(r);
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
-  }, [schematicId, online, botId, bot?.config.serverId, servers, toast]);
+  }, [schematicId, online, botId, bot?.config.serverId, servers, toast, rotateY, mirrorX, mirrorZ]);
 
   useEffect(() => {
     void loadPreview();
@@ -117,7 +132,10 @@ export function BuildPanel({ botId }: { botId: string }) {
         y,
         z,
         player: player.trim() || undefined,
-        allowPartial
+        allowPartial,
+        rotateY,
+        mirrorX,
+        mirrorZ
       });
       toast("info", "İnşaat kuyruğa alındı");
     } catch (e) {
@@ -136,9 +154,9 @@ export function BuildPanel({ botId }: { botId: string }) {
 
   if (!bot) return null;
 
-  const pct = build.total > 0 ? Math.min(100, Math.round(((build.placed + build.skipped) / build.total) * 100)) : 0;
   const materials = busy || build.materials.length ? build.materials : preview?.materials ?? [];
   const missingCount = materials.filter((m) => m.missing > 0).length;
+  const selectedMeta = schematics.find((s) => s.id === schematicId);
 
   return (
     <div className="space-y-4 p-1">
@@ -146,7 +164,7 @@ export function BuildPanel({ botId }: { botId: string }) {
         <div>
           <div className="text-sm font-semibold text-zinc-200">Yapı inşaat</div>
           <p className="text-[11px] text-zinc-500">
-            Şemayı seçin, referans noktası verin. Bot scaffold ile yükselip iş bitince geçici blokları kırar.
+            .schem · .litematic · .caya.json — döndür/aynala, scaffold temizliği, canlı blok animasyonu.
           </p>
         </div>
         <span
@@ -164,6 +182,8 @@ export function BuildPanel({ botId }: { botId: string }) {
         </span>
       </div>
 
+      <BuildAnim build={build} />
+
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
           Şema
@@ -176,10 +196,15 @@ export function BuildPanel({ botId }: { botId: string }) {
             {schematics.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
-                {s.blockCount != null ? ` (${s.blockCount} blok)` : ""}
+                {s.blockCount != null ? ` (${s.blockCount})` : ""} · {s.format}
               </option>
             ))}
           </select>
+          {selectedMeta && (
+            <span className="mono text-[10px] text-zinc-600">
+              {selectedMeta.width}×{selectedMeta.height}×{selectedMeta.length} · {selectedMeta.format}
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
@@ -194,6 +219,37 @@ export function BuildPanel({ botId }: { botId: string }) {
             <option value="player">Oyuncunun konumu</option>
           </select>
         </label>
+      </div>
+
+      {/* transform */}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+        <span className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">Döndür / Aynala</span>
+        <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+          Y°
+          <select
+            value={rotateY}
+            onChange={(e) => setRotateY(Number(e.target.value) as 0 | 90 | 180 | 270)}
+            className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-zinc-200"
+          >
+            <option value={0}>0°</option>
+            <option value={90}>90°</option>
+            <option value={180}>180°</option>
+            <option value={270}>270°</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-zinc-300">
+          <input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />
+          Ayna X
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-zinc-300">
+          <input type="checkbox" checked={mirrorZ} onChange={(e) => setMirrorZ(e.target.checked)} />
+          Ayna Z
+        </label>
+        {preview && (
+          <span className="mono ml-auto text-[10px] text-zinc-500">
+            önizleme {preview.size.w}×{preview.size.h}×{preview.size.l} · {preview.blockCount} blok
+          </span>
+        )}
       </div>
 
       {originMode === "coords" && (
@@ -234,31 +290,17 @@ export function BuildPanel({ botId }: { botId: string }) {
         Eksik malzemeyle de dene (kısmi inşaat)
       </label>
 
-      {/* progress */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-        <div className="mb-1 flex justify-between text-[11px] text-zinc-500">
-          <span>{build.label || (preview ? `${preview.blockCount} blok · ${preview.size.w}×${preview.size.h}×${preview.size.l}` : "—")}</span>
-          <span className="mono">
-            {build.placed + build.skipped}/{build.total || preview?.blockCount || 0}
-            {build.scaffoldsPlaced ? ` · scaf ${build.scaffoldsCleared}/${build.scaffoldsPlaced}` : ""}
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className={`h-full transition-all ${busy ? "bg-amber-500" : build.phase === "done" ? "bg-emerald-500" : "bg-indigo-600"}`}
-            style={{ width: `${busy || build.total ? pct : 0}%` }}
-          />
-        </div>
-        {build.error && <p className="mt-1 text-[11px] text-red-400">{build.error}</p>}
-        {build.origin && (
-          <p className="mono mt-1 text-[10px] text-zinc-600">
-            origin {build.origin.x}, {build.origin.y}, {build.origin.z}
-            {build.schematicName ? ` · ${build.schematicName}` : ""}
-          </p>
-        )}
-      </div>
+      {build.error && <p className="text-[11px] text-red-400">{build.error}</p>}
+      {build.origin && (
+        <p className="mono text-[10px] text-zinc-600">
+          origin {build.origin.x}, {build.origin.y}, {build.origin.z}
+          {build.schematicName ? ` · ${build.schematicName}` : ""}
+          {build.transform
+            ? ` · R${build.transform.rotateY}${build.transform.mirrorX ? " mX" : ""}${build.transform.mirrorZ ? " mZ" : ""}`
+            : ""}
+        </p>
+      )}
 
-      {/* materials */}
       <div>
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-zinc-500 uppercase">
           Malzemeler
@@ -267,7 +309,11 @@ export function BuildPanel({ botId }: { botId: string }) {
               {missingCount} eksik
             </span>
           )}
-          <button type="button" onClick={() => void loadPreview()} className="ml-auto text-[10px] font-normal normal-case text-indigo-400 hover:underline">
+          <button
+            type="button"
+            onClick={() => void loadPreview()}
+            className="ml-auto text-[10px] font-normal normal-case text-indigo-400 hover:underline"
+          >
             Yenile
           </button>
         </div>

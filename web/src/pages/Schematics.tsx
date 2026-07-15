@@ -110,9 +110,10 @@ export function Schematics() {
       <div>
         <h1 className="text-xl font-bold text-zinc-100">Yapı şemaları</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          WorldEdit <span className="mono text-zinc-400">.schem</span> veya CaYa{" "}
-          <span className="mono text-zinc-400">.caya.json</span> dosyaları. Bot detay → Yapı sekmesinden
-          inşa edilir.
+          WorldEdit <span className="mono text-zinc-400">.schem</span>, Litematica{" "}
+          <span className="mono text-zinc-400">.litematic</span> veya CaYa{" "}
+          <span className="mono text-zinc-400">.caya.json</span>. Bot detay → Yapı sekmesinden inşa +
+          döndür/aynala.
         </p>
       </div>
 
@@ -156,10 +157,10 @@ export function Schematics() {
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-indigo-500"
             />
             <label className="flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-950/50 px-3 py-4 text-sm text-zinc-400 hover:border-indigo-600 hover:text-indigo-300">
-              {uploading ? "Yükleniyor…" : "📂 .schem / .caya.json seç"}
+              {uploading ? "Yükleniyor…" : "📂 .schem / .litematic / .caya.json seç"}
               <input
                 type="file"
-                accept=".schem,.schematic,.json,.caya.json"
+                accept=".schem,.schematic,.litematic,.json,.caya.json"
                 className="hidden"
                 disabled={uploading}
                 onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
