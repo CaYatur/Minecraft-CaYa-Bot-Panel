@@ -18,62 +18,133 @@ export function stripColorCodes(s: string): string {
 const MC_NAME = "[A-Za-z0-9_]{1,16}";
 
 /**
+ * AuthMe / join-leave / hoş geldin / sunucu duyurusu — oyuncu sohbeti DEĞİL.
+ * Bunlar isim içerse bile (tıklanabilir prefix) sunucu mesajı kalmalı.
+ */
+export function isLikelySystemMessage(plainText: string): boolean {
+  const p = stripColorCodes(plainText);
+  if (!p) return true;
+
+  // AuthMe / login eklentileri
+  if (
+    /\/login\b|\/register\b|\/reg\b|\/l\b|authme|loginsecurity|nlogin/i.test(p) ||
+    /lütfen.{0,40}(giriş|login|şifre|sifre)/i.test(p) ||
+    /please.{0,40}(login|register|log in)/i.test(p) ||
+    /başarıyla\s+giriş|basariyla\s+giris|successfully\s+logged|logged\s+in\s+successfully/i.test(p) ||
+    /giriş\s+yaptınız|giris\s+yaptiniz|wrong\s+password|yanlış\s+şifre|yanlis\s+sifre/i.test(p) ||
+    /kayıt\s+ol|kayit\s+ol|not\s+registered|unregister/i.test(p)
+  ) {
+    return true;
+  }
+
+  // Join / leave / welcome
+  if (
+    /hoş\s*geldin|hos\s*geldin|hoşgeldin|welcome\s+to\b/i.test(p) ||
+    /\bjoined the game\b|\bleft the game\b|\bhas joined\b|\bhas left\b/i.test(p) ||
+    /sunucuya\s+(katıl|girdi|giriş|bagland|bağland)/i.test(p) ||
+    /oyundan\s+ayrıl|sunucudan\s+ayrıl|disconnected/i.test(p)
+  ) {
+    return true;
+  }
+
+  // İstatistik / panel satırları: "hesaplar:2" "online: 5"
+  if (/^(hesaplar|online|oyuncu|players?|tps|ms)\s*:\s*[\d./]+$/i.test(p)) return true;
+
+  // Saf sunucu duyurusu kalıpları
+  if (/^\[(Server|Sunucu|SYSTEM|Konsol|Console)\]/i.test(p)) return true;
+
+  return false;
+}
+
+/**
+ * Ayrıştırılmış "oyuncu mesaj gövdesi" gerçek sohbet mi?
+ * "."  /  "! Hoş geldin."  gibi kalıntıları reddet.
+ */
+export function isValidPlayerChatBody(text: string, plainFull?: string): boolean {
+  if (plainFull && isLikelySystemMessage(plainFull)) return false;
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  // yalnızca noktalama / boşluk
+  if (/^[.!?,;:…·•\-\s¡!]+$/u.test(t)) return false;
+  // "! Hoş geldin" kalıntısı
+  if (/^[!¡.]\s*(hoş|hos)\s*geld/i.test(t)) return false;
+  if (/^(hoş|hos)\s*geldin/i.test(t) && t.length < 40) return false;
+  // tek karakter + sistemik noktalama (gerçek "sa" / "as" OK)
+  if (t.length === 1 && /[^A-Za-z0-9ğüşıöçĞÜŞİÖÇ]/.test(t)) return false;
+  return true;
+}
+
+/**
  * Plugin/vanilla düz metin formatları.
  * Sunucu prefix'i değişse de olabildiğince esnek (rank, kanal, oklar…).
+ * Not: çok gevşek kalıplar sistem mesajını oyuncuya bağlar → isLikelySystemMessage önce.
  */
 const PATTERNS: Array<{ kind: ChatKind; re: RegExp }> = [
   { kind: "player", re: new RegExp(`^<(${MC_NAME})>\\s*(.*)$`, "s") },
   { kind: "whisper", re: new RegExp(`^(${MC_NAME}) whispers(?: to you)?:\\s*(.*)$`, "s") },
   { kind: "whisper", re: new RegExp(`^\\[(${MC_NAME})\\s*->\\s*(?:me|ben|you|sen)\\]\\s*(.*)$`, "is") },
   { kind: "whisper", re: new RegExp(`^(${MC_NAME})\\s*(?:fısıldıyor|fisildiyor|whispers).*?:\\s*(.*)$`, "is") },
-  // Name » msg / Name > msg / Name → msg
-  { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*[»›>➤→\\-:~]+\\s*(.*)$`, "s") },
+  // Name » msg / Name > msg / Name → msg  (en az bir ayırıcı karakter, boş mesaj yok)
+  { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*[»›➤→]+\\s*(.+)$`, "s") },
+  // Name > msg (tek > ama boşluksuz sayılar "a>b" plugin kanalı)
+  { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*>\\s+(.+)$`, "s") },
   // [rank]… Name: msg
-  { kind: "player", re: new RegExp(`^(?:\\[[^\\]]{1,40}\\]\\s*)+(${MC_NAME})\\s*[:»›]\\s*(.*)$`, "s") },
+  { kind: "player", re: new RegExp(`^(?:\\[[^\\]]{1,40}\\]\\s*)+(${MC_NAME})\\s*[:»›]\\s+(.+)$`, "s") },
   // (rank) Name: msg
-  { kind: "player", re: new RegExp(`^(?:\\([^)]{1,32}\\)\\s*)+(${MC_NAME})\\s*[:»›]\\s*(.*)$`, "s") },
-  // emoji/channel prefix: 💬 [Admin] Name » msg  — name near end before separator
-  { kind: "player", re: new RegExp(`(?:^|\\s)(${MC_NAME})\\s*[»›>:\\|]\\s*(.+)$`, "s") },
-  // Name: message
-  { kind: "player", re: new RegExp(`^(${MC_NAME}):\\s+(.*)$`, "s") },
-  // Name | message
-  { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*\\|\\s+(.*)$`, "s") },
-  // * Name does something
-  { kind: "player", re: new RegExp(`^\\*\\s*(${MC_NAME})\\s+(.*)$`, "s") },
+  { kind: "player", re: new RegExp(`^(?:\\([^)]{1,32}\\)\\s*)+(${MC_NAME})\\s*[:»›]\\s+(.+)$`, "s") },
   // [Global] Name: msg
-  { kind: "player", re: new RegExp(`^\\[[^\\]]{1,20}\\]\\s+(${MC_NAME})\\s*[:»›]\\s*(.*)$`, "s") }
+  { kind: "player", re: new RegExp(`^\\[[^\\]]{1,20}\\]\\s+(${MC_NAME})\\s*[:»›]\\s+(.+)$`, "s") },
+  // Name: message  — iki nokta sonrası BOŞLUK zorunlu (hesaplar:2 elensin)
+  { kind: "player", re: new RegExp(`^(${MC_NAME}):\\s+(.+)$`, "s") },
+  // Name | message
+  { kind: "player", re: new RegExp(`^(${MC_NAME})\\s*\\|\\s+(.+)$`, "s") },
+  // * Name does something
+  { kind: "player", re: new RegExp(`^\\*\\s*(${MC_NAME})\\s+(.+)$`, "s") }
 ];
 
 export function parseChatMessage(plainText: string): ParsedChat {
   const plain = stripColorCodes(plainText);
   if (!plain) return { kind: "server", text: plainText };
 
+  if (isLikelySystemMessage(plain)) {
+    return { kind: "server", text: plain };
+  }
+
   for (const p of PATTERNS) {
     const m = plain.match(p.re);
-    if (m?.[1]) return { kind: p.kind, username: m[1], text: (m[2] ?? "").trimEnd() };
+    if (m?.[1]) {
+      const username = m[1];
+      const text = (m[2] ?? "").trimEnd();
+      if (!isValidPlayerChatBody(text, plain)) continue;
+      return { kind: p.kind, username, text };
+    }
   }
   return { kind: "server", text: plain };
 }
 
 /**
  * Öğrenilmiş önek: "….Name » " gibi kalıpları sonradan uygula.
- * pattern örnek: /^(?:\[Vip\]\s*)?Name\s*»\s*(.*)$/i  — biz string template tutarız
  */
 export function applyLearnedPrefix(plain: string, username: string, bodyHint?: string): ParsedChat | null {
   const p = stripColorCodes(plain);
+  if (isLikelySystemMessage(p)) return null;
+
   const u = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Name … message  (name appears then separator then rest)
-  const re = new RegExp(`^(?:.*?)\\b(${u})\\b\\s*[:»›>➤→\\-|~]*\\s*(.*)$`, "is");
+  // İsim satırın sonuna yakın + net ayırıcı (çok gevşek .*? Name kaldırıldı)
+  const re = new RegExp(
+    `^(?:\\[[^\\]]{0,40}\\]\\s*|\\([^)]{0,32}\\)\\s*|[^A-Za-z0-9_]{0,8})*\\b(${u})\\b\\s*[:»›>➤→|~\\-]{1,3}\\s*(.*)$`,
+    "is"
+  );
   const m = p.match(re);
   if (m) {
-    const text = (m[2] ?? "").trim();
-    if (bodyHint && text && !text.includes(bodyHint) && bodyHint.length > 0) {
-      // prefer body hint if parse looks wrong
-      return { kind: "player", username, text: bodyHint };
+    let text = (m[2] ?? "").trim();
+    if (bodyHint && text && !text.includes(bodyHint) && bodyHint.length > 2 && isValidPlayerChatBody(bodyHint, p)) {
+      text = bodyHint;
     }
-    return { kind: "player", username, text: text || bodyHint || p };
+    if (!isValidPlayerChatBody(text || bodyHint || "", p)) return null;
+    return { kind: "player", username, text: text || bodyHint || "" };
   }
-  if (bodyHint && (p === bodyHint || p.endsWith(bodyHint))) {
+  if (bodyHint && isValidPlayerChatBody(bodyHint, p) && (p === bodyHint || p.endsWith(bodyHint))) {
     return { kind: "player", username, text: bodyHint };
   }
   return null;
@@ -94,34 +165,48 @@ export function parseChatComponent(jsonMsg: unknown): ParsedChat | null {
     unsigned?: unknown;
   };
 
-  // unsigned content sometimes has different body
   const roots = [anyMsg.json, jsonMsg, anyMsg.unsigned].filter(Boolean) as unknown[];
 
   for (const root of roots) {
     try {
       const r = root as Record<string, unknown>;
+      const plainPreview = componentToPlain(r);
+      if (plainPreview && isLikelySystemMessage(plainPreview)) {
+        return { kind: "server", text: plainPreview };
+      }
+
       const fromStructured = fromTranslate(r) ?? fromTranslate(anyMsg as unknown as Record<string, unknown>);
-      if (fromStructured?.username) return fromStructured;
+      if (fromStructured) {
+        if (fromStructured.kind === "server") return fromStructured;
+        if (fromStructured.username && isValidPlayerChatBody(fromStructured.text, plainPreview || fromStructured.text)) {
+          return fromStructured;
+        }
+      }
 
       const fromClick = fromClickSuggest(r);
       if (fromClick?.username) {
-        // body = full plain minus name decoration
         const plain = componentToPlain(r);
+        if (isLikelySystemMessage(plain)) return { kind: "server", text: plain };
         const learned = applyLearnedPrefix(plain, fromClick.username);
-        if (learned) return learned;
-        return { kind: "player", username: fromClick.username, text: stripNameDecor(plain, fromClick.username) };
+        if (learned && isValidPlayerChatBody(learned.text, plain)) return learned;
+        const stripped = stripNameDecor(plain, fromClick.username);
+        if (isValidPlayerChatBody(stripped, plain)) {
+          return { kind: "player", username: fromClick.username, text: stripped };
+        }
+        // tıklanabilir isim var ama gövde sistem/boş → sunucu
+        return { kind: "server", text: plain };
       }
 
       if (Array.isArray(r.extra)) {
         for (const part of r.extra) {
           const nested = parseChatComponent(part);
-          if (nested?.username) return nested;
+          if (nested?.kind === "server") continue;
+          if (nested?.username && isValidPlayerChatBody(nested.text, plainPreview)) return nested;
         }
       }
 
-      // flat walk: find first name-like clickable part + remaining text
       const walked = walkExtraForPlayer(r);
-      if (walked) return walked;
+      if (walked?.username && isValidPlayerChatBody(walked.text, plainPreview)) return walked;
     } catch {
       /* next root */
     }
@@ -135,35 +220,41 @@ function fromTranslate(obj: Record<string, unknown> | null | undefined): ParsedC
   const withArr = Array.isArray(obj.with) ? obj.with : null;
   if (!withArr?.length) return null;
 
-  // printf-style client formats: often sender + content as last two params
-  // e.g. "<%s> %s", "[%s] %s » %s"
+  // duyuru / sistem — oyuncu sohbeti değil
+  if (
+    translate === "chat.type.announcement" ||
+    translate.includes("chat.type.announcement") ||
+    translate.includes("multiplayer.player.joined") ||
+    translate.includes("multiplayer.player.left") ||
+    translate.includes("chat.type.admin")
+  ) {
+    return { kind: "server", text: componentToPlain(obj) };
+  }
+
   if (translate.includes("%s") || translate.includes("%1$s") || translate.startsWith("chat.type.") || translate.includes("chat.type")) {
-    // prefer known chat.type.text layout
     if (
       translate === "chat.type.text" ||
       translate === "chat.type.emote" ||
-      translate === "chat.type.announcement" ||
       translate === "chat.type.team.text" ||
       translate.endsWith("chat.type.text")
     ) {
       const username = componentToName(withArr[0]);
       const text = withArr.length >= 2 ? componentToPlain(withArr[1]) : "";
-      if (username) return { kind: "player", username, text: text || componentToPlain(withArr.slice(1)) };
+      if (username && isValidPlayerChatBody(text || componentToPlain(withArr.slice(1)))) {
+        return { kind: "player", username, text: text || componentToPlain(withArr.slice(1)) };
+      }
+      return null;
     }
 
-    // generic printf: gönderen genelde son parametre DEĞİL (son = içerik)
-    // isim: son hariç ilk bulunan name-like; yoksa ilk slot
     let username: string | undefined;
     for (let i = 0; i < Math.max(0, withArr.length - 1); i++) {
       const n = componentToName(withArr[i]);
-      if (n) {
-        username = n;
-        // rank + name sırasında son name-like'ı tut (Admin, Player → Player)
-      }
+      if (n) username = n;
     }
     if (!username && withArr.length === 1) username = componentToName(withArr[0]);
     if (username) {
       const text = componentToPlain(withArr[withArr.length - 1]);
+      if (!isValidPlayerChatBody(text)) return null;
       return { kind: "player", username, text };
     }
   }
@@ -171,7 +262,7 @@ function fromTranslate(obj: Record<string, unknown> | null | undefined): ParsedC
   if (translate.includes("commands.message") || translate.includes("commands.msg") || translate.toLowerCase().includes("whisper")) {
     const username = componentToName(withArr[0]);
     const text = componentToPlain(withArr[withArr.length - 1]);
-    if (username) return { kind: "whisper", username, text };
+    if (username && isValidPlayerChatBody(text)) return { kind: "whisper", username, text };
   }
 
   return null;
@@ -202,7 +293,6 @@ function fromClickSuggest(obj: Record<string, unknown>): { username: string } | 
 function nameFromClick(o: Record<string, unknown>): string | undefined {
   const ce = o.clickEvent as { action?: string; value?: string } | undefined;
   if (ce?.value && (ce.action === "suggest_command" || ce.action === "run_command")) {
-    // /msg Name  /  /tell Name  /  /w Name
     const m = ce.value.match(/^\/(?:msg|tell|w|minecraft:msg|minecraft:tell)\s+([A-Za-z0-9_]{1,16})\b/i);
     if (m) return m[1];
   }
@@ -228,15 +318,14 @@ function walkExtraForPlayer(obj: Record<string, unknown>): ParsedChat | null {
   visit(obj);
   const namePart = [...flat].reverse().find((p) => p.name);
   if (!namePart?.name) return null;
-  // text = parts after the name part joined, or everything that isn't pure name decoration
   const idx = flat.lastIndexOf(namePart);
   const after = flat
     .slice(idx + 1)
     .map((p) => p.text)
     .join("")
-    .replace(/^[\s:»›>|·\-]+/, "")
+    .replace(/^[\s:»›>|·\-!.]+/, "")
     .trim();
-  if (after) return { kind: "player", username: namePart.name, text: after };
+  if (after && isValidPlayerChatBody(after)) return { kind: "player", username: namePart.name, text: after };
   return null;
 }
 
@@ -264,7 +353,6 @@ export function componentToName(c: unknown): string | undefined {
     const m2 = s.match(new RegExp(`^(${MC_NAME})\\s*:?\\s*$`));
     if (m2) return m2[1];
   }
-  // hover show_entity
   if (o.hoverEvent && typeof o.hoverEvent === "object") {
     const he = o.hoverEvent as { contents?: unknown; value?: unknown; action?: string };
     let contents = he.contents ?? he.value;
@@ -290,9 +378,11 @@ export function componentToName(c: unknown): string | undefined {
           return stripColorCodes(co.name).replace(/[^A-Za-z0-9_]/g, "").slice(0, 16) || undefined;
         }
         if (typeof co.name === "object" && co.name && "text" in (co.name as object)) {
-          return stripColorCodes(String((co.name as { text: string }).text))
-            .replace(/[^A-Za-z0-9_]/g, "")
-            .slice(0, 16) || undefined;
+          return (
+            stripColorCodes(String((co.name as { text: string }).text))
+              .replace(/[^A-Za-z0-9_]/g, "")
+              .slice(0, 16) || undefined
+          );
         }
       }
     }
@@ -319,7 +409,10 @@ export function componentToPlain(c: unknown): string {
   if (Array.isArray(c)) return c.map(componentToPlain).join("");
   if (typeof c === "object") {
     const o = c as Record<string, unknown>;
-    if (typeof (o as { toString?: () => string }).toString === "function" && (o.json !== undefined || o.translate !== undefined || o.text !== undefined)) {
+    if (
+      typeof (o as { toString?: () => string }).toString === "function" &&
+      (o.json !== undefined || o.translate !== undefined || o.text !== undefined)
+    ) {
       try {
         const s = String(c);
         if (s && s !== "[object Object]") return stripColorCodes(s);
@@ -338,9 +431,11 @@ export function componentToPlain(c: unknown): string {
 
 function stripNameDecor(plain: string, username: string): string {
   const u = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return plain
-    .replace(new RegExp(`^.*\\b${u}\\b\\s*[:»›>➤→\\-|~]*\\s*`, "i"), "")
-    .trim() || plain;
+  return (
+    plain
+      .replace(new RegExp(`^.*\\b${u}\\b\\s*[:»›>➤→\\-|~!.]*\\s*`, "i"), "")
+      .trim() || plain
+  );
 }
 
 /**
@@ -355,7 +450,6 @@ export function resolveUsernameFromSender(
   if (typeof sender === "string") uuid = sender.replace(/-/g, "").toLowerCase();
   else if (Buffer.isBuffer(sender)) uuid = sender.toString("hex").toLowerCase();
   else if (Array.isArray(sender)) {
-    // int array uuid
     try {
       const buf = Buffer.alloc(16);
       sender.forEach((num: number, i: number) => buf.writeInt32BE(num, i * 4));

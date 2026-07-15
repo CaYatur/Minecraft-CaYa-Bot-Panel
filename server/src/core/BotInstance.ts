@@ -5,6 +5,8 @@ import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import {
   applyLearnedPrefix,
+  isLikelySystemMessage,
+  isValidPlayerChatBody,
   parseChatComponent,
   parseChatMessage,
   resolveUsernameFromSender,
@@ -640,11 +642,20 @@ export class BotInstance extends EventEmitter {
      */
     bot.on("chat", (username: string, message: string) => {
       if (!username || message == null) return;
-      this.ingestPlayerChat(username, String(message), "player");
+      const msg = String(message);
+      // eklenti bazen sistem satırını chat diye basar
+      if (isLikelySystemMessage(msg) || isLikelySystemMessage(`${username}: ${msg}`)) {
+        this.ingestServerChat(msg);
+        return;
+      }
+      if (!isValidPlayerChatBody(msg, msg)) return;
+      this.ingestPlayerChat(username, msg, "player");
     });
     bot.on("whisper", (username: string, message: string) => {
       if (!username || message == null) return;
-      this.ingestPlayerChat(username, String(message), "whisper");
+      const msg = String(message);
+      if (!isValidPlayerChatBody(msg, msg)) return;
+      this.ingestPlayerChat(username, msg, "whisper");
     });
 
     bot.on("message", (jsonMsg: any, position: string, sender?: unknown) => {
@@ -664,25 +675,55 @@ export class BotInstance extends EventEmitter {
         ansi = undefined;
       }
 
+      const plainClean = stripColorCodes(plain);
+
+      // 0) AuthMe / hoş geldin / join — her zaman sunucu (tıklanabilir isim olsa bile)
+      if (isLikelySystemMessage(plainClean)) {
+        this.ingestServerChat(plain, ansi);
+        return;
+      }
+
       // A) 1.19+ playerChat: sender UUID → tab list ismi (Paper'da en güvenilir)
       const fromUuid = resolveUsernameFromSender(sender, bot.players as Record<string, { uuid?: string }>);
       // B) component (translate / clickEvent /msg)  C) düz metin regex
       const fromJson = parseChatComponent(jsonMsg);
       const fromPlain = parseChatMessage(plain);
 
+      // JSON açıkça server dediyse
+      if (fromJson?.kind === "server" && !fromJson.username) {
+        this.ingestServerChat(fromJson.text || plain, ansi);
+        return;
+      }
+
       let username = fromUuid ?? fromJson?.username ?? fromPlain.username;
-      let text = (fromJson?.text || fromPlain.text || plain).trim();
+      let text = (fromJson?.text || fromPlain.text || "").trim();
       let kind: "player" | "whisper" | "server" = username
         ? fromJson?.kind === "whisper" || fromPlain.kind === "whisper"
           ? "whisper"
           : "player"
         : "server";
 
-      // D) öğrenilmiş isimler — plugin prefix değişse bile
+      // UUID ile gelen gerçek playerChat: gövde plain (isim satırda yoksa)
+      if (fromUuid && username) {
+        if (!fromJson?.username && !fromPlain.username) {
+          if (!plainClean.toLowerCase().includes(username.toLowerCase())) {
+            text = plainClean;
+          }
+        }
+        // UUID varsa sistem değilse güven — ama gövde hâlâ sistem kalıntısı olabilir
+        if (!isValidPlayerChatBody(text || plainClean, plainClean)) {
+          this.ingestServerChat(plain, ansi);
+          return;
+        }
+        this.ingestPlayerChat(username, text || plainClean, kind === "whisper" ? "whisper" : "player", ansi);
+        return;
+      }
+
+      // D) öğrenilmiş isimler — sadece net sohbet gövdesi varsa
       if (!username) {
         for (const known of this.learnedChatUsers) {
           const hit = applyLearnedPrefix(plain, known);
-          if (hit?.username) {
+          if (hit?.username && isValidPlayerChatBody(hit.text, plainClean)) {
             username = hit.username;
             text = hit.text;
             kind = "player";
@@ -691,40 +732,41 @@ export class BotInstance extends EventEmitter {
         }
       }
 
-      // E) position chat + UUID yok ama düz metin kısa ve sistem cümlesi değilse:
-      //    hâlâ sunucu mesajı say (yanlış isim uydurma)
       if (username && kind !== "server") {
         const cleaned = applyLearnedPrefix(plain, username, text);
-        if (cleaned?.text) text = cleaned.text;
-        // UUID geldiğinde toString() sadece "selam" olabilir — text zaten body
-        if (fromUuid && (!fromJson?.username && !fromPlain.username)) {
-          // plain tüm satır isim içermiyorsa body = plain
-          if (!stripColorCodes(plain).toLowerCase().includes(username.toLowerCase())) {
-            text = stripColorCodes(plain);
-          }
+        if (cleaned?.text && isValidPlayerChatBody(cleaned.text, plainClean)) text = cleaned.text;
+        const body = (text || plainClean).trim();
+        if (!isValidPlayerChatBody(body, plainClean)) {
+          this.ingestServerChat(plain, ansi);
+          return;
         }
-        this.ingestPlayerChat(username, text || stripColorCodes(plain), kind === "whisper" ? "whisper" : "player", ansi);
+        this.ingestPlayerChat(username, body, kind === "whisper" ? "whisper" : "player", ansi);
         return;
       }
 
-      // sunucu / sistem (AuthMe, join, vb.)
-      const key = `s:${stripColorCodes(plain)}`;
-      if (!this.noteChatKey(key)) return;
-      const entry: ChatEntry = {
-        ts: Date.now(),
-        botId: this.config.id,
-        kind: "server",
-        text: plain,
-        ansi
-      };
-      this.pushChat(entry);
-      this.emit("chatParsed", entry);
+      // sunucu / sistem
+      this.ingestServerChat(plain, ansi);
     });
+  }
+
+  private ingestServerChat(plain: string, ansi?: string) {
+    const key = `s:${stripColorCodes(plain)}`;
+    if (!this.noteChatKey(key)) return;
+    const entry: ChatEntry = {
+      ts: Date.now(),
+      botId: this.config.id,
+      kind: "server",
+      text: plain,
+      ansi
+    };
+    this.pushChat(entry);
+    this.emit("chatParsed", entry);
   }
 
   /** oyuncu sohbetini tek kanaldan yaz (dedup + öğrenme) */
   private ingestPlayerChat(username: string, message: string, kind: "player" | "whisper", ansi?: string) {
     const text = message.trimEnd();
+    if (!isValidPlayerChatBody(text, `${username}: ${text}`)) return;
     const key = `${kind[0]}:${username.toLowerCase()}:${text}`;
     if (!this.noteChatKey(key)) return;
     this.learnedChatUsers.add(username);
