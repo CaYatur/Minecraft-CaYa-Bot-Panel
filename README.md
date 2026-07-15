@@ -3,6 +3,10 @@
 Tarayıcıdan çalışan Minecraft çoklu-bot kontrol paneli (mineflayer tabanlı).
 Ayrıntılı yol haritası ve geliştirme kuralları için: **[TODO.md](TODO.md)** (tek doğruluk kaynağı).
 
+## Lisans
+
+[MIT](LICENSE) © 2026 ÇAĞAN TURGUT (CaYatur)
+
 ## Kurulum
 
 Gereksinim: Node.js ≥ 18 (öneri: 22+).

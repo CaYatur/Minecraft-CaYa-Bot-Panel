@@ -2,6 +2,8 @@
   "name": "caya-bot-panel",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "author": "ÇAĞAN TURGUT (CaYatur)",
   "description": "CaYa Bot Panel - Minecraft multi-bot control panel (mineflayer)",
   "workspaces": [
     "server",
