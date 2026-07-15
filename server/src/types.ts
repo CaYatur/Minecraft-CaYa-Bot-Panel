@@ -111,6 +111,18 @@ export interface MovementConfig {
   ladderParkour?: boolean;
   /** 3–4 blokta sprint jump */
   parkourSprint?: boolean;
+  /**
+   * Uçurum güvenliği (varsayılan true):
+   * takip/goto sırasında önündeki boşluğu gör → atla / köprü / geri çek.
+   * Düştükten sonra MLG ayrı kalır; amaç hiç düşmemek.
+   */
+  edgeSafety?: boolean;
+  /** bu derinlikten fazla drop'a yürüme (varsayılan 2) */
+  maxSafeDrop?: number;
+  /** kısa boşlukta 1 blok köprü (bilinçli) */
+  bridgeGaps?: boolean;
+  /** köprüden önce parkour dene */
+  preferParkourOverBridge?: boolean;
 }
 
 export interface BotConfig {
@@ -402,7 +414,11 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       allowTower: false,
       parkourMaxGap: 3,
       ladderParkour: true,
-      parkourSprint: true
+      parkourSprint: true,
+      edgeSafety: true,
+      maxSafeDrop: 2,
+      bridgeGaps: true,
+      preferParkourOverBridge: true
     }
   };
 }

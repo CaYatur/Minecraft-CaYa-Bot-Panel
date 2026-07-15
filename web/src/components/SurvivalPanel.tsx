@@ -566,6 +566,58 @@ export function SurvivalPanel({ botId }: { botId: string }) {
           Goto yolu bulamazsa otomatik 2–4 blok gap jump dener. Görev: <span className="mono text-zinc-400">parkour-goto</span>{" "}
           (x,y,z). 4 blok zor ve sunucuya göre kaçabilir.
         </p>
+
+        <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="mb-1.5 text-[10px] font-semibold tracking-wide text-amber-400/90 uppercase">
+            Uçurum güvenliği
+          </div>
+          <label className="mb-1.5 flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={mov.edgeSafety !== false}
+              onChange={(e) => void patchMove({ edgeSafety: e.target.checked })}
+            />
+            Takip/goto&apos;da önündeki boşluğu gör (düşmeden)
+          </label>
+          <label className="mb-1.5 flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={mov.preferParkourOverBridge !== false}
+              disabled={mov.edgeSafety === false}
+              onChange={(e) => void patchMove({ preferParkourOverBridge: e.target.checked })}
+            />
+            Önce parkour atla, sonra köprü
+          </label>
+          <label className="mb-1.5 flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={mov.bridgeGaps !== false}
+              disabled={mov.edgeSafety === false}
+              onChange={(e) => void patchMove({ bridgeGaps: e.target.checked })}
+            />
+            Kısa boşlukta 1 blok köprü (bilinçli)
+          </label>
+          <label className="mb-1 flex flex-col gap-1 text-[10px] text-zinc-500 max-w-[10rem]">
+            Max güvenli drop (blok)
+            <input
+              type="number"
+              min={1}
+              max={4}
+              defaultValue={mov.maxSafeDrop ?? 2}
+              disabled={mov.edgeSafety === false}
+              onBlur={(e) =>
+                void patchMove({
+                  maxSafeDrop: Math.max(1, Math.min(4, Number(e.target.value) || 2))
+                })
+              }
+              className="mono w-14 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-indigo-500 disabled:opacity-40"
+            />
+          </label>
+          <p className="text-[10px] leading-relaxed text-zinc-600">
+            Pathfinder uçurumdan yol seçmez. Kenarda: atla → köprü → geri çek. Düşerse MLG/scaffold yedek kalır
+            (oyuncu gibi toparlanır) ama amaç düşmemek.
+          </p>
+        </div>
       </div>
     </div>
   );

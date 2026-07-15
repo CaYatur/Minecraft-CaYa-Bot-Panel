@@ -80,6 +80,10 @@ export interface BotConfig {
     parkourMaxGap?: 2 | 3 | 4;
     ladderParkour?: boolean;
     parkourSprint?: boolean;
+    edgeSafety?: boolean;
+    maxSafeDrop?: number;
+    bridgeGaps?: boolean;
+    preferParkourOverBridge?: boolean;
   };
 }
 
