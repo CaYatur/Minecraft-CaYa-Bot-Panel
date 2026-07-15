@@ -2,7 +2,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { shouldSkipBlock } from "./blocks";
 import { loadParsedSchematic, materialCounts } from "./library";
-import { placeBlockAt } from "./place";
+import { distToBlock, pathNear, placeBlockAt, PLACE_REACH } from "./place";
 import { ScaffoldTracker } from "./scaffold";
 import {
   emptyBuildRuntime,
@@ -214,8 +214,36 @@ export class BuildService {
     };
   }
 
+  /** Katman katman, her katmanda yılan yolu (yürürken yerleştirme için) */
   private sortBlocks(blocks: SchematicBlock[]): SchematicBlock[] {
-    return [...blocks].sort((a, b) => a.dy - b.dy || a.dz - b.dz || a.dx - b.dx);
+    const byY = new Map<number, SchematicBlock[]>();
+    for (const b of blocks) {
+      const list = byY.get(b.dy) ?? [];
+      list.push(b);
+      byY.set(b.dy, list);
+    }
+    const ys = [...byY.keys()].sort((a, b) => a - b);
+    const out: SchematicBlock[] = [];
+    for (const y of ys) {
+      const layer = byY.get(y)!;
+      // z satırları, her satırda x; çift z ters x (serpentine)
+      layer.sort((a, b) => a.dz - b.dz || a.dx - b.dx);
+      const rows = new Map<number, SchematicBlock[]>();
+      for (const b of layer) {
+        const r = rows.get(b.dz) ?? [];
+        r.push(b);
+        rows.set(b.dz, r);
+      }
+      const zs = [...rows.keys()].sort((a, b) => a - b);
+      let flip = false;
+      for (const z of zs) {
+        const row = rows.get(z)!;
+        row.sort((a, b) => (flip ? b.dx - a.dx : a.dx - b.dx));
+        out.push(...row);
+        flip = !flip;
+      }
+    }
+    return out;
   }
 
   private async runBuild(
@@ -278,79 +306,196 @@ export class BuildService {
         `origin ${origin.x},${origin.y},${origin.z} · ${blocks.length} blok${rotLabel}`
       );
 
+      // --- dünya koordinatları önceden hesap ---
+      type Job = {
+        name: string;
+        wx: number;
+        wy: number;
+        wz: number;
+        done: boolean;
+        status?: "placed" | "skipped" | "failed";
+      };
+      const jobs: Job[] = blocks.map((b) => ({
+        name: b.name,
+        wx: origin.x + b.dx,
+        wy: origin.y + b.dy,
+        wz: origin.z + b.dz,
+        done: false
+      }));
+      this.log().info("İnşaat hedefleri hazır", `${jobs.length} koordinat · yürürken yerleştirme`);
+
       let placed = 0;
       let skipped = 0;
       let failed = 0;
       let consecutiveFail = 0;
-      // malzeme özeti her blokta değil — arada bir
       this.runtime.materials = this.materialsFor(blocks);
 
-      for (let i = 0; i < blocks.length; i++) {
-        if (token.cancelled) throw new Error(token.reason ?? "iptal");
-        const b = blocks[i]!;
-        const wx = origin.x + b.dx;
-        const wy = origin.y + b.dy;
-        const wz = origin.z + b.dz;
-
-        const skipReason = shouldSkipBlock(b.name, b.properties);
-        let res: "placed" | "skipped" | "failed";
-        if (skipReason) {
-          res = "skipped";
-        } else {
-          // retries=2: yanlış blok kır + koy; path hatasında bir daha dene
-          res = await placeBlockAt(this.instance, wx, wy, wz, b.name, token, this.scaffolds, { retries: 2 });
-        }
+      const markDone = (job: Job, res: "placed" | "skipped" | "failed") => {
+        if (job.done) return;
+        job.done = true;
+        job.status = res;
         if (res === "placed") {
-          this.scaffolds.protectStructure(wx, wy, wz);
+          placed++;
+          this.scaffolds.protectStructure(job.wx, job.wy, job.wz);
           consecutiveFail = 0;
-        }
-
-        if (res === "placed") placed++;
-        else if (res === "skipped") {
+        } else if (res === "skipped") {
           skipped++;
           consecutiveFail = 0;
         } else {
           failed++;
           consecutiveFail++;
         }
-
-        const ev: BuildPlacedBlock = {
-          name: b.name,
-          x: wx,
-          y: wy,
-          z: wz,
+        this.pushBlockEvent({
+          name: job.name,
+          x: job.wx,
+          y: job.wy,
+          z: job.wz,
           status: res,
           t: Date.now()
-        };
-        this.pushBlockEvent(ev);
-
+        });
         this.runtime.placed = placed;
         this.runtime.skipped = skipped;
         this.runtime.failed = failed;
         this.runtime.scaffoldsPlaced = this.scaffolds.count;
-        this.runtime.label = `${b.name} · ${i + 1}/${blocks.length} · +${placed} / atla ${skipped} / hata ${failed}`;
+        const doneN = placed + skipped + failed;
+        this.runtime.label = `${job.name} @${job.wx},${job.wy},${job.wz} · ${doneN}/${jobs.length} · +${placed}`;
+        this.emit();
+      };
 
-        // görev paneli + UI (throttled)
-        if (i % 3 === 0 || res === "placed" || i === blocks.length - 1) {
-          report({ done: i + 1, total: blocks.length, label: this.runtime.label });
+      /** Menzildeki tüm açık işleri bakıp koy (path açmadan) */
+      const placeReachable = async (): Promise<number> => {
+        let n = 0;
+        const open = jobs.filter((j) => !j.done);
+        // yakından uzağa
+        open.sort(
+          (a, b) =>
+            distToBlock(this.instance, a.wx, a.wy, a.wz) - distToBlock(this.instance, b.wx, b.wy, b.wz)
+        );
+        for (const job of open) {
+          if (token.cancelled) throw new Error(token.reason ?? "iptal");
+          if (distToBlock(this.instance, job.wx, job.wy, job.wz) > PLACE_REACH) continue;
+          const res = await placeBlockAt(
+            this.instance,
+            job.wx,
+            job.wy,
+            job.wz,
+            job.name,
+            token,
+            this.scaffolds,
+            { retries: 1, skipPath: true }
+          );
+          if (res === "outofreach") continue;
+          markDone(job, res);
+          n++;
         }
-        if (i % 8 === 0) {
-          this.runtime.materials = this.materialsFor(blocks.slice(i + 1));
-        }
-        this.emit(i === 0 || i === blocks.length - 1 || res === "failed");
+        return n;
+      };
 
-        // peş peşe çok hata → kısa mola (path kilitlenmesi)
-        if (consecutiveFail >= 5) {
-          this.runtime.label = `yol sorunu — kısa bekleme (${consecutiveFail} hata)`;
+      // --- yürürken yerleştirme ana döngü ---
+      let guard = 0;
+      const maxRounds = jobs.length * 6 + 20;
+      while (jobs.some((j) => !j.done) && guard < maxRounds) {
+        if (token.cancelled) throw new Error(token.reason ?? "iptal");
+        guard++;
+
+        // 1) menzildekileri koy
+        await placeReachable();
+        if (!jobs.some((j) => !j.done)) break;
+
+        // 2) sıradaki / en yakın hedefe yürü — yürürken de koy
+        const pending = jobs.filter((j) => !j.done);
+        // serpentine sırada ilk bitmemiş; yoksa en yakın
+        let next = pending[0]!;
+        let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
+        for (const j of pending) {
+          const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
+          if (d < bestD) {
+            bestD = d;
+            next = j;
+          }
+        }
+
+        this.runtime.label = `yürü → ${next.wx},${next.wy},${next.wz} · kalan ${pending.length}`;
+        report({
+          done: placed + skipped + failed,
+          total: jobs.length,
+          label: this.runtime.label
+        });
+        this.emit();
+
+        // pathfinder hedefi bırakmadan yürü; yolda menzile girenleri koy
+        await pathNear(
+          this.instance,
+          next.wx + 0.5,
+          next.wy,
+          next.wz + 0.5,
+          2.6,
+          token,
+          {
+            clearGoal: false,
+            timeoutMs: 6000,
+            onTick: async () => {
+              await placeReachable();
+            }
+          }
+        );
+
+        // 3) hedefe yaklaşıldı — path kes, bakıp koy (gerekirse scaffold)
+        try {
+          this.instance.bot?.pathfinder?.setGoal(null);
+        } catch {
+          /* */
+        }
+
+        if (!next.done) {
+          const res = await placeBlockAt(
+            this.instance,
+            next.wx,
+            next.wy,
+            next.wz,
+            next.name,
+            token,
+            this.scaffolds,
+            { retries: 2, skipPath: false }
+          );
+          if (res === "outofreach") {
+            // hâlâ uzak — fail sayma, sonraki tur
+          } else {
+            markDone(next, res);
+          }
+        }
+
+        // 4) tur sonunda menzilde kalanları bir daha
+        await placeReachable();
+
+        if (consecutiveFail >= 6) {
+          this.runtime.label = `yol sorunu — mola (${consecutiveFail} hata)`;
           this.emit(true);
           try {
             this.instance.bot?.pathfinder?.setGoal(null);
           } catch {
             /* */
           }
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, 350));
           consecutiveFail = 0;
         }
+
+        if (guard % 5 === 0) {
+          this.runtime.materials = this.materialsFor(
+            jobs.filter((j) => !j.done).map((j) => ({ dx: 0, dy: 0, dz: 0, name: j.name }))
+          );
+        }
+      }
+
+      // kalanları (maxRounds) failed say
+      for (const j of jobs) {
+        if (!j.done) markDone(j, "failed");
+      }
+
+      try {
+        this.instance.bot?.pathfinder?.setGoal(null);
+      } catch {
+        /* */
       }
 
       this.flushEmit();
@@ -359,7 +504,7 @@ export class BuildService {
       const cleared = await this.scaffolds.cleanup(this.instance.bot!, token, (c, t) => {
         this.runtime.scaffoldsCleared = c;
         this.runtime.label = `temizlik ${c}/${t}`;
-        report({ done: blocks.length, total: blocks.length, label: `scaffold ${c}/${t}` });
+        report({ done: jobs.length, total: jobs.length, label: `scaffold ${c}/${t}` });
         this.emit();
       });
       this.runtime.scaffoldsCleared = cleared;
@@ -373,7 +518,7 @@ export class BuildService {
       this.runtime.materials = this.materialsFor([]);
       this.setPhase("done", label);
       this.log().success(`İnşaat tamam: ${parsed.meta.name}`, label);
-      report({ done: blocks.length, total: blocks.length, label });
+      report({ done: jobs.length, total: jobs.length, label });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       try {
