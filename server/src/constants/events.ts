@@ -15,6 +15,7 @@ export const EV = {
   BOT_TASK: "bot:task",
   BOT_COMBAT: "bot:combat",
   BOT_NEARBY: "bot:nearby",
+  BOT_BUILD: "bot:build",
   PANEL_NOTIFY: "panel:notify",
 
   // panel -> server

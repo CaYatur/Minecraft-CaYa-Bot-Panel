@@ -138,6 +138,22 @@ export interface InventorySnapshot {
   ts: number;
 }
 
+export interface BuildRuntime {
+  phase: "idle" | "preparing" | "building" | "cleanup" | "done" | "failed" | "cancelled";
+  schematicId: string | null;
+  schematicName: string | null;
+  origin: { x: number; y: number; z: number } | null;
+  placed: number;
+  total: number;
+  skipped: number;
+  scaffoldsPlaced: number;
+  scaffoldsCleared: number;
+  materials: Array<{ name: string; need: number; have: number; missing: number }>;
+  label: string;
+  error?: string;
+  startedAt: number | null;
+}
+
 export interface BotSnapshot {
   config: BotConfig;
   status: BotStatus;
@@ -146,6 +162,7 @@ export interface BotSnapshot {
   tasks: { current: TaskSummary | null; queue: TaskSummary[] };
   inventory: InventorySnapshot | null;
   combat: CombatRuntime;
+  build?: BuildRuntime;
 }
 
 export interface StateSnapshot {

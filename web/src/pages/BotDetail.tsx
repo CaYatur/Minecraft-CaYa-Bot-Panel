@@ -7,6 +7,7 @@ import { GatherCraftPanel } from "../components/GatherCraftPanel";
 import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
+import { BuildPanel } from "../components/BuildPanel";
 import { NearbyPlayers } from "../components/NearbyPlayers";
 import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
@@ -15,7 +16,7 @@ import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work";
+type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work" | "build";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "💬 Sohbet" },
@@ -24,7 +25,8 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "tasks", label: "📌 Görevler" },
   { id: "combat", label: "⚔️ Dövüş" },
   { id: "survival", label: "🍖 Yaşam" },
-  { id: "work", label: "🪓 İş" }
+  { id: "work", label: "🪓 İş" },
+  { id: "build", label: "🏗️ Yapı" }
 ];
 
 export function BotDetail() {
@@ -156,6 +158,7 @@ export function BotDetail() {
         {tab === "combat" && <CombatPanel botId={id} />}
         {tab === "survival" && <SurvivalPanel botId={id} />}
         {tab === "work" && <GatherCraftPanel botId={id} />}
+        {tab === "build" && <BuildPanel botId={id} />}
       </div>
     </div>
   );

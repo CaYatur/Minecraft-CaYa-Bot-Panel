@@ -1,6 +1,14 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { BotManager, PanelError } from "../core/BotManager";
 import { ACTION_META, RULE_TEMPLATES, TRIGGER_META } from "../modules/automation/RuleEngine";
+import {
+  addCayaJsonSchematic,
+  addSchematicFromBase64,
+  deleteSchematic,
+  getSchematicMeta,
+  listSchematics,
+  loadParsedSchematic
+} from "../modules/build";
 import { getCatalog } from "../modules/catalog/minecraftCatalog";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
@@ -374,6 +382,88 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       const inst = manager.mustGet(req.params.id!);
       const maxDist = Math.max(4, Math.min(128, Number(req.query.radius) || 48));
       res.json({ players: inst.getNearbyPlayers(maxDist) });
+    })
+  );
+
+  // ---- schematics / yapı (Faz 14) ------------------------------------------------
+  r.get(
+    "/schematics",
+    h((_req, res) => {
+      res.json({ items: listSchematics() });
+    })
+  );
+
+  r.get(
+    "/schematics/:id",
+    h(async (req, res) => {
+      const meta = getSchematicMeta(req.params.id!);
+      if (!meta) throw new PanelError("Şema bulunamadı", 404);
+      const version = String(req.query.version ?? "1.20.4");
+      const parsed = await loadParsedSchematic(meta.id, version);
+      res.json({
+        meta: parsed.meta,
+        blockCount: parsed.blocks.length,
+        size: { w: parsed.width, h: parsed.height, l: parsed.length },
+        materials: Object.entries(
+          parsed.blocks.reduce<Record<string, number>>((acc, b) => {
+            acc[b.name] = (acc[b.name] ?? 0) + 1;
+            return acc;
+          }, {})
+        )
+          .map(([name, need]) => ({ name, need }))
+          .sort((a, b) => b.need - a.need)
+      });
+    })
+  );
+
+  r.post(
+    "/schematics",
+    h((req, res) => {
+      const body = req.body ?? {};
+      if (Array.isArray(body.blocks)) {
+        res.json(addCayaJsonSchematic({ name: String(body.name || "Şema"), blocks: body.blocks, note: body.note }));
+        return;
+      }
+      if (!body.dataBase64) throw new PanelError("dataBase64 veya blocks gerekli");
+      res.json(
+        addSchematicFromBase64({
+          name: String(body.name || "Şema"),
+          filename: body.filename ? String(body.filename) : undefined,
+          dataBase64: String(body.dataBase64),
+          note: body.note ? String(body.note) : undefined
+        })
+      );
+    })
+  );
+
+  r.delete(
+    "/schematics/:id",
+    h((req, res) => {
+      try {
+        if (!deleteSchematic(req.params.id!)) throw new PanelError("Şema bulunamadı", 404);
+        res.json({ ok: true });
+      } catch (e) {
+        if (e instanceof PanelError) throw e;
+        throw new PanelError(e instanceof Error ? e.message : String(e));
+      }
+    })
+  );
+
+  r.get(
+    "/bots/:id/build",
+    h((req, res) => {
+      res.json(manager.mustGet(req.params.id!).build.getRuntime());
+    })
+  );
+
+  r.get(
+    "/bots/:id/build/preview",
+    h(async (req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      const schematicId = String(req.query.schematicId ?? "");
+      if (!schematicId) throw new PanelError("schematicId gerekli");
+      const version = String(req.query.version ?? "1.20.4");
+      res.json(await inst.build.previewMaterials(schematicId, version));
     })
   );
 

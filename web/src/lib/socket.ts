@@ -3,6 +3,7 @@ import { useAppStore } from "../stores/useAppStore";
 import { EV } from "./events";
 import type {
   BotSnapshot,
+  BuildRuntime,
   ChatEntry,
   CombatRuntime,
   InventorySnapshot,
@@ -52,6 +53,7 @@ socket.on(EV.BOT_INVENTORY, (p: { botId: string; inventory: InventorySnapshot })
   store().patchBot(p.botId, { inventory: p.inventory })
 );
 socket.on(EV.BOT_COMBAT, (p: { botId: string; combat: CombatRuntime }) => store().patchBot(p.botId, { combat: p.combat }));
+socket.on(EV.BOT_BUILD, (p: { botId: string; build: BuildRuntime }) => store().patchBot(p.botId, { build: p.build }));
 // nearby: NearbyPlayers kendi dinleyicisi kullanır (store şişmesin)
 socket.on(EV.BOT_CHAT_QUEUE, (p: { botId: string; length: number }) => store().setChatQueue(p.botId, p.length));
 socket.on(EV.BOT_LOG, (e: LogEntry) => store().addLog(e));

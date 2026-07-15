@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 13 ✅ + companion UX (takip/saldırı/koruma basılı + WL)**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 14 ✅* Yapı/şema (API+UI; Paper saha)**
 
 ---
 
@@ -260,6 +260,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
 | 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
 | 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
+| 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (inşaat fiziği Paper) |
 
 ---
 
@@ -442,6 +443,34 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 #### 13.D — Küçük UX (önceki istekler)
 - [x] Modal backdrop kapanmaz; sunucu Seçiniz; chat parse; UI dil hizası; grok-smoke-all.
 
+### Faz 14 — Yapı / Şema İnşaat Sistemi ✅*
+
+> Kullanıcı isteği: genel **Yapı şemaları** kütüphanesi + bot başına **Yapı** sekmesi;
+> `.schem` / `.caya.json` dosyalarından yapı; referans = burası / koordinat / oyuncu;
+> ilerleme + gereken kaynak; erişilemeyen yerlere scaffold ile çıkıp iş bitince kırarak temizle.
+> *Saha: yerleştirme/scaffold fiziği Paper’da doğrulanmalı (flying-squid tıklama/entity sınırlı).*
+
+#### 14.A — Şema kütüphanesi (global)
+- [x] `data/schematics/` + `index.json` meta; örnek «Örnek Platform» seed.
+- [x] Parser: WorldEdit `.schem` (prismarine-schematic) + CaYa `.caya.json`.
+- [x] REST: list / get / upload (base64) / delete / blocks JSON; bot preview materials.
+- [x] Panel sayfası **/schematics** — liste, yükle, malzeme özeti, sil.
+
+#### 14.B — İnşaat motoru (bot)
+- [x] `modules/build/`: origin (here | coords | player), blok sırası (alt→üst).
+- [x] Malzeme sayımı: gereken vs envanter; eksikte red veya `allowPartial`.
+- [x] Yerleştirme: pathfinder yaklaş + `placeBlock`; doğru bloksa atla.
+- [x] Scaffold tracker: geçici bloklar; bitiş/iptalde **ters sırada dig**.
+- [x] Aksiyon: `build-schematic` · `stop-build`; TaskQueue USER; `bot:build` + snapshot.build.
+
+#### 14.C — Bot detay Yapı sekmesi
+- [x] Sekme **🏗️ Yapı**: şema, origin, başlat/durdur, ilerleme, malzeme tablosu.
+- [x] Scaffold listesi config.movement.scaffoldBlocks (gösterim).
+
+#### 14.D — Kabul
+- [x] Typecheck server+web temiz; örnek şema + REST list; UI rotaları.
+- [ ] Paper: küçük yapı + scaffold cleanup saha (flying-squid yetersiz).
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -516,7 +545,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 
 - Premium (Microsoft) hesap girişi (device-code akışı) — online-mode sunucular için.
 - Discord webhook bildirimleri; Discord'dan bot komutu köprüsü.
-- Şematik inşaat (mineflayer-builder ile .schem dosyasından yapı kurma).
+- ~~Şematik inşaat~~ → **Faz 14** (kendi build modülümüz; prismarine-schematic).
 - Tarım modülü: ekin ek/biç/yeniden ek, hayvan üretme, otomatik fırınlanmış yemek stoğu; balıkçılık.
 - Yay/ok ve kalkan kullanımı (gerçekçilik kurallarıyla); trident/riptide yok.
 - Bot başına worker_threads/child_process izolasyonu (10+ bot ölçeği).
@@ -557,6 +586,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Eşya/maden listesi için **minecraft-data** (sürüme göre, npm paketi; web scrape değil) — her sunucu profili `version` alanı ile katalog çözülür; `auto` → 1.20.4 fallback.
 - 2026-07-15 — Faz 13 açıldı: yakın oyuncu UI + otomasyon formu + katalog; çekirdek RuleEngine/katalog dosyaları WIP (`[~]`).
 - 2026-07-15 — Paper sohbet isimleri: 1.19+ `playerChat` gönderici UUID + `chat`/`whisper` olayları + JSON/clickEvent + öğrenilmiş prefix; sadece `message.toString()` yetmez (isim ayrı alanda).
+- 2026-07-15 — Faz 14 yapı: kendi `BuildService` (mineflayer-builder değil); şema global kütüphane `data/schematics`; scaffold defteri + cleanup zorunlu; progress `bot:build`.
 
 ---
 
@@ -720,3 +750,16 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 2. İlk Koru → ana takip; ek Koru → listeye ekler, takip değişmez; “Ana yap” ile ana kişi değişir.
 3. UI: koruma satırı vurgusu, `koru:[A,B] · ana:X`, Ana yap butonu.
 4. Typecheck temiz.
+
+### 2026-07-15 — Grok 4.5 — Faz 14 Yapı/şema sistemi
+
+**İstek:** Global yapı şemaları + bot Yapı sekmesi; schem; origin here/coords/player; malzeme+ilerleme; scaffold çıkış + geri alma.
+
+**Yapılanlar:**
+1. `server/src/modules/build/*` — library, place, scaffold tracker, BuildService.
+2. REST `/api/schematics`, preview, `build-schematic` / `stop-build`; snapshot.build + `bot:build`.
+3. UI: `/schematics` sayfası; bot detay **🏗️ Yapı** sekmesi.
+4. Örnek platform `.caya.json` seed; prismarine-schematic dep.
+5. TODO §7/§8/§14/§15 güncellendi; typecheck temiz.
+
+**Sınır:** Place/dig fiziği Paper saha; flying-squid pencere/tıklama zayıf. Büyük şemalarda yavaş (sıralı yerleştirme v1).

@@ -5,6 +5,7 @@ import { useAppStore } from "../stores/useAppStore";
 const NAV = [
   { to: "/", label: "Panel", icon: "🎛️" },
   { to: "/automations", label: "Otomasyonlar", icon: "⚙️" },
+  { to: "/schematics", label: "Yapı şemaları", icon: "🏗️" },
   { to: "/servers", label: "Sunucular", icon: "🌐" },
   { to: "/settings", label: "Ayarlar", icon: "🔧" }
 ];

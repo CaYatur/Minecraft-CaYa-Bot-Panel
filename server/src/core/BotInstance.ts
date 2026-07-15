@@ -10,6 +10,7 @@ import {
   resolveUsernameFromSender,
   stripColorCodes
 } from "../modules/chat/parse";
+import { BuildService } from "../modules/build";
 import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
 import { GatherService } from "../modules/gather";
@@ -52,6 +53,7 @@ export class BotInstance extends EventEmitter {
   readonly survival: SurvivalService;
   readonly gather: GatherService;
   readonly craft: CraftService;
+  readonly build: BuildService;
   private foodWatchTimer: NodeJS.Timeout | null = null;
   private nearbyTick = 0;
   private lastNearbyKey = "";
@@ -81,6 +83,7 @@ export class BotInstance extends EventEmitter {
     this.survival = new SurvivalService(this);
     this.gather = new GatherService(this);
     this.craft = new CraftService(this);
+    this.build = new BuildService(this);
     this.limiter = new ChatRateLimiter(
       (text) => {
         if (this.bot && this.status === "online") {
@@ -222,7 +225,8 @@ export class BotInstance extends EventEmitter {
       chatQueueLength: this.limiter.length,
       tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries },
       inventory: this.lastInventory,
-      combat: this.combat.getRuntime()
+      combat: this.combat.getRuntime(),
+      build: this.build.getRuntime()
     };
   }
 
@@ -363,6 +367,27 @@ export class BotInstance extends EventEmitter {
       case "fetch":
       case "getir":
         return this.enqueueFetch(String(action.item ?? ""), Number(action.count ?? 1), String(action.player ?? action.kime ?? ""));
+      // ---- Faz 14 yapı / şema --------------------------------------------------
+      case "build-schematic":
+      case "yapı":
+      case "build": {
+        const originMode = String(action.originMode ?? action.mode ?? "here") as "here" | "coords" | "player";
+        return this.build.enqueueBuild({
+          schematicId: String(action.schematicId ?? action.id ?? ""),
+          origin: {
+            mode: originMode,
+            x: action.x != null ? Number(action.x) : undefined,
+            y: action.y != null ? Number(action.y) : undefined,
+            z: action.z != null ? Number(action.z) : undefined,
+            player: action.player ? String(action.player) : undefined
+          },
+          allowPartial: action.allowPartial === true || action.allowPartial === "true",
+          versionHint: action.version ? String(action.version) : undefined
+        });
+      }
+      case "stop-build":
+        this.build.stopBuild("panel");
+        return null;
       default:
         throw new Error(`Bilinmeyen aksiyon tipi: ${type || "(boş)"}`);
     }
