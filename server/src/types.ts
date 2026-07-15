@@ -106,6 +106,18 @@ export interface TaskSummary {
   label: string;
   state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
   progress?: { done: number; total: number; label?: string };
+  error?: string;
+}
+
+export interface Waypoint {
+  id: string;
+  serverId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  dimension: string;
+  note?: string;
 }
 
 export interface BotSnapshot {
@@ -113,12 +125,13 @@ export interface BotSnapshot {
   status: BotStatus;
   runtime: BotRuntimeState;
   chatQueueLength: number;
-  currentTask?: TaskSummary | null;
+  tasks: { current: TaskSummary | null; queue: TaskSummary[] };
 }
 
 export interface StateSnapshot {
   servers: ServerProfile[];
   bots: BotSnapshot[];
+  waypoints: Record<string, Waypoint[]>;
   supportedVersions: string[];
 }
 

@@ -4,6 +4,7 @@ import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
 import { LogPanel } from "../components/LogPanel";
 import { StatusBadge } from "../components/StatusBadge";
+import { TasksPanel } from "../components/TasksPanel";
 import { api } from "../lib/api";
 import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
@@ -145,11 +146,7 @@ export function BotDetail() {
             🎒 Envanter arayüzü Faz 5'te geliyor (TODO.md)
           </div>
         )}
-        {tab === "tasks" && (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-            📌 Görev kuyruğu Faz 4/10'da geliyor (TODO.md)
-          </div>
-        )}
+        {tab === "tasks" && <TasksPanel botId={id} />}
       </div>
     </div>
   );

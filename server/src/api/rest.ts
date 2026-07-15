@@ -126,6 +126,94 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     })
   );
 
+  // ---- actions & tasks (Faz 4) --------------------------------------------------
+  r.post(
+    "/bots/:id/action",
+    h((req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      let action: Record<string, unknown> = req.body ?? {};
+
+      // waypoint hedefi burada çözülür (görev etiketi waypoint adını taşır)
+      if (action.type === "goto-waypoint") {
+        const wp = manager.waypoints.get(String(action.waypointId ?? ""));
+        if (wp.serverId !== inst.config.serverId) throw new PanelError("Bu waypoint başka bir sunucu profiline ait.");
+        if (inst.status === "online" && inst.runtime.dimension !== wp.dimension) {
+          throw new PanelError(`Waypoint ${wp.dimension} boyutunda, bot ${inst.runtime.dimension} boyutunda — önce boyut değiştir.`);
+        }
+        action = { type: "goto", x: wp.x, y: wp.y, z: wp.z, range: action.range ?? 2, label: `waypoint'e git: ${wp.name}` };
+      }
+
+      try {
+        const task = inst.enqueueAction(action);
+        res.json({ ok: true, task });
+      } catch (err) {
+        throw new PanelError(err instanceof Error ? err.message : String(err));
+      }
+    })
+  );
+
+  r.post(
+    "/bots/:id/tasks/:taskId/cancel",
+    h((req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      if (!inst.tasks.cancel(req.params.taskId!, "panelden iptal edildi")) {
+        throw new PanelError("Görev bulunamadı (bitmiş olabilir).", 404);
+      }
+      res.json({ ok: true });
+    })
+  );
+
+  r.post(
+    "/bots/:id/tasks/cancel-all",
+    h((req, res) => {
+      manager.mustGet(req.params.id!).tasks.cancelAll("panelden tümü iptal edildi");
+      res.json({ ok: true });
+    })
+  );
+
+  // ---- waypoints (Faz 4) ---------------------------------------------------------
+  r.get(
+    "/waypoints",
+    h((req, res) => {
+      const serverId = String(req.query.serverId ?? "");
+      if (!serverId) throw new PanelError("serverId sorgu parametresi gerekli.");
+      res.json(manager.waypoints.forServer(serverId));
+    })
+  );
+
+  r.post(
+    "/waypoints",
+    h((req, res) => {
+      const { serverId, name, x, y, z, dimension, note } = req.body ?? {};
+      res.json(manager.createWaypoint(String(serverId ?? ""), { name, x, y, z, dimension, note }));
+    })
+  );
+
+  r.delete(
+    "/waypoints/:id",
+    h((req, res) => {
+      manager.deleteWaypoint(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+
+  r.post(
+    "/bots/:id/waypoint-here",
+    h((req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      if (inst.status !== "online") throw new PanelError("Bot çevrimdışı — güncel konum alınamıyor.");
+      const wp = manager.createWaypoint(inst.config.serverId, {
+        name: String(req.body?.name ?? ""),
+        x: inst.runtime.position.x,
+        y: inst.runtime.position.y,
+        z: inst.runtime.position.z,
+        dimension: inst.runtime.dimension,
+        note: req.body?.note
+      });
+      res.json(wp);
+    })
+  );
+
   r.get(
     "/bots/:id/chat-history",
     h((req, res) => {

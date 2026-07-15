@@ -1,9 +1,10 @@
 import { EventEmitter } from "events";
 import { loadJson, saveJson } from "../persistence/store";
-import type { BotConfig, ServerProfile, StateSnapshot } from "../types";
+import type { BotConfig, ServerProfile, StateSnapshot, Waypoint } from "../types";
 import { USERNAME_RE, defaultBotConfig, mergeConfig, newId } from "../types";
 import { createLogger } from "../utils/logger";
 import { BotInstance } from "./BotInstance";
+import { WaypointStore } from "./Waypoints";
 
 const BOTS_FILE = "bots.json";
 const SERVERS_FILE = "servers.json";
@@ -21,10 +22,12 @@ export interface CreateBotInput {
  */
 export class BotManager extends EventEmitter {
   readonly bots = new Map<string, BotInstance>();
+  readonly waypoints = new WaypointStore();
   servers: ServerProfile[] = [];
   private readonly log = createLogger("manager");
 
   boot() {
+    this.waypoints.load();
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
     for (const cfg of configs) this.instantiate(cfg);
@@ -198,11 +201,32 @@ export class BotManager extends EventEmitter {
   }
 
   snapshot(supportedVersions: string[]): StateSnapshot {
+    const waypoints: Record<string, Waypoint[]> = {};
+    for (const s of this.servers) {
+      const list = this.waypoints.forServer(s.id);
+      if (list.length > 0) waypoints[s.id] = list;
+    }
     return {
       servers: this.servers,
       bots: [...this.bots.values()].map((b) => b.getSnapshot()),
+      waypoints,
       supportedVersions
     };
+  }
+
+  // ---- waypoints (değişiklikler "changed" ile panellere yayınlanır) -------------
+
+  createWaypoint(serverId: string, input: { name: string; x: number; y: number; z: number; dimension?: string; note?: string }): Waypoint {
+    if (!this.getServer(serverId)) throw new PanelError("Sunucu profili bulunamadı.", 404);
+    const wp = this.waypoints.create(serverId, input);
+    this.log.success(`Waypoint kaydedildi: ${wp.name} (${wp.x}, ${wp.y}, ${wp.z})`);
+    this.emit("changed");
+    return wp;
+  }
+
+  deleteWaypoint(id: string) {
+    this.waypoints.delete(id);
+    this.emit("changed");
   }
 
   shutdown() {

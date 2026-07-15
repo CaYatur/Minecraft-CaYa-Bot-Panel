@@ -250,7 +250,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 1 | Tek bot: bağlan, yaşat, izle | ✅ Bitti |
 | 2 | Çoklu bot + sunucu profilleri | ✅ Bitti |
 | 3 | Sohbet sistemi (izle + yaz) ve log paneli | ✅ Bitti |
-| 4 | Hareket: pathfinder, waypoint, engel aşma | ☐ Bekliyor |
+| 4 | Hareket: pathfinder, waypoint, engel aşma | ✅ Bitti* (engel/takip fiziği Paper'da doğrulanacak) |
 | 5 | Envanter arayüzü ve kısıtlar | ☐ Bekliyor |
 | 6 | Gerçekçi dövüş sistemi | ☐ Bekliyor |
 | 7 | Hayatta kalma: yeme, avlanma, pişirme | ☐ Bekliyor |
@@ -308,16 +308,22 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] "Tüm botlar" birleşik sohbet görünümü (Dashboard alt panelinde Loglar/Birleşik Sohbet sekmesi; bot etiketli).
 - [x] **Kabul:** İki bot birbirinin mesajını panelde gösterdi (parse'lı, oyuncu adıyla); panelden/REST'ten yazılan mesaj oyunda göründü (echo doğrulandı); bağlantı hatası yalnızca Log panelinde kırmızı göründü. *(2026-07-15 smoke + UI testi.)*
 
-### Faz 4 — Hareket: Pathfinder, Waypoint, Engel Aşma
+### Faz 4 — Hareket: Pathfinder, Waypoint, Engel Aşma ✅*
 
-- [ ] pathfinder entegrasyonu; `Movements` ayarları bot config'ten: koşma, zıplama, `canDig` (kırarak ilerleme aç/kapa), 1-blok parkur, **scaffolding**: feda edilebilir blok listesi (varsayılan: dirt, cobblestone, netherrack) — "gereksiz bloğu koyup engel aşma" bununla sağlanır.
-- [ ] Güvenlik: lav/ateş/kaktüs/boşluğa düşme kaçınma maliyetleri; suya düşerse yüzerek çıkma.
-- [ ] Görev tipleri: `goto(x,y,z)` · `gotoPlayer(isim, mesafe)` · `follow(isim, mesafe)` (sürekli) · `stop`.
-- [ ] Waypoint sistemi: sunucu profiline bağlı isimli konumlar (`data/waypoints.json`); panelden "buradayken kaydet"; `goto waypoint:<isim>`.
-- [ ] Takılma tespiti: X saniye ilerleme yoksa yeniden planla; N denemede olmuyorsa görevi `failed` yap ve Log'a **neden** yaz ("hedefe ulaşan güvenli yol bulunamadı").
-- [ ] Panel: bot detayında hızlı hareket kutusu (koordinat gir → git), waypoint listesi (git/kaydet/sil), "Durdur" her zaman görünür.
-- [ ] Panel komut satırı (temel): bot detayında tek satır komut girişi — `goto 100 64 -200`, `follow Cagan`, `stop` (tam sözdizimi listesi ileride genişler).
-- [ ] **Kabul:** Bot verilen koordinata gider; yolda 2 blokluk çukuru blok koyarak, duvarı zıplayarak/kırarak aşar; ulaşamazsa sebep Log'da.
+> *Saha notu: flying-squid test sunucusu düz zemin + oyuncu varlığı yayınlamıyor. Bu yüzden
+> "duvar/çukur aşma" ve "takip/yanına-git FİZİĞİ" kodda hazır ama gerçek (Paper) sunucuda
+> doğrulanmadı. İlk Paper testinde şunları koş: 2 blokluk duvar aşma, çukura blok koyma,
+> `follow` ve `goto-player`. Gerisi otomatik testle doğrulandı (`scripts/movement-test.mjs`).
+
+- [x] pathfinder entegrasyonu; `Movements` ayarları bot config'ten: koşma, zıplama, `canDig`, 1-blok parkur, **scaffolding**: feda edilebilir blok listesi (dirt, cobblestone, netherrack) + `allow1by1towers`. `modules/movement/index.ts`.
+- [~] Güvenlik: lav/ateş kaçınma şu an pathfinder'ın **varsayılan** maliyetleriyle; özel ayar (ör. su çıkışı, kaktüs) ve doğrulaması Paper testine kaldı.
+- [x] Görev tipleri: `goto(x,y,z)` · `goto-player(isim)` · `follow(isim, mesafe)` (sürekli, iptale dek) · `stop`. *(goto+stop uçtan uca doğrulandı; follow "oyuncu görünmüyor" bekleme durumu ve iptali doğrulandı, fizik Paper'da.)*
+- [x] Waypoint sistemi: sunucu profiline bağlı isimli konumlar (`data/waypoints.json`); "buradan kaydet" (bot konumundan); goto-waypoint; boyut uyuşmazlığı kontrolü. *(kaydet→git→sil test edildi.)*
+- [~] Takılma tespiti: pathfinder `noPath`/`timeout` durumları + görev toplam zaman aşımı (3 dk) sebep mesajıyla `failed` yapıyor. Eksik: "X sn ilerleme yoksa yeniden planla" ilerleme bekçisi (Faz 8 madencilikte lazım olacak — o zaman ekle).
+- [x] Panel: bot detayında hızlı hareket kutusu, waypoint listesi (git/kaydet/sil), "■ Durdur" görünür (TasksPanel).
+- [x] Panel komut satırı: `goto x y z` · `follow isim [mesafe]` · `yanina isim` · `wp isim` · `wpkaydet isim` · `say metin` · `stop`.
+- [x] **Görev kuyruğu çekirdeği erkenden alındı** (`core/TaskQueue.ts`, İ6 öncelikleri + kesmede yeniden kuyruklama v1; bağlam koruyan pause Faz 10'da). Panel: aktif görev + ilerleme çubuğu + kuyruk + iptal düğmeleri.
+- [~] **Kabul:** Bot verilen koordinata gider ✓ (12+12 blok, ±3.5); waypoint döngüsü ✓; durdur ✓; ulaşamazsa sebep Log'da ✓ (noPath/timeout mesajları). Duvar/çukur aşma → Paper doğrulaması bekliyor (yukarıdaki saha notu).
 
 ### Faz 5 — Envanter Arayüzü ve Kısıtlar
 
@@ -476,6 +482,8 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Fırın/sandık pencereleri açıkken bot hareket edemez; pencereyi işi bitince **kapatmayı unutma** (aksi halde görevler kilitlenir).
 - `bot.dig` yanlış aletle çok yavaştır; her kazıda `mineflayer-tool` ile alet seç.
 - Aynı prosese çok bot: her bot ~50–150 MB; 10+ bot planlanıyorsa Backlog'daki worker izolasyonunu öne çek.
+- **flying-squid test sunucusu sınırları (2026-07-15'te saptandı):** (1) Oyuncu VARLIKLARINI (entity) istemcilere yayınlamıyor — `bot.players[x].entity` hep undefined, dolayısıyla follow/goto-player/dövüş fiziği orada TEST EDİLEMEZ (1.16.1'de tab listesi de boş; 1.8.8'de tab listesi dolu ama entity yine yok). (2) `bot.players[me].ping` hep undefined → panelde ping 0 görünür. (3) Süperflat düz zemin — engel aşma senaryosu kurulamaz. Bu üçü İÇİN gerçek Paper sunucu şart; bağlantı/sohbet/hareket/kazı testleri için flying-squid yeterli.
+- **Panel (zustand) kuralı:** store seçicisi içinde yeni dizi/obje üretme (`s.x[id] ?? []` YASAK) — "getSnapshot should be cached" sonsuz döngüsüyle tüm sayfayı karartır. Varsayılanı seçici DIŞINDA modül sabitiyle ver (`?? EMPTY`). App kökünde ErrorBoundary var ama kuralı yine de boz*ma*.
 
 ---
 
@@ -510,3 +518,6 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — KRİTİK DERS: bot.quit sonrası `removeAllListeners()` yetmez — geç gelen socket 'error' olayı dinleyicisiz kalınca Node TÜM prosesi düşürüyor. Çözüm: teardown'da no-op error yakalayıcı + index.ts'te uncaughtException güvenlik ağı (İ4). Bu kalıbı bozma!
 - 2026-07-15 — Sunucu/bot config CRUD'ları manager "changed" olayı → tüm panellere anlık snapshot yayını (staleness bug'ı böyle çözüldü).
 - 2026-07-15 — Sohbette çift kayıt önleme: yalnızca `message` olayı dinleniyor (chat/whisper olayları AYRICA dinlenmiyor); tür sınıflandırması parse.ts regex katmanında.
+- 2026-07-15 — TaskQueue Faz 10 beklenmeden Faz 4'te kuruldu (hareket görevleri için gerekliydi). Kesme modeli v1: yüksek öncelik gelince çalışan görev iptal + paramlarıyla yeniden kuyruğa (yeniden başlatılabilir görevlerde "devam" etkisi). Runner'lar bot referansını ÇALIŞMA anında `instance.bot`tan alır (yeniden bağlanma sonrası bayat referans olmasın).
+- 2026-07-15 — Takip/yanına-git fiziği flying-squid'de doğrulanamadı (entity yayını yok, §12) — movement-test bu durumu otomatik ATLAR; Paper'da tam koşulmalı.
+- 2026-07-15 — Panel App köküne ErrorBoundary eklendi (tek bileşen hatası tüm paneli karartmasın).

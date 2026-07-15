@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { BotSnapshot, ChatEntry, LogEntry, ServerProfile, StateSnapshot } from "../lib/types";
+import type { BotSnapshot, ChatEntry, LogEntry, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
 
 const CHAT_CAP = 500;
 const LOG_CAP = 1000;
@@ -16,6 +16,7 @@ interface AppState {
   servers: ServerProfile[];
   supportedVersions: string[];
   bots: Record<string, BotSnapshot>;
+  waypoints: Record<string, Waypoint[]>;
   chat: Record<string, ChatEntry[]>;
   chatQueue: Record<string, number>;
   logs: LogEntry[];
@@ -41,6 +42,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   servers: [],
   supportedVersions: [],
   bots: {},
+  waypoints: {},
   chat: {},
   chatQueue: {},
   logs: [],
@@ -54,7 +56,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (const b of s.bots) bots[b.config.id] = b;
       const chat = { ...st.chat };
       for (const id of Object.keys(chat)) if (!bots[id]) delete chat[id];
-      return { servers: s.servers, supportedVersions: s.supportedVersions, bots, chat, snapshotLoaded: true };
+      return {
+        servers: s.servers,
+        supportedVersions: s.supportedVersions,
+        bots,
+        chat,
+        waypoints: s.waypoints ?? {},
+        snapshotLoaded: true
+      };
     }),
 
   patchBot: (botId, patch) =>

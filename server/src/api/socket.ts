@@ -15,6 +15,7 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     inst.on("position", (p) => io.emit(EV.BOT_POSITION, p));
     inst.on("chat", (e) => io.emit(EV.BOT_CHAT, e));
     inst.on("chatQueue", (length: number) => io.emit(EV.BOT_CHAT_QUEUE, { botId: inst.config.id, length }));
+    inst.on("task", (p) => io.emit(EV.BOT_TASK, p));
   };
 
   for (const inst of manager.bots.values()) wireInstance(inst);
@@ -39,12 +40,15 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
       if (inst && text) inst.sendChat(text);
     });
 
-    socket.on(EV.BOT_ACTION, (payload: { botId?: string; type?: string }) => {
-      // Faz 4+ ile genişler (goto/follow/stop...). Şimdilik start/stop.
+    socket.on(EV.BOT_ACTION, (payload: { botId?: string; type?: string; [k: string]: unknown }) => {
+      // hareket/sohbet aksiyonları (bot yaşam döngüsü start/stop REST üzerinden yürür)
       const inst = payload?.botId ? manager.get(payload.botId) : undefined;
       if (!inst) return;
-      if (payload.type === "start") inst.start();
-      else if (payload.type === "stop") inst.stop();
+      try {
+        inst.enqueueAction(payload);
+      } catch (err) {
+        log.warn(`Socket aksiyonu çalıştırılamadı (${payload?.type})`, err instanceof Error ? err.message : String(err));
+      }
     });
 
     socket.on("disconnect", () => log.debug(`Panel ayrıldı (${socket.id})`));

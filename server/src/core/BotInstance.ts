@@ -4,11 +4,13 @@ import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import { parseChatMessage } from "../modules/chat/parse";
-import type { BotConfig, BotRuntimeState, BotSnapshot, BotStatus, ChatEntry, ServerProfile } from "../types";
+import { runFollow, runGoto, runGotoPlayer, stopMovement } from "../modules/movement";
+import type { BotConfig, BotRuntimeState, BotSnapshot, BotStatus, ChatEntry, ServerProfile, TaskSummary } from "../types";
 import { defaultRuntime } from "../types";
 import { chatComponentToText, friendlyError } from "../utils/chatText";
 import { createLogger, type BotLogger } from "../utils/logger";
 import { ChatRateLimiter } from "./ChatRateLimiter";
+import { PRIORITY, TaskQueue } from "./TaskQueue";
 
 const RECONNECT_DELAYS_MS = [5_000, 10_000, 30_000, 60_000];
 const CHAT_RING_CAP = 500;
@@ -23,6 +25,7 @@ export class BotInstance extends EventEmitter {
   status: BotStatus = "stopped";
   runtime: BotRuntimeState = defaultRuntime();
   readonly chatHistory: ChatEntry[] = [];
+  readonly tasks = new TaskQueue();
 
   bot: Bot | null = null;
   private wantsRunning = false;
@@ -52,6 +55,16 @@ export class BotInstance extends EventEmitter {
       () => this.config.chat.minMessageIntervalMs,
       (n) => this.emit("chatQueue", n)
     );
+
+    this.tasks.on("update", () => {
+      this.emit("task", {
+        botId: this.config.id,
+        current: this.tasks.currentSummary,
+        queue: this.tasks.queueSummaries
+      });
+    });
+    this.tasks.on("taskDone", (s: TaskSummary) => this.log.success(`Görev tamamlandı: ${s.label}`));
+    this.tasks.on("taskFailed", (s: TaskSummary, err: string) => this.log.error(`Görev başarısız: ${s.label}`, err));
   }
 
   // ---- lifecycle ------------------------------------------------------------
@@ -71,6 +84,7 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.tasks.cancelAll("bot durduruldu");
     this.limiter.clear();
     const bot = this.bot;
     if (bot) {
@@ -105,8 +119,56 @@ export class BotInstance extends EventEmitter {
       status: this.status,
       runtime: this.runtime,
       chatQueueLength: this.limiter.length,
-      currentTask: null
+      tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries }
     };
+  }
+
+  /**
+   * Panel/otomasyon aksiyonlarını görev kuyruğuna çevirir (Faz 4: hareket).
+   * Dönen özet null ise aksiyon anlık çalışmıştır (stop/chat gibi), görev değildir.
+   */
+  enqueueAction(action: Record<string, unknown>): TaskSummary | null {
+    const type = String(action.type ?? "");
+    switch (type) {
+      case "goto": {
+        const x = num(action.x, "x");
+        const y = num(action.y, "y");
+        const z = num(action.z, "z");
+        const range = clampRange(action.range);
+        const label = (action.label as string) ?? `git: ${Math.round(x)} ${Math.round(y)} ${Math.round(z)}`;
+        return this.tasks.enqueue(
+          { type, label, priority: PRIORITY.USER, params: { x, y, z, range } },
+          () => (token, report) => runGoto(this, x, y, z, range, token, report)
+        );
+      }
+      case "goto-player": {
+        const player = str(action.player, "player");
+        const range = clampRange(action.range ?? 2);
+        return this.tasks.enqueue(
+          { type, label: `oyuncuya git: ${player}`, priority: PRIORITY.USER, params: { player, range } },
+          () => (token, report) => runGotoPlayer(this, player, range, token, report)
+        );
+      }
+      case "follow": {
+        const player = str(action.player, "player");
+        const distance = clampRange(action.distance ?? 3);
+        return this.tasks.enqueue(
+          { type, label: `takip: ${player} (iptale dek)`, priority: PRIORITY.USER, params: { player, distance } },
+          () => (token, report) => runFollow(this, player, distance, token, report)
+        );
+      }
+      case "stop":
+        stopMovement(this);
+        this.log.info("Hareket ve görev kuyruğu durduruldu (kullanıcı)");
+        return null;
+      case "chat": {
+        const text = str(action.text, "text");
+        this.sendChat(text);
+        return null;
+      }
+      default:
+        throw new Error(`Bilinmeyen aksiyon tipi: ${type || "(boş)"}`);
+    }
   }
 
   // ---- connection -----------------------------------------------------------
@@ -211,6 +273,10 @@ export class BotInstance extends EventEmitter {
 
     bot.on("end", (reason: string) => {
       this.log.info(`Bağlantı kapandı (${reason || "bilinmiyor"})`);
+      if (this.tasks.currentSummary) {
+        this.log.warn("Bağlantı koptuğu için aktif görevler iptal edildi (görev kalıcılığı: Faz 10)");
+      }
+      this.tasks.cancelAll("bağlantı koptu");
       this.teardownBot();
       if (this.wantsRunning) {
         this.scheduleReconnect();
@@ -366,4 +432,19 @@ function fmtPos(p: { x: number; y: number; z: number }): string {
 }
 function sanitizeFile(s: string): string {
   return s.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+function num(v: unknown, field: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new Error(`Geçersiz sayı: ${field}`);
+  return n;
+}
+function str(v: unknown, field: string): string {
+  const s = String(v ?? "").trim();
+  if (!s) throw new Error(`Boş olamaz: ${field}`);
+  return s;
+}
+function clampRange(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(16, Math.floor(n)));
 }
