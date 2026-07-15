@@ -1,19 +1,21 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { useI18n } from "../i18n/useI18n";
 import { useAppStore } from "../stores/useAppStore";
-
-const NAV = [
-  { to: "/", label: "Panel", icon: "🎛️" },
-  { to: "/automations", label: "Otomasyonlar", icon: "⚙️" },
-  { to: "/schematics", label: "Yapı şemaları", icon: "🏗️" },
-  { to: "/servers", label: "Sunucular", icon: "🌐" },
-  { to: "/settings", label: "Ayarlar", icon: "🔧" }
-];
 
 export function Layout({ children }: { children: ReactNode }) {
   const connected = useAppStore((s) => s.connected);
   const toasts = useAppStore((s) => s.toasts);
   const dismiss = useAppStore((s) => s.dismissToast);
+  const { t, locale, preference, setLocalePreference } = useI18n();
+
+  const NAV = [
+    { to: "/", label: t("nav.panel"), icon: "🎛️" },
+    { to: "/automations", label: t("nav.automations"), icon: "⚙️" },
+    { to: "/schematics", label: t("nav.schematics"), icon: "🏗️" },
+    { to: "/servers", label: t("nav.servers"), icon: "🌐" },
+    { to: "/settings", label: t("nav.settings"), icon: "🔧" }
+  ];
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -21,10 +23,10 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-2 px-4 py-4">
           <span className="text-2xl">🐺</span>
           <div>
-            <div className="text-sm font-bold tracking-wide text-zinc-100">CaYa Bot Panel</div>
+            <div className="text-sm font-bold tracking-wide text-zinc-100">{t("app.name")}</div>
             <div className="flex items-center gap-1.5 text-xs text-zinc-500">
               <span className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`} />
-              {connected ? "Bağlı" : "Bağlantı yok"}
+              {connected ? t("connection.connected") : t("connection.disconnected")}
             </div>
           </div>
         </div>
@@ -44,10 +46,42 @@ export function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto px-4 py-3 text-[10px] leading-relaxed text-zinc-600">
-          Sistem mesajları asla oyun sohbetine yazılmaz (İ1).
-          <br />
-          Yol haritası: TODO.md
+        <div className="mt-auto space-y-2 border-t border-zinc-800/80 px-3 py-3">
+          <div className="px-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+            🌐 {t("language.title")}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(
+              [
+                ["auto", t("language.auto")],
+                ["en", "EN"],
+                ["tr", "TR"]
+              ] as const
+            ).map(([code, label]) => (
+              <button
+                key={code}
+                type="button"
+                title={label}
+                onClick={() => setLocalePreference(code)}
+                className={`rounded px-2 py-1 text-[10px] font-medium ${
+                  preference === code
+                    ? "bg-indigo-600 text-white"
+                    : "bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300"
+                }`}
+              >
+                {label === t("language.auto") ? "AUTO" : label}
+              </button>
+            ))}
+          </div>
+          <p className="px-1 text-[10px] leading-relaxed text-zinc-600">
+            {t(`language.${locale}`)}
+            {preference === "auto" ? ` · ${t("language.auto")}` : ""}
+          </p>
+          <p className="px-1 text-[10px] leading-relaxed text-zinc-600">
+            {t("app.principleI1")}
+            <br />
+            {t("app.roadmap")}
+          </p>
         </div>
       </aside>
 
@@ -55,19 +89,19 @@ export function Layout({ children }: { children: ReactNode }) {
 
       {/* toasts */}
       <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-80 flex-col gap-2">
-        {toasts.map((t) => (
+        {toasts.map((toast) => (
           <button
-            key={t.id}
-            onClick={() => dismiss(t.id)}
+            key={toast.id}
+            onClick={() => dismiss(toast.id)}
             className={`pointer-events-auto rounded-lg border px-3 py-2 text-left text-sm shadow-lg backdrop-blur ${
-              t.level === "error"
+              toast.level === "error"
                 ? "border-red-800 bg-red-950/90 text-red-200"
-                : t.level === "success"
+                : toast.level === "success"
                   ? "border-emerald-800 bg-emerald-950/90 text-emerald-200"
                   : "border-zinc-700 bg-zinc-900/90 text-zinc-200"
             }`}
           >
-            {t.message}
+            {toast.message}
           </button>
         ))}
       </div>

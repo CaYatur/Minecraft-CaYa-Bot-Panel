@@ -30,6 +30,11 @@ export interface BotConfig {
     jumpCrit: boolean;
     fleeAtHealth: number;
     chaseDistance: number;
+    /** hedefe kilitliyken yakın tehditlere ara vuruş */
+    cleaveNearby?: boolean;
+    cleaveRange?: number;
+    cleaveMobs?: boolean;
+    cleavePlayers?: boolean;
   };
   survival: {
     autoEat: boolean;

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -27,6 +28,7 @@ interface SchematicDetail {
 /** Global yapı şemaları kütüphanesi (Faz 14) */
 export function Schematics() {
   const toast = useAppStore((s) => s.toast);
+  const { t } = useI18n();
   const [items, setItems] = useState<SchematicMeta[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<SchematicDetail | null>(null);
@@ -108,7 +110,7 @@ export function Schematics() {
   return (
     <div className="flex h-full flex-col gap-4 p-6">
       <div>
-        <h1 className="text-xl font-bold text-zinc-100">Yapı şemaları</h1>
+        <h1 className="text-xl font-bold text-zinc-100">{t("schematics.title")}</h1>
         <p className="mt-1 text-sm text-zinc-500">
           WorldEdit <span className="mono text-zinc-400">.schem</span>, Litematica{" "}
           <span className="mono text-zinc-400">.litematic</span> veya CaYa{" "}

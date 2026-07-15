@@ -927,16 +927,38 @@ getRuntime(): CombatRuntime {
           break;
         }
 
-        if (!inMeleeRange(bot, entity, this.cfg().reach)) {
-          await this.approachEntity(entity, Math.max(1, (this.cfg().reach ?? 3) - 0.5), token);
+        const reach = this.cfg().reach ?? 3;
+        const swingAt = this.chooseSwingTarget(entity);
+        const primaryInRange = inMeleeRange(bot, entity, reach);
+        const swingInRange = inMeleeRange(bot, swingAt, reach);
+
+        // Ana hedef menzilde değilse ve ara hedef de yoksa yaklaş (ana hedefe kenetlenme)
+        if (!primaryInRange && !swingInRange) {
+          await this.approachEntity(entity, Math.max(1, reach - 0.5), token);
+          continue;
+        }
+        // Ara hedef menzilde ama ana değil — yine de ana hedefe yürümeye devam etmeden önce ara vuruş
+        if (!swingInRange) {
+          await this.approachEntity(entity, Math.max(1, reach - 0.5), token);
           continue;
         }
 
         await this.ensureCombatWeapon();
-        const res = await tryRealisticAttack(bot, entity, this.cfg(), this.lastSwing, token);
+        const res = await tryRealisticAttack(bot, swingAt, this.cfg(), this.lastSwing, token);
         if (res.ok) {
-          report({ done: 1, total: 1, label: `vuruş: ${playerName}` });
+          const isCleave = swingAt !== entity && swingAt.id !== entity.id;
+          report({
+            done: 1,
+            total: 1,
+            label: isCleave
+              ? `ara vuruş: ${labelEntity(swingAt)} · ana: ${playerName}`
+              : `vuruş: ${playerName}`
+          });
+          if (isCleave) {
+            this.log().debug(`Cleave: ${labelEntity(swingAt)} (ana ${playerName})`);
+          }
         } else if (res.reason === "los" || res.reason === "range") {
+          // ana hedefe yaklaş — kenetlenme bozulmasın
           await this.approachEntity(entity, 2, token);
         } else if (res.reason === "cancelled") {
           throw new Error(res.detail ?? token.reason ?? "iptal");
@@ -1220,15 +1242,32 @@ getRuntime(): CombatRuntime {
         }
 
         const reach = this.cfg().reach ?? 3;
-        if (!inMeleeRange(bot, entity, reach)) {
+        const swingAt = this.chooseSwingTarget(entity);
+        const primaryInRange = inMeleeRange(bot, entity, reach);
+        const swingInRange = inMeleeRange(bot, swingAt, reach);
+
+        if (!primaryInRange && !swingInRange) {
+          await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
+          continue;
+        }
+        if (!swingInRange) {
           await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
           continue;
         }
 
         await this.ensureCombatWeapon();
-        const res = await tryRealisticAttack(bot, entity, this.cfg(), this.lastSwing, token);
+        const res = await tryRealisticAttack(bot, swingAt, this.cfg(), this.lastSwing, token);
         if (res.ok) {
           hits += 1;
+          const isCleave = swingAt !== entity && swingAt.id !== entity.id;
+          if (isCleave) {
+            report({
+              done: hits,
+              total: hits + 1,
+              label: `ara vuruş ${labelEntity(swingAt)} · ana ${labelEntity(entity)} · ${hits} vuruş`
+            });
+          }
+          // ana hedef öldüyse bitir (cleave hedefi değil)
           if (entity.health !== undefined && entity.health <= 0) break;
         } else if (res.reason === "range" || res.reason === "los") {
           await this.approachEntity(entity, Math.max(1.15, reach - 0.7), token);
@@ -1306,6 +1345,102 @@ getRuntime(): CombatRuntime {
   }
 
   // ---- helpers --------------------------------------------------------------
+
+  /**
+   * Ana hedef dışındaki, menzildeki tehdit (cleave).
+   * Mob: hostile · Oyuncu: bize hasar vermiş (recentThreat) ve korunan/WL değil.
+   */
+  private pickCleaveCandidate(primary: Entity | null): Entity | null {
+    const cfg = this.cfg();
+    if (!cfg.cleaveNearby) return null;
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity) return null;
+
+    const reach = cfg.reach ?? 3;
+    const range = Math.min(reach + 0.15, Math.max(1.5, Number(cfg.cleaveRange ?? reach) || reach));
+    const allowMobs = cfg.cleaveMobs !== false;
+    const allowPlayers = cfg.cleavePlayers !== false;
+    const primaryId = primary && typeof primary.id === "number" ? primary.id : null;
+
+    let best: Entity | null = null;
+    let bestD = range + 0.001;
+
+    for (const id in bot.entities) {
+      const e = bot.entities[id];
+      if (!e || e === bot.entity) continue;
+      if (primaryId != null && e.id === primaryId) continue;
+      if (primary && e === primary) continue;
+      if (this.isTargetTemporarilyUnreachable(e)) continue;
+      if (e.isValid === false) continue;
+      if (e.health !== undefined && e.health <= 0) continue;
+
+      let dist: number;
+      try {
+        dist = bot.entity.position.distanceTo(e.position);
+      } catch {
+        continue;
+      }
+      if (dist > range) continue;
+
+      const player = isPlayerEntity(e);
+      const hostile = isHostileMob(String(e.name ?? e.displayName ?? ""));
+
+      if (player) {
+        if (!allowPlayers) continue;
+        const uname = e.username ?? "";
+        if (uname && uname === bot.username) continue;
+        if (uname && this.isProtectedName(uname)) continue;
+        if (
+          this.companion.followPlayer &&
+          uname &&
+          uname.toLowerCase() === this.companion.followPlayer.toLowerCase()
+        ) {
+          continue;
+        }
+        // yalnızca bize zarar veren / tehdit kaydı olan oyuncu
+        const lab = labelEntity(e);
+        if (!this.isRecentThreat(lab) && !(uname && this.isRecentThreat(uname))) continue;
+      } else if (hostile) {
+        if (!allowMobs) continue;
+      } else {
+        continue;
+      }
+
+      if (dist < bestD) {
+        bestD = dist;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Ana hedefe kenetlenme korunur; çok yakın hasar veren / mob varsa ara vuruş seçilir.
+   */
+  private chooseSwingTarget(primary: Entity): Entity {
+    const cleave = this.pickCleaveCandidate(primary);
+    if (!cleave) return primary;
+    const bot = this.bot ?? this.instance.bot;
+    if (!bot?.entity) return primary;
+
+    const reach = this.cfg().reach ?? 3;
+    const pIn = inMeleeRange(bot, primary, reach);
+    const cIn = inMeleeRange(bot, cleave, reach);
+    if (!cIn) return primary;
+    if (!pIn) return cleave; // ana uzakta, yakın tehdit vur (yaklaşırken)
+
+    let pd: number;
+    let cd: number;
+    try {
+      pd = bot.entity.position.distanceTo(primary.position);
+      cd = bot.entity.position.distanceTo(cleave.position);
+    } catch {
+      return primary;
+    }
+    // çok yakın ve ana kadar yakın / daha yakın → ara vuruş
+    if (cd <= 2.35 && cd <= pd + 0.2) return cleave;
+    return primary;
+  }
 
   /** Hasar alınca saldırgan adayı (reaktif) — en yakın uygun hedef */
   private pickDefenseTarget(mode: CombatConfig["defendMode"]): Entity | null {

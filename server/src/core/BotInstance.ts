@@ -236,6 +236,95 @@ export class BotInstance extends EventEmitter {
   }
 
   /**
+   * Bot bağlı kalır; tüm görev / hareket / dövüş companion / inşaat / pathfinder temizlenir.
+   * Takılma / bug sonrası sunucu kapat-aç yerine panelden kurtarma.
+   */
+  resetAllWork(reason = "panelden tüm işler sıfırlandı") {
+    try {
+      this.tasks.resume();
+    } catch {
+      /* */
+    }
+    try {
+      this.tasks.cancelAll(reason);
+    } catch {
+      /* */
+    }
+    try {
+      stopMovement(this);
+    } catch {
+      /* */
+    }
+    try {
+      this.combat.stopCombat(reason);
+    } catch {
+      /* */
+    }
+    try {
+      this.combat.clearCompanion(reason);
+    } catch {
+      /* */
+    }
+    try {
+      this.build.hardReset(reason);
+    } catch {
+      try {
+        this.build.stopBuild(reason);
+      } catch {
+        /* */
+      }
+    }
+
+    const bot = this.bot;
+    if (bot) {
+      try {
+        const win = (bot as { currentWindow?: { id?: number } | null }).currentWindow;
+        if (win) bot.closeWindow(win as never);
+      } catch {
+        /* */
+      }
+      try {
+        const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+        pf.stop?.();
+        pf.setGoal?.(null);
+      } catch {
+        /* */
+      }
+      try {
+        bot.clearControlStates();
+      } catch {
+        /* */
+      }
+      // pathfinder / kontrol bazen 1 tick sonra kilit kalır — tekrar temizle
+      const reClear = () => {
+        if (!this.bot || this.bot !== bot) return;
+        try {
+          const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+          pf.stop?.();
+          pf.setGoal?.(null);
+        } catch {
+          /* */
+        }
+        try {
+          bot.clearControlStates();
+        } catch {
+          /* */
+        }
+      };
+      setTimeout(reClear, 120);
+      setTimeout(reClear, 450);
+    }
+
+    this.log.info("Tüm işler sıfırlandı (soft-reset)", reason);
+    // görev paneli / durum
+    this.emit("task", {
+      botId: this.config.id,
+      current: this.tasks.currentSummary,
+      queue: this.tasks.queueSummaries
+    });
+  }
+
+  /**
    * Panel/otomasyon aksiyonlarını görev kuyruğuna çevirir (Faz 4: hareket).
    * Dönen özet null ise aksiyon anlık çalışmıştır (stop/chat gibi), görev değildir.
    */
@@ -291,6 +380,13 @@ export class BotInstance extends EventEmitter {
         stopMovement(this);
         this.combat.clearCompanion("kullanıcı stop");
         this.log.info("Hareket ve görev kuyruğu durduruldu (kullanıcı)");
+        return null;
+      // Bug / takılma: bot bağlı kalsın, tüm işleri bırak (sunucu restart gerekmez)
+      case "reset-work":
+      case "reset-all":
+      case "işleri-sıfırla":
+      case "soft-reset":
+        this.resetAllWork(String(action.reason ?? "panelden tüm işler sıfırlandı"));
         return null;
       // yakındaki oyuncular — toggle companion
       case "social-follow": {

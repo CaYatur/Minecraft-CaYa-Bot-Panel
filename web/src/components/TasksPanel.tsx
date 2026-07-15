@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { fmtPos } from "../lib/format";
 import type { TaskSummary, Waypoint } from "../lib/types";
@@ -15,6 +16,7 @@ export function TasksPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const waypoints = useAppStore((s) => (bot ? s.waypoints[bot.config.serverId] : undefined)) ?? EMPTY_WAYPOINTS;
   const toast = useAppStore((s) => s.toast);
+  const { t } = useI18n();
 
   const [cmd, setCmd] = useState("");
   const [gx, setGx] = useState("");
@@ -120,20 +122,30 @@ export function TasksPanel({ botId }: { botId: string }) {
             value={cmd}
             onChange={(e) => setCmd(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runCommand()}
-            placeholder="Komut: goto 100 64 -200"
+            placeholder={t("tasks.cmdPlaceholder")}
             className="mono flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-500"
           />
           <button
             onClick={runCommand}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
           >
-            Çalıştır
+            {t("tasks.run")}
           </button>
           <button
-            onClick={() => act({ type: "stop" }, "Hareket durduruldu")}
+            onClick={() => act({ type: "stop" }, t("tasks.stopped"))}
             className="rounded-lg bg-red-900/60 px-4 py-2 text-sm font-medium text-red-200 hover:bg-red-800/60"
           >
-            ■ Durdur
+            {t("tasks.stop")}
+          </button>
+          <button
+            onClick={() => {
+              if (!confirm(t("tasks.resetConfirm"))) return;
+              void act({ type: "reset-work" }, t("tasks.resetDone"));
+            }}
+            title={t("botDetail.resetWorkTitle")}
+            className="rounded-lg border border-amber-800/60 bg-amber-950/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-900/50"
+          >
+            {t("tasks.reset")}
           </button>
         </div>
         <p className="mono mt-1 text-[10px] text-zinc-600">{CMD_HELP}</p>

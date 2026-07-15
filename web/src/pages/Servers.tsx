@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import type { ServerProfile, StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
@@ -9,6 +10,7 @@ export function Servers() {
   const supportedVersions = useAppStore((s) => s.supportedVersions);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const toast = useAppStore((s) => s.toast);
+  const { t } = useI18n();
 
   const empty = { name: "", host: "", port: 25565, version: "auto" };
   const [form, setForm] = useState<typeof empty>(empty);
@@ -47,7 +49,7 @@ export function Servers() {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <h1 className="text-xl font-bold text-zinc-100">Sunucu Profilleri</h1>
+      <h1 className="text-xl font-bold text-zinc-100">{t("servers.title")}</h1>
 
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
         <label className="flex flex-col gap-1 text-sm">

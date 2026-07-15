@@ -111,6 +111,8 @@ export class TaskQueue extends EventEmitter {
       cur.token.cancelled = true;
       cur.token.reason = reason;
     }
+    // pause ile kilitlenmiş kuyruk bug'ı: reset/stop sonrası held açık kalsın
+    this.held = false;
     this.emitUpdate();
   }
 

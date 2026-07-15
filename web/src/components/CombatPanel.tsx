@@ -1,22 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { fmtPos } from "../lib/format";
 import type { CombatRuntime, StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-const DEFEND_OPTIONS: { value: CombatRuntime["defendMode"]; label: string; hint: string }[] = [
-  { value: "off", label: "Kapalı", hint: "Otomatik savununma yok" },
-  { value: "mob", label: "Mob", hint: "Zombie, skeleton…" },
-  { value: "player", label: "Oyuncu", hint: "Seni vuran oyuncular" },
-  { value: "all", label: "Hepsi", hint: "Mob + saldırgan oyuncu" }
-];
-
-const MODE_TR: Record<CombatRuntime["mode"], string> = {
-  idle: "Boşta",
-  attacking: "Saldırıyor",
-  defending: "Savunuyor",
-  fleeing: "Kaçıyor",
-  protecting: "Koruyor"
+const MODE_KEYS: Record<CombatRuntime["mode"], string> = {
+  idle: "combat.modes.idle",
+  attacking: "combat.modes.attacking",
+  defending: "combat.modes.defending",
+  fleeing: "combat.modes.fleeing",
+  protecting: "combat.modes.protecting"
 };
 
 /**
@@ -28,6 +22,14 @@ export function CombatPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
+  const { t } = useI18n();
+
+  const DEFEND_OPTIONS: { value: CombatRuntime["defendMode"]; label: string; hint: string }[] = [
+    { value: "off", label: t("combat.defendOff"), hint: t("combat.defendOff") },
+    { value: "mob", label: t("combat.defendMob"), hint: "Zombie, skeleton…" },
+    { value: "player", label: t("combat.defendPlayer"), hint: t("combat.cleavePlayers") },
+    { value: "all", label: t("combat.defendAll"), hint: "Mob + player" }
+  ];
 
   const [target, setTarget] = useState("");
   const [radius, setRadius] = useState("16");
@@ -161,29 +163,29 @@ export function CombatPanel({ botId }: { botId: string }) {
     <div className="flex h-full flex-col gap-4 overflow-y-auto">
       {!online && (
         <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-          Bot çevrimdışı — ayarlar yine kaydedilir; dövüş görevleri online iken çalışır.
+          {t("combat.offlineHint")}
         </div>
       )}
 
       {/* ── Durum ── */}
       <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Durum</div>
+          <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("combat.status")}</div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => act({ type: "stop-combat" }, "Dövüş bırakıldı")}
+              onClick={() => act({ type: "stop-combat" }, t("combat.combatLeft"))}
               className="rounded-lg bg-red-900/60 px-3 py-1.5 text-sm font-medium text-red-200 hover:bg-red-800/60"
             >
-              ■ Dövüşü bırak
+              {t("combat.leaveCombat")}
             </button>
             <button
               type="button"
-              onClick={() => act({ type: "flee" }, "Kaçış kuyruğa alındı")}
+              onClick={() => act({ type: "flee" }, t("combat.flee"))}
               disabled={!online}
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-amber-300 hover:bg-zinc-700 disabled:opacity-40"
             >
-              Kaç
+              {t("combat.flee")}
             </button>
           </div>
         </div>
@@ -193,20 +195,34 @@ export function CombatPanel({ botId }: { botId: string }) {
               c.fighting ? "bg-red-950/60 text-red-300" : "bg-zinc-800 text-zinc-400"
             }`}
           >
-            {MODE_TR[c.mode]}
+            {t(MODE_KEYS[c.mode])}
           </span>
           {c.activeTarget ? (
             <span className="text-zinc-300">
-              Hedef: <b className="text-zinc-100">{c.activeTarget}</b>
+              {t("combat.target")}: <b className="text-zinc-100">{c.activeTarget}</b>
             </span>
           ) : (
-            <span className="text-xs text-zinc-600 italic">Aktif hedef yok</span>
+            <span className="text-xs text-zinc-600 italic">{t("combat.noTarget")}</span>
           )}
           <span className="text-[10px] text-zinc-600">
-            öz savunma:{" "}
+            {t("combat.selfDefense")}:{" "}
             <span className={cfg.defendMode === "off" ? "text-zinc-500" : "text-emerald-400/90"}>
               {DEFEND_OPTIONS.find((o) => o.value === cfg.defendMode)?.label ?? cfg.defendMode}
             </span>
+            {cfg.cleaveNearby ? (
+              <>
+                {" · "}
+                {t("combat.cleaveTitle")}:{" "}
+                <span className="text-rose-300/90">
+                  {[
+                    cfg.cleaveMobs !== false ? t("combat.cleaveMobs") : null,
+                    cfg.cleavePlayers !== false ? t("combat.cleavePlayers") : null
+                  ]
+                    .filter(Boolean)
+                    .join("+") || "—"}
+                </span>
+              </>
+            ) : null}
             {wards.length > 0 && (
               <>
                 {" · "}
@@ -221,12 +237,9 @@ export function CombatPanel({ botId }: { botId: string }) {
         {/* ── Öz savunma (boşta) ── */}
         <section className="rounded-lg border border-emerald-900/35 bg-emerald-950/10 p-3">
           <div className="mb-1 text-xs font-semibold tracking-wide text-emerald-300/90 uppercase">
-            Öz savunma · boşta
+            {t("combat.selfDefense")}
           </div>
-          <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
-            Görev yokken veya takipte menzile zombie vb. gelince <b className="font-medium text-zinc-400">savaşır</b>; can
-            eşiğin altına inince <b className="font-medium text-zinc-400">kaçar</b>. Anlık uygulanır.
-          </p>
+          <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">{t("combat.selfDefenseHint")}</p>
 
           <div className="mb-1 text-[10px] font-medium tracking-wide text-zinc-500 uppercase">Hedef</div>
           <div className="mb-3 flex flex-wrap gap-1.5">
@@ -271,6 +284,72 @@ export function CombatPanel({ botId }: { botId: string }) {
           </div>
           <p className="mt-2 text-[10px] text-zinc-600">
             Örn. can ≤ {cfg.fleeAtHealth} → kaç; üstündeyse menzildeki ({defendRange}m) mob&apos;u öldür.
+          </p>
+        </section>
+
+        {/* ── Ara vuruş (cleave) ── */}
+        <section className="rounded-lg border border-rose-900/40 bg-rose-950/15 p-3 lg:col-span-2">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <div className="text-xs font-semibold tracking-wide text-rose-300/90 uppercase">
+              {t("combat.cleaveTitle")}
+            </div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                cfg.cleaveNearby ? "bg-rose-900/50 text-rose-200" : "bg-zinc-800 text-zinc-500"
+              }`}
+            >
+              {cfg.cleaveNearby ? t("combat.cleaveOn") : t("combat.cleaveOff")}
+            </span>
+          </div>
+          <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">{t("combat.cleaveHint")}</p>
+
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => void patchCombat({ cleaveNearby: !cfg.cleaveNearby })}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${chip(
+                Boolean(cfg.cleaveNearby),
+                "amber"
+              )}`}
+            >
+              {cfg.cleaveNearby ? t("combat.cleaveToggleOn") : t("combat.cleaveToggleOff")}
+            </button>
+            <button
+              type="button"
+              disabled={!cfg.cleaveNearby}
+              onClick={() => void patchCombat({ cleaveMobs: !(cfg.cleaveMobs !== false) })}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium disabled:opacity-40 ${chip(
+                cfg.cleaveNearby !== false && cfg.cleaveMobs !== false,
+                "emerald"
+              )}`}
+            >
+              {t("combat.cleaveMobs")}
+            </button>
+            <button
+              type="button"
+              disabled={!cfg.cleaveNearby}
+              onClick={() => void patchCombat({ cleavePlayers: !(cfg.cleavePlayers !== false) })}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium disabled:opacity-40 ${chip(
+                cfg.cleaveNearby !== false && cfg.cleavePlayers !== false
+              )}`}
+            >
+              {t("combat.cleavePlayers")}
+            </button>
+          </div>
+
+          <div className="max-w-xs">
+            <NumField
+              label={t("combat.cleaveRange")}
+              value={cfg.cleaveRange ?? cfg.reach ?? 3}
+              min={1.5}
+              max={4.5}
+              step={0.1}
+              onCommit={(v) => void patchCombat({ cleaveRange: v })}
+            />
+          </div>
+          <p className="mt-2 text-[10px] text-zinc-600">
+            Örn. Steve&apos;e saldırırken üstüne binen zombie veya seni vuran yakın oyuncu da isabet alır (cooldown
+            paylaşır — gerçekçi vuruş temposu).
           </p>
         </section>
 

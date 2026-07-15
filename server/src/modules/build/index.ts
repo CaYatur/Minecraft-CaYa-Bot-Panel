@@ -3,6 +3,8 @@ import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue"
 import { shouldSkipBlock } from "./blocks";
 import { loadParsedSchematic, materialCounts } from "./library";
 import { distToBlock, itemNameForBlock, pathNear, placeBlockAt, PLACE_REACH } from "./place";
+// caya-build-resource-storage-v1: build
+import { withdrawBuildMaterials } from "./storage";
 import { ScaffoldTracker } from "./scaffold";
 import {
   emptyBuildRuntime,
@@ -14,6 +16,7 @@ import {
   type SchematicBlock
 } from "./types";
 import { normalizeRotateY, type BuildTransform, type RotateY } from "./transform";
+import { v3 } from "./vec3util";
 
 /**
  * Faz 14–16 — Şema inşaat: schem/litematic/caya + transform + progress + scaffold.
@@ -94,11 +97,11 @@ export class BuildService {
       }
     }
     const aliasHave = (blockName: string): number => {
-      const names = itemNameForBlock(blockName);
-      let best = 0;
-      for (const n of names) best = Math.max(best, haveMap[n] ?? 0);
-      if (haveMap[blockName] != null) best = Math.max(best, haveMap[blockName]!);
-      return best;
+      // Aynı blok için kullanılabilen farklı item stack'lerini topla; max almak tabloyu eksik gösteriyordu.
+      const names = new Set([...itemNameForBlock(blockName), blockName]);
+      let total = 0;
+      for (const name of names) total += haveMap[name] ?? 0;
+      return total;
     };
     return Object.entries(needMap)
       .map(([name, need]) => {
@@ -137,7 +140,7 @@ export class BuildService {
         label: `eksik malzeme: ${sid.slice(0, 8)}…`,
         priority: PRIORITY.USER,
         params: { schematicId: sid },
-        requeueOnPreempt: false
+        requeueOnPreempt: true
       },
       () => async (token, report) => {
         this.setActivity("Malzeme listesi hazırlanıyor…");
@@ -200,7 +203,7 @@ export class BuildService {
     );
   }
 
-  /** Tek malzeme: önce craft dene, yetmezse topla — activity + materials anlık */
+  /** Tek malzeme: drop → sandık/shulker → craft zinciri → doğrudan kaynak */
   private async acquireOneMaterial(
     blockName: string,
     count: number,
@@ -210,47 +213,51 @@ export class BuildService {
   ) {
     const names = itemNameForBlock(blockName);
     const item = names[0] ?? blockName;
-    const n = Math.max(1, count);
-
-    const wrapActivity: ProgressFn = (p) => {
-      report(p);
-      let label = p.label ?? `Toplanıyor: ${item}`;
-      // gather ham etiketleri netleştir
-      if (label && !/^(Toplanıyor|Craft|Eritiliyor|Kondu|Atlandı|Hata|Başarısız)/i.test(label)) {
-        label = `Toplanıyor: ${label}`;
-      }
+    const additional = Math.max(1, Math.floor(count));
+    const targetHave = this.countHaveItem(names) + additional;
+    const refresh = (label: string) => {
       this.runtime.activity = label;
       this.runtime.activityMaterial = blockName;
       this.runtime.label = label;
       this.refreshMaterials(allBlocks, true);
+      report({ done: Math.min(this.countHaveItem(names), targetHave), total: targetHave, label });
     };
 
-    // 1) Craft edilebiliyorsa önce craft dene (planks, stairs, slab…)
+    // 1) Yakındaki düşmüş item'ler.
+    try {
+      refresh(`Yerde aranıyor: ${item}`);
+      await this.instance.gather.runCollectDrops(item, 16, token, (p) => refresh(p.label ?? `Yerde: ${item}`));
+    } catch { /* best effort */ }
+    if (this.countHaveItem(names) >= targetHave) return;
+
+    // 2) Oyuncunun sandık/barrel/dünyadaki shulker'ı; gerekirse botun taşıdığı shulker.
+    const storageNeed = targetHave - this.countHaveItem(names);
+    await withdrawBuildMaterials(this.instance, names, storageNeed, token, refresh);
+    if (this.countHaveItem(names) >= targetHave) return;
+
+    // 3) Tarif bağımlılıklarını çöz: örn. dark_oak_fence → dark_oak_planks → dark_oak_log.
     if (this.instance.craft.canCraft(item)) {
-      this.setActivity(`Craft deneniyor: ${item} ×${n}`, blockName);
       try {
-        await this.instance.craft.runCraftInline(item, n, token, wrapActivity);
-        this.refreshMaterials(allBlocks, true);
-        if (this.countHaveItem(names) >= n) {
-          this.setActivity(`Craft tamam: ${item}`, blockName);
-          return;
-        }
-        // kısmi craft — kalanı topla
-        const still = Math.max(1, n - this.countHaveItem(names));
-        this.setActivity(`Craft kısmi — toplanıyor: ${item} ×${still}`, blockName);
-      } catch (e) {
-        this.log().warn(
-          `Craft olmadı, toplanacak: ${item}`,
-          e instanceof Error ? e.message : String(e)
-        );
-        this.setActivity(`Craft olmadı — toplanıyor: ${item} ×${n}`, blockName);
+        refresh(`Craft zinciri: ${item} · hedef ${targetHave}`);
+        await this.instance.craft.runCraftInline(item, targetHave, token, (p) => refresh(p.label ?? `Craft: ${item}`));
+      } catch (error) {
+        this.log().warn(`Craft zinciri tamamlanamadı: ${item}`, error instanceof Error ? error.message : String(error));
       }
     }
+    if (this.countHaveItem(names) >= targetHave) return;
 
-    // 2) Doğa / maden toplama
-    this.setActivity(`Toplanıyor: ${item} · hedef ×${n}`, blockName);
-    await this.instance.gather.runCollectBlock(item, n, token, wrapActivity);
+    // 4) Son çare: kesin isimli doğal blok/maden araması. Plank gibi sonuçlar aynı ağaç türüne yönlendirilir.
+    refresh(`Kaynak aranıyor: ${item} · hedef ${targetHave}`);
+    await this.instance.gather.runCollectBlock(item, targetHave, token, (p) => refresh(p.label ?? `Toplanıyor: ${item}`));
+
+    // Kaynak toplama ham girdiyi getirdiyse bir kez daha craft et.
+    if (this.countHaveItem(names) < targetHave && this.instance.craft.canCraft(item)) {
+      await this.instance.craft.runCraftInline(item, targetHave, token, (p) => refresh(p.label ?? `Craft: ${item}`));
+    }
     this.refreshMaterials(allBlocks, true);
+    if (this.countHaveItem(names) < targetHave) {
+      throw new Error(`${item}: hedef ${targetHave}, bulunan ${this.countHaveItem(names)}`);
+    }
   }
 
   async previewMaterials(schematicId: string, versionHint?: string, transform?: BuildTransform) {
@@ -291,8 +298,19 @@ export class BuildService {
     this.runtime.phase = this.runtime.phase === "idle" ? "idle" : "cancelled";
     this.runtime.label = reason;
     this.runtime.error = reason;
+    this.runtime.activity = null;
+    this.runtime.activityMaterial = null;
     this.emit();
     this.log().info("İnşaat durduruldu", reason);
+  }
+
+  /** Tüm iş sıfırla: inşaat runtime + scaffold tamamen temiz (bot bağlı kalır) */
+  hardReset(reason = "inşaat sıfırlandı") {
+    this.stopBuild(reason);
+    this.scaffolds = new ScaffoldTracker();
+    this.runtime = emptyBuildRuntime();
+    this.runtime.label = reason;
+    this.emit(true);
   }
 
   enqueueBuild(opts: {
@@ -339,7 +357,7 @@ export class BuildService {
         label: `yapı: ${sid.slice(0, 8)}…`,
         priority: PRIORITY.USER,
         params: { ...opts },
-        requeueOnPreempt: false
+        requeueOnPreempt: true
       },
       () => (token, report) => this.runBuild(opts, token, report)
     );
@@ -523,27 +541,87 @@ export class BuildService {
 
       // --- dünya koordinatları önceden hesap ---
       type Job = {
+        block: SchematicBlock;
         name: string;
         wx: number;
         wy: number;
         wz: number;
         done: boolean;
+        attempts: number;
+        retryAt: number;
         status?: "placed" | "skipped" | "failed";
       };
-      const jobs: Job[] = blocks.map((b) => ({
-        name: b.name,
-        wx: origin.x + b.dx,
-        wy: origin.y + b.dy,
-        wz: origin.z + b.dz,
-        done: false
+      const jobs: Job[] = blocks.map((block) => ({
+        block,
+        name: block.name,
+        wx: origin.x + block.dx,
+        wy: origin.y + block.dy,
+        wz: origin.z + block.dz,
+        done: false,
+        attempts: 0,
+        retryAt: 0
       }));
-      this.log().info("İnşaat hedefleri hazır", `${jobs.length} koordinat · yürürken yerleştirme`);
-
+      this.log().info(
+        "İnşaat hedefleri hazır",
+        `${jobs.length} koordinat · destek öncelikli · sticky hedef · dur-koy`
+      );
       let placed = 0;
       let skipped = 0;
       let failed = 0;
       let consecutiveFail = 0;
-      this.refreshMaterials(blocks, true);
+      let acquirePasses = 0;
+      let acquireStalls = 0;
+      /** sticky: aynı bloğa bitirene kadar yapış — zig-zag dengesizliği azaltır */
+      let stickyJob: Job | null = null;
+      /** başarılı/atlanan hücreler — destek skoru için */
+      const solidKeys = new Set<string>();
+      const keyOf = (x: number, y: number, z: number) => `${x},${y},${z}`;
+
+      const remainingBlocks = () => jobs.filter((job) => !job.done).map((job) => job.block);
+      const refreshRemaining = () => {
+        this.runtime.materials = this.materialsFor(remainingBlocks());
+        this.emit(true);
+      };
+      refreshRemaining();
+
+      const worldSolid = (x: number, y: number, z: number): boolean => {
+        if (solidKeys.has(keyOf(x, y, z))) return true;
+        const bot = this.instance.bot;
+        if (!bot) return false;
+        const b = bot.blockAt(v3(x, y, z));
+        if (!b) return false;
+        const n = b.name.replace(/^minecraft:/, "");
+        return (
+          n !== "air" &&
+          n !== "cave_air" &&
+          n !== "void_air" &&
+          n !== "water" &&
+          n !== "lava" &&
+          n !== "flowing_water" &&
+          n !== "flowing_lava" &&
+          n !== "bubble_column" &&
+          n !== "short_grass" &&
+          n !== "tall_grass" &&
+          n !== "grass" &&
+          n !== "snow"
+        );
+      };
+
+      const hasSupport = (job: Job): boolean => worldSolid(job.wx, job.wy - 1, job.wz);
+
+      /** Düşük skor = önce. Destek + alt katman + mesafe dengesi (sadece en yakın ≠ stabil). */
+      const scoreJob = (job: Job): number => {
+        const d = distToBlock(this.instance, job.wx, job.wy, job.wz);
+        const supportPen = hasSupport(job) ? 0 : 420;
+        const botY = Math.floor(this.instance.bot?.entity?.position.y ?? job.wy);
+        const climbPen = Math.max(0, job.wy - botY - 1) * 35;
+        if (placeOrder === "layer-first") {
+          // katman (Y) mutlak öncelik, sonra destek, sonra mesafe
+          return job.wy * 80_000 + supportPen + d * 25 + climbPen;
+        }
+        // nearby-first: mesafe baskın ama alt katman + destek hâlâ tercih
+        return d * 95 + job.wy * 12 + supportPen + climbPen;
+      };
 
       const markDone = (job: Job, res: "placed" | "skipped" | "failed") => {
         if (job.done) return;
@@ -551,90 +629,105 @@ export class BuildService {
         job.status = res;
         if (res === "placed") {
           placed++;
+          solidKeys.add(keyOf(job.wx, job.wy, job.wz));
           this.scaffolds.protectStructure(job.wx, job.wy, job.wz);
           consecutiveFail = 0;
         } else if (res === "skipped") {
           skipped++;
+          solidKeys.add(keyOf(job.wx, job.wy, job.wz));
           consecutiveFail = 0;
         } else {
           failed++;
           consecutiveFail++;
         }
-        this.pushBlockEvent({
-          name: job.name,
-          x: job.wx,
-          y: job.wy,
-          z: job.wz,
-          status: res,
-          t: Date.now()
-        });
+        if (stickyJob === job) stickyJob = null;
+        this.pushBlockEvent({ name: job.name, x: job.wx, y: job.wy, z: job.wz, status: res, t: Date.now() });
         this.runtime.placed = placed;
         this.runtime.skipped = skipped;
         this.runtime.failed = failed;
         this.runtime.scaffoldsPlaced = this.scaffolds.count;
         const doneN = placed + skipped + failed;
         const act =
-          res === "placed"
-            ? `Kondu: ${job.name}`
-            : res === "skipped"
-              ? `Atlandı: ${job.name}`
-              : `Hata: ${job.name}`;
+          res === "placed" ? `Kondu: ${job.name}` : res === "skipped" ? `Atlandı: ${job.name}` : `Kalıcı hata: ${job.name}`;
         this.runtime.activity = `${act} · ${doneN}/${jobs.length}`;
         this.runtime.activityMaterial = job.name;
         this.runtime.label = `${job.name} @${job.wx},${job.wy},${job.wz} · ${doneN}/${jobs.length} · +${placed}`;
-        // envanter değişti — malzeme sayılarını anlık güncelle
-        this.runtime.materials = this.materialsFor(blocks);
+        refreshRemaining();
+      };
+
+      const processPlacement = (job: Job, res: "placed" | "skipped" | "failed" | "outofreach") => {
+        if (res === "placed" || res === "skipped") {
+          markDone(job, res);
+          return;
+        }
+        if (res === "outofreach") return;
+        job.attempts++;
+        consecutiveFail++;
+        if (job.attempts >= 4) {
+          markDone(job, "failed");
+          return;
+        }
+        // biraz daha sabır — anında yeniden seçim dengesizlik yapıyordu
+        job.retryAt = Date.now() + 280 + job.attempts * 220;
+        this.runtime.activity = `Yeniden denenecek: ${job.name} (${job.attempts}/4)`;
+        this.runtime.activityMaterial = job.name;
+        this.runtime.label = `geçici yerleştirme hatası · ${job.name}`;
         this.emit(true);
       };
 
-      /** nearby-first: envanterde olan önce, sonra mesafe; layer-first: mesafe */
-      const pickNextJob = (pending: Job[]): Job => {
-        if (placeOrder === "layer-first") {
-          let next = pending[0]!;
-          let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
-          for (const j of pending) {
-            const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
-            if (d < bestD) {
-              bestD = d;
-              next = j;
-            }
-          }
-          return next;
+      const pickNextJob = (ready: Job[]): Job => {
+        // sticky: hâlâ uygunsa aynı hedefe yapış (sağa sola zıplama yok)
+        if (
+          stickyJob &&
+          !stickyJob.done &&
+          stickyJob.retryAt <= Date.now() &&
+          this.hasItemForBlock(stickyJob.name) &&
+          ready.includes(stickyJob)
+        ) {
+          return stickyJob;
         }
-        // nearby-first: önce malzeme var olanlar, onlar arasında en yakın
-        const withItem = pending.filter((j) => this.hasItemForBlock(j.name));
-        const pool = withItem.length ? withItem : pending;
-        let next = pool[0]!;
-        let bestD = distToBlock(this.instance, next.wx, next.wy, next.wz);
-        for (const j of pool) {
-          const d = distToBlock(this.instance, j.wx, j.wy, j.wz);
-          if (d < bestD) {
-            bestD = d;
-            next = j;
+        let best = ready[0]!;
+        let bestS = scoreJob(best);
+        for (const job of ready) {
+          const s = scoreJob(job);
+          if (s < bestS) {
+            bestS = s;
+            best = job;
           }
         }
-        return next;
+        stickyJob = best;
+        return best;
       };
 
-      /** Menzildeki tüm açık işleri bakıp koy (path açmadan) */
-      const placeReachable = async (): Promise<number> => {
-        let n = 0;
-        const open = jobs.filter((j) => !j.done);
-        open.sort((a, b) => {
-          if (placeOrder === "nearby-first") {
-            const ha = this.hasItemForBlock(a.name) ? 0 : 1;
-            const hb = this.hasItemForBlock(b.name) ? 0 : 1;
-            if (ha !== hb) return ha - hb;
+      /**
+       * Menzildeki blokları path AÇMADAN koy (yürürken / cluster).
+       * stopFirst=true: durup koy; false: path bozma (yürürken).
+       */
+      const placeReachable = async (optsPlace?: {
+        stopFirst?: boolean;
+        maxCluster?: number;
+      }): Promise<number> => {
+        let processed = 0;
+        const now = Date.now();
+        const stopFirst = optsPlace?.stopFirst !== false;
+        const maxCluster = optsPlace?.maxCluster ?? 14;
+        const open = jobs.filter(
+          (job) => !job.done && job.retryAt <= now && this.hasItemForBlock(job.name)
+        );
+        open.sort((a, b) => scoreJob(a) - scoreJob(b));
+        if (stopFirst) {
+          try {
+            this.instance.bot?.pathfinder?.setGoal(null);
+            this.instance.bot?.clearControlStates();
+          } catch {
+            /* */
           }
-          return (
-            distToBlock(this.instance, a.wx, a.wy, a.wz) - distToBlock(this.instance, b.wx, b.wy, b.wz)
-          );
-        });
+          if (open.length) await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
         for (const job of open) {
+          if (processed >= maxCluster) break;
           if (token.cancelled) throw new Error(token.reason ?? "iptal");
           if (distToBlock(this.instance, job.wx, job.wy, job.wz) > PLACE_REACH) continue;
-          // envanterde yoksa atla (failed spam yok) — sonda ele alınır
-          if (placeOrder === "nearby-first" && !this.hasItemForBlock(job.name)) continue;
           const res = await placeBlockAt(
             this.instance,
             job.wx,
@@ -643,68 +736,133 @@ export class BuildService {
             job.name,
             token,
             this.scaffolds,
-            { retries: 1, skipPath: true }
+            { retries: 1, skipPath: true, softSettle: !stopFirst }
           );
-          if (res === "outofreach") continue;
-          markDone(job, res);
-          n++;
+          processPlacement(job, res);
+          if (res === "placed" || res === "skipped") processed++;
         }
-        return n;
+        return processed;
       };
 
-      // --- yürürken yerleştirme ana döngü ---
+      const jobSoftRetry = (job: Job) => {
+        // failed sayma — yeniden yürüme hakkı; 8 denemeden sonra vazgeç
+        if (job.attempts >= 8) {
+          markDone(job, "failed");
+          return;
+        }
+        job.attempts++;
+        job.retryAt = Date.now() + 100;
+        consecutiveFail++;
+      };
+
+      // --- yürü + menzilde koy + hedefe git (ulaşmadan zorlama) ---
       let guard = 0;
-      const maxRounds = jobs.length * 6 + 20;
-      while (jobs.some((j) => !j.done) && guard < maxRounds) {
+      const maxRounds = jobs.length * 16 + 120;
+      let lastWalkTick = 0;
+      while (jobs.some((job) => !job.done) && guard < maxRounds) {
         if (token.cancelled) throw new Error(token.reason ?? "iptal");
         guard++;
+        // önce menzildekiler (zaten yanındaysa yürüme)
+        await placeReachable({ stopFirst: true, maxCluster: 12 });
+        if (!jobs.some((job) => !job.done)) break;
 
-        // 1) menzildekileri koy
-        await placeReachable();
-        if (!jobs.some((j) => !j.done)) break;
+        const pending = jobs.filter((job) => !job.done);
+        const now = Date.now();
+        const ready = pending.filter((job) => job.retryAt <= now && this.hasItemForBlock(job.name));
 
-        // 2) sıradaki hedefe yürü
-        const pending = jobs.filter((j) => !j.done);
-        // nearby-first: sadece malzemesi olanlara yürü; hepsi eksikse en yakın
-        const walkPool =
-          placeOrder === "nearby-first"
-            ? pending.filter((j) => this.hasItemForBlock(j.name))
-            : pending;
-        const next = pickNextJob(walkPool.length ? walkPool : pending);
-
-        this.runtime.label = `yürü → ${next.wx},${next.wy},${next.wz} · kalan ${pending.length}`;
-        report({
-          done: placed + skipped + failed,
-          total: jobs.length,
-          label: this.runtime.label
-        });
-        this.emit();
-
-        // pathfinder hedefi bırakmadan yürü; yolda menzile girenleri koy
-        await pathNear(
-          this.instance,
-          next.wx + 0.5,
-          next.wy,
-          next.wz + 0.5,
-          2.6,
-          token,
-          {
-            clearGoal: false,
-            timeoutMs: 6000,
-            onTick: async () => {
-              await placeReachable();
-            }
+        if (!ready.length) {
+          const delayed = pending.filter((job) => this.hasItemForBlock(job.name));
+          if (delayed.length) {
+            const waitMs = Math.max(80, Math.min(500, Math.min(...delayed.map((job) => job.retryAt - now))));
+            await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+            continue;
           }
-        );
 
-        // 3) hedefe yaklaşıldı — path kes, bakıp koy (gerekirse scaffold)
-        try {
-          this.instance.bot?.pathfinder?.setGoal(null);
-        } catch {
-          /* */
+          if (!opts.allowPartial || acquirePasses >= 6 || acquireStalls >= 2) break;
+          stickyJob = null;
+          acquirePasses++;
+          const beforeMissing = this.materialsFor(remainingBlocks()).reduce(
+            (sum, material) => sum + material.missing,
+            0
+          );
+          this.setPhase("acquiring", `inşaat bekliyor — eksik malzeme turu ${acquirePasses}`);
+          this.setActivity("Yere düşen yapı malzemeleri toplanıyor…", null);
+          try {
+            await this.instance.gather.runCollectDrops(undefined, 24, token, (p) => {
+              this.setActivity(p.label ?? "Yerdeki eşyalar…", null);
+              refreshRemaining();
+            });
+          } catch {
+            /* */
+          }
+
+          const missingNow = this.materialsFor(remainingBlocks())
+            .filter((material) => material.missing > 0)
+            .slice(0, 4);
+          for (const material of missingNow) {
+            if (token.cancelled) throw new Error(token.reason ?? "iptal");
+            try {
+              await this.acquireOneMaterial(
+                material.name,
+                material.missing,
+                token,
+                report,
+                remainingBlocks()
+              );
+            } catch (error) {
+              this.log().warn(
+                `İnşaat sırasında malzeme alınamadı: ${material.name}`,
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+            refreshRemaining();
+          }
+
+          const afterMissing = this.materialsFor(remainingBlocks()).reduce(
+            (sum, material) => sum + material.missing,
+            0
+          );
+          acquireStalls = afterMissing < beforeMissing ? 0 : acquireStalls + 1;
+          this.setActivity(`İnşa ediliyor: ${parsed.meta.name}`, null);
+          this.setPhase("building", `inşa devam ediyor: ${parsed.meta.name}`);
+          continue;
         }
 
-        if (!next.done) {
+        const next = pickNextJob(ready);
+        const dist = distToBlock(this.instance, next.wx, next.wy, next.wz);
+        this.runtime.label = `yürü → ${next.wx},${next.wy},${next.wz} · kalan ${pending.length}`;
+        this.runtime.activity =
+          dist > PLACE_REACH
+            ? `Yürüyor: ${next.name} (${dist.toFixed(1)}m) @${next.wx},${next.wy},${next.wz}`
+            : `Koyuyor: ${next.name} @${next.wx},${next.wy},${next.wz}`;
+        this.runtime.activityMaterial = next.name;
+        report({ done: placed + skipped + failed, total: jobs.length, label: this.runtime.label });
+        this.emit(true);
+
+        // UZAKSA: hedef bloğa yürü; yolda menzile girenleri koy (hareket ederek inşa)
+        if (dist > PLACE_REACH) {
+          await pathNear(
+            this.instance,
+            next.wx + 0.5,
+            next.wy,
+            next.wz + 0.5,
+            2.6,
+            token,
+            {
+              clearGoal: true,
+              timeoutMs: 14_000,
+              onTick: async () => {
+                const t = Date.now();
+                if (t - lastWalkTick < 280) return;
+                lastWalkTick = t;
+                await placeReachable({ stopFirst: false, maxCluster: 3 });
+              }
+            }
+          );
+        }
+
+        if (!next.done && this.hasItemForBlock(next.name)) {
+          // skipPath:false → menzil dışındaysa placeBlockAt KENDİSİ path açar (zorlamaz)
           const res = await placeBlockAt(
             this.instance,
             next.wx,
@@ -713,33 +871,36 @@ export class BuildService {
             next.name,
             token,
             this.scaffolds,
-            { retries: 2, skipPath: false }
+            { retries: 3, skipPath: false }
           );
+          // outofreach: failed sayma — tekrar yürüyecek
           if (res === "outofreach") {
-            // hâlâ uzak — fail sayma, sonraki tur
+            this.runtime.activity = `Ulaşılamadı, yeniden yürüyor: ${next.name}`;
+            this.emit(true);
+            // sticky tut ama kısa bekle, tekrar path
+            jobSoftRetry(next);
           } else {
-            markDone(next, res);
+            processPlacement(next, res);
           }
         }
 
-        // 4) tur sonunda menzilde kalanları bir daha
-        await placeReachable();
+        // yanındakileri bitir
+        await placeReachable({ stopFirst: true, maxCluster: 16 });
 
-        if (consecutiveFail >= 6) {
-          this.runtime.label = `yol sorunu — mola (${consecutiveFail} hata)`;
+        if (consecutiveFail >= 5) {
+          this.runtime.label = `yerleştirme toparlanıyor (${consecutiveFail})`;
+          stickyJob = null;
           this.emit(true);
           try {
             this.instance.bot?.pathfinder?.setGoal(null);
+            this.instance.bot?.clearControlStates();
           } catch {
             /* */
           }
-          await new Promise((r) => setTimeout(r, 350));
+          await new Promise<void>((resolve) => setTimeout(resolve, 350));
           consecutiveFail = 0;
         }
-
-        if (guard % 3 === 0) {
-          this.refreshMaterials(blocks, true);
-        }
+        if (guard % 2 === 0) refreshRemaining();
       }
 
       // kalanları (maxRounds) failed say
@@ -770,7 +931,8 @@ export class BuildService {
       }
 
       const label = `bitti: ${placed} kondu, ${skipped} atlandı, ${failed} başarısız, scaffold ${cleared}`;
-      this.refreshMaterials(blocks, true);
+      this.runtime.materials = this.materialsFor(jobs.filter((job) => job.status === "failed").map((job) => job.block));
+      this.emit(true);
       this.setActivity(null, null);
       // Tam başarıda done + dur; hata varsa failed (görev de fail)
       if (failed === 0) {

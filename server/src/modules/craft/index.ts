@@ -1,6 +1,8 @@
 import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
+// caya-build-resource-storage-v1: craft
+import { runSmartCraftInline, smartCanCraft, smartPreviewPlan } from "./smartCraft";
 
 const MAX_DEPTH = 8;
 
@@ -23,12 +25,7 @@ export class CraftService {
   }
 
   previewPlan(item: string, count = 1): CraftPlanStep[] {
-    const bot = this.instance.bot;
-    if (!bot) {
-      // offline preview: heuristic tree
-      return heuristicPlan(item, count);
-    }
-    return this.buildPlan(bot, item.replace(/^minecraft:/, ""), count, 0);
+    return smartPreviewPlan(this.instance, item, count);
   }
 
   enqueueCraft(item: string, count = 1) {
@@ -46,24 +43,14 @@ export class CraftService {
     );
   }
 
-  /** Build/acquire içinden kuyruğa almadan craft dene */
+  /** Build/acquire içinden kuyruğa almadan tam bağımlılık zinciriyle craft et */
   async runCraftInline(item: string, count: number, token: TaskToken, report: ProgressFn) {
-    const name = item.replace(/^minecraft:/, "");
-    const n = Math.max(1, Math.min(64, Math.floor(count)));
-    await this.runCraft(name, n, token, report);
+    await runSmartCraftInline(this.instance, item, count, token, report);
   }
 
   /** Tarif var mı? (2x2 / masa) */
   canCraft(item: string): boolean {
-    const bot = this.instance.bot;
-    if (!bot) return false;
-    const name = item.replace(/^minecraft:/, "");
-    const id = bot.registry.itemsByName[name]?.id;
-    if (id == null) return false;
-    const r1 = bot.recipesFor(id, null, 1, null) as unknown[];
-    if (r1.length) return true;
-    const r2 = bot.recipesFor(id, null, 1, true) as unknown[];
-    return r2.length > 0;
+    return smartCanCraft(this.instance, item);
   }
 
   private buildPlan(bot: Bot, item: string, count: number, depth: number): CraftPlanStep[] {
@@ -102,44 +89,7 @@ export class CraftService {
   }
 
   private async runCraft(item: string, count: number, token: TaskToken, report: ProgressFn) {
-    const bot = this.requireBot();
-    const plan = this.buildPlan(bot, item, count, 0);
-    report({ done: 0, total: Math.max(1, plan.length), label: `plan: ${plan.length} adım` });
-    this.log().info(`Üretim planı: ${item}×${count}`, plan.map((p) => `${p.kind}:${p.item}×${p.count}`).join(" → "));
-
-    let stepI = 0;
-    for (const step of plan) {
-      if (token.cancelled) throw new Error(token.reason ?? "iptal");
-      stepI++;
-      const stepLabel =
-        step.kind === "craft"
-          ? `Craft: ${step.item} ×${step.count}`
-          : step.kind === "smelt"
-            ? `Eritiliyor: ${step.item} ×${step.count}`
-            : `Toplanıyor: ${step.item} ×${step.count}`;
-      report({ done: stepI - 1, total: plan.length, label: stepLabel });
-
-      if (step.kind === "gather") {
-        await this.gatherFallback(step.item, step.count, token, report);
-      } else if (step.kind === "smelt") {
-        try {
-          await this.instance.survival["runCook"]?.(token, report);
-        } catch {
-          this.log().warn("Smelt adımı atlandı");
-        }
-      } else if (step.kind === "craft") {
-        report({ done: stepI - 1, total: plan.length, label: `Craft deneniyor: ${step.item} ×${step.count}` });
-        await this.craftItem(bot, step.item, step.count, token);
-      }
-    }
-
-    const have = bot.inventory.items().filter((i) => i.name === item).reduce((s, i) => s + i.count, 0);
-    if (have < count) {
-      // final direct craft attempt
-      report({ done: plan.length, total: plan.length, label: `Craft deneniyor: ${item} ×${count}` });
-      await this.craftItem(bot, item, count, token);
-    }
-    report({ done: plan.length, total: plan.length, label: `Craft bitti: ${item}` });
+    await runSmartCraftInline(this.instance, item, count, token, report);
     this.log().success(`Üretim bitti: ${item}`);
   }
 

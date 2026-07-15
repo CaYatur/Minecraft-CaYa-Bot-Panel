@@ -3,6 +3,8 @@ import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { ensureMovement, runGoto } from "../movement";
 import { ringSearch } from "./ringSearch";
+// caya-build-resource-storage-v1: gather
+import { collectDropsAfterDig, runSmartCollectBlock, runSmartCollectDrops } from "./smartGather";
 
 const LOG_BLOCKS = new Set([
   "oak_log",
@@ -127,94 +129,15 @@ export class GatherService {
   }
 
   async runCollectDrops(filter: string | undefined, radius: number, token: TaskToken, report: ProgressFn) {
-    const bot = this.requireBot();
-    const t0 = Date.now();
-    let picked = 0;
-    while (!token.cancelled && Date.now() - t0 < 60_000) {
-      const drops = Object.values(bot.entities).filter((e) => {
-        if (!e || e.name !== "item") return false;
-        const d = bot.entity.position.distanceTo(e.position);
-        if (d > radius) return false;
-        if (filter) {
-          const meta = (e as { getDroppedItem?: () => { name?: string } | null }).getDroppedItem?.();
-          if (meta?.name && !meta.name.includes(filter)) return false;
-        }
-        return true;
-      });
-      if (!drops.length) break;
-      drops.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
-      const d = drops[0]!;
-      report({ done: picked, total: picked + drops.length, label: "eşya toplanıyor" });
-      try {
-        await runGoto(this.instance, d.position.x, d.position.y, d.position.z, 1, token, () => {});
-        picked++;
-        await sleep(400);
-      } catch {
-        break;
-      }
-    }
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
-    this.log().success(`Yerdeki eşya toplama (~${picked} hedef)`);
+    const picked = await runSmartCollectDrops(this.instance, filter, radius, token, report);
+    this.log().success(`Yerdeki eşya toplama (doğrulandı: ${picked})`);
   }
 
-  /**
-   * Blok/item adına göre topla: yakında bul → kaz; yoksa halka arama (çevre).
-   * stone → cobblestone sayımı; ore → runMine.
-   */
+  /** Blok/item adına göre akıllı ham madde + craft zinciri */
+
   async runCollectBlock(name: string, need: number, token: TaskToken, report: ProgressFn) {
-    const bot = this.requireBot();
-    const n = name.replace(/^minecraft:/, "");
-
-    // odun
-    if (n.endsWith("_log") || n.endsWith("_stem") || n === "log") {
-      await this.runCollectWood(need, n.endsWith("_log") || n.endsWith("_stem") ? n : undefined, token, report);
-      return;
-    }
-    // cevher
-    if (n.includes("_ore") || n === "ancient_debris" || n.startsWith("raw_")) {
-      const ore = n.replace(/^deepslate_/, "").replace(/_ore$/, "").replace(/^raw_/, "");
-      await this.runMine(ore, need, "legit", token, report);
-      return;
-    }
-
-    const countHave = () => {
-      if (n === "cobblestone" || n === "stone") {
-        return this.countItems(bot, (x) => x === "cobblestone" || x === "stone");
-      }
-      return this.countItems(bot, (x) => x === n || x === n.replace(/_block$/, ""));
-    };
-
-    let got = countHave();
-    report({ done: got, total: need, label: `${n} ${got}/${need}` });
-
-    const matchBlock = (bn: string) => {
-      if (n === "cobblestone" || n === "stone") return bn === "stone" || bn === "cobblestone" || bn === "deepslate";
-      if (n.endsWith("_planks")) return bn === n || bn.endsWith("_log");
-      return bn === n || bn.includes(n);
-    };
-
-    while (got < need && !token.cancelled) {
-      let block = bot.findBlock({
-        matching: (b) => matchBlock(b.name),
-        maxDistance: 32
-      });
-      if (!block) {
-        const found = await ringSearch(this.instance, token, report, {
-          step: 28,
-          maxRadius: 112,
-          probe: (b) =>
-            Boolean(b.findBlock({ matching: (bl) => matchBlock(bl.name), maxDistance: 20 }))
-        });
-        if (!found) throw new Error(`${n} bulunamadı (çevre araması tükendi)`);
-        block = bot.findBlock({ matching: (b) => matchBlock(b.name), maxDistance: 32 });
-      }
-      if (!block) continue;
-      await this.digBlock(bot, block, token);
-      got = countHave();
-      report({ done: Math.min(got, need), total: need, label: `${n} ${got}/${need}` });
-    }
-    if (token.cancelled) throw new Error(token.reason ?? "iptal");
-    this.log().success(`Kaynak toplama bitti: ${n} ×${got}`);
+    await runSmartCollectBlock(this.instance, name, need, token, report);
+    this.log().success(`Kaynak toplama bitti: ${name} · hedef ${need}`);
   }
 
   async runMine(ore: string, need: number, mode: "legit" | "utility", token: TaskToken, report: ProgressFn) {
@@ -307,6 +230,8 @@ export class GatherService {
       throw new Error(`Eldeki alet yasaklı: ${bot.heldItem.name}`);
     }
     await bot.dig(blk);
+    // Kazılan item entity'sini gerçekten envantere girene kadar takip et.
+    await collectDropsAfterDig(this.instance, blk.name, token);
   }
 
   private hasLavaNear(bot: Bot, pos: { x: number; y: number; z: number }) {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ItemPicker } from "../components/ItemPicker";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -52,6 +53,7 @@ export function Automations() {
   const bots = useAppStore((s) => s.bots);
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
+  const { t } = useI18n();
   const [rules, setRules] = useState<Rule[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -208,7 +210,7 @@ export function Automations() {
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-bold text-zinc-100">Otomasyonlar</h1>
+        <h1 className="text-xl font-bold text-zinc-100">{t("automations.title")}</h1>
         <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">
           {rules.length} kural · katalog {catalogVersion}
         </span>

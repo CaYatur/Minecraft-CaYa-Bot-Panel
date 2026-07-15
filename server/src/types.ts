@@ -35,6 +35,17 @@ export interface CombatConfig {
   jumpCrit: boolean;
   fleeAtHealth: number;
   chaseDistance: number;
+  /**
+   * Hedefe kenetlenmişken (saldırı/savunma): menzildeki başka mob / hasar veren oyuncuya
+   * ara vuruş — ana hedef değişmez, çok yakın tehdit de hasar alır.
+   */
+  cleaveNearby?: boolean;
+  /** ara vuruş menzili (varsayılan = reach) */
+  cleaveRange?: number;
+  /** yakın hostile mob'lara ara vuruş */
+  cleaveMobs?: boolean;
+  /** yakın, bize hasar vermiş / tehdit oyunculara ara vuruş */
+  cleavePlayers?: boolean;
 }
 
 /** last death position for loot recovery (Faz 6) */
@@ -378,7 +389,12 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       turnSpeedDegPerTick: 30,
       jumpCrit: true,
       fleeAtHealth: 6,
-      chaseDistance: 24
+      chaseDistance: 24,
+      // opt-in: hedefe kilitliyken yanındaki mob / hasar veren oyuncuya da vur
+      cleaveNearby: false,
+      cleaveRange: 3.0,
+      cleaveMobs: true,
+      cleavePlayers: true
     },
     survival: {
       autoEat: true,

@@ -1,8 +1,19 @@
 import { create } from "zustand";
+import {
+  applyDocumentLang,
+  loadLocalePreference,
+  resolveLocale,
+  type AppLocale,
+  type LocalePreference
+} from "../i18n";
 import type { BotSnapshot, ChatEntry, LogEntry, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
 
 const CHAT_CAP = 500;
 const LOG_CAP = 1000;
+
+const initialLocalePref = loadLocalePreference();
+const initialLocale = resolveLocale(initialLocalePref);
+applyDocumentLang(initialLocale);
 
 export interface Toast {
   id: number;
@@ -21,6 +32,10 @@ interface AppState {
   chatQueue: Record<string, number>;
   logs: LogEntry[];
   toasts: Toast[];
+  /** auto | en | tr */
+  localePreference: LocalePreference;
+  /** resolved en | tr */
+  locale: AppLocale;
 
   setConnected(v: boolean): void;
   applySnapshot(s: StateSnapshot): void;
@@ -32,6 +47,7 @@ interface AppState {
   addLog(e: LogEntry): void;
   toast(level: Toast["level"], message: string): void;
   dismissToast(id: number): void;
+  setLocalePreference(pref: LocalePreference): void;
 }
 
 let toastSeq = 1;
@@ -47,6 +63,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatQueue: {},
   logs: [],
   toasts: [],
+  localePreference: initialLocalePref,
+  locale: initialLocale,
 
   setConnected: (v) => set({ connected: v }),
 
@@ -104,5 +122,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     setTimeout(() => get().dismissToast(id), 5000);
   },
 
-  dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) }))
+  dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) })),
+
+  setLocalePreference: (pref) => {
+    const locale = resolveLocale(pref);
+    applyDocumentLang(locale);
+    set({ localePreference: pref, locale });
+  }
 }));

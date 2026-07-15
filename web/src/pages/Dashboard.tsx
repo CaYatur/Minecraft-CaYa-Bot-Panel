@@ -3,6 +3,7 @@ import { AddBotModal } from "../components/AddBotModal";
 import { AllChatPanel } from "../components/AllChatPanel";
 import { BotCard } from "../components/BotCard";
 import { LogPanel } from "../components/LogPanel";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -10,6 +11,7 @@ export function Dashboard() {
   const bots = useAppStore((s) => s.bots);
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
+  const { t } = useI18n();
   const [showAdd, setShowAdd] = useState(false);
   const [bottomTab, setBottomTab] = useState<"logs" | "chat">("logs");
 
@@ -19,7 +21,7 @@ export function Dashboard() {
   const bulk = async (op: "start-all" | "stop-all") => {
     try {
       await api.post(`/api/bots/${op}`);
-      toast("info", op === "start-all" ? "Botlar kademeli başlatılıyor…" : "Tüm botlar durduruluyor");
+      toast("info", op === "start-all" ? t("dashboard.startingAll") : t("dashboard.stoppingAll"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -28,28 +30,28 @@ export function Dashboard() {
   return (
     <div className="flex h-full flex-col gap-4 p-6">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-bold text-zinc-100">Botlar</h1>
+        <h1 className="text-xl font-bold text-zinc-100">{t("dashboard.title")}</h1>
         <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">
-          {onlineCount}/{list.length} çevrimiçi
+          {t("dashboard.onlineCount", { online: onlineCount, total: list.length })}
         </span>
         <div className="ml-auto flex gap-2">
           <button
             onClick={() => bulk("start-all")}
             className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-emerald-300 hover:bg-zinc-700"
           >
-            ▶ Tümünü Başlat
+            {t("dashboard.startAll")}
           </button>
           <button
             onClick={() => bulk("stop-all")}
             className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-red-300 hover:bg-zinc-700"
           >
-            ■ Tümünü Durdur
+            {t("dashboard.stopAll")}
           </button>
           <button
             onClick={() => setShowAdd(true)}
             className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500"
           >
-            + Bot Ekle
+            {t("dashboard.addBot")}
           </button>
         </div>
       </div>
@@ -57,7 +59,7 @@ export function Dashboard() {
       {list.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 text-zinc-500">
           <span className="text-4xl">🐺</span>
-          <p className="text-sm">Henüz bot yok. "+ Bot Ekle" ile ilk botunu oluştur.</p>
+          <p className="text-sm">{t("dashboard.empty")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -73,17 +75,16 @@ export function Dashboard() {
             onClick={() => setBottomTab("logs")}
             className={`text-xs font-semibold tracking-wide uppercase ${bottomTab === "logs" ? "text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}
           >
-            Sistem Logları
+            {t("dashboard.systemLogs")}
           </button>
           <button
             onClick={() => setBottomTab("chat")}
             className={`text-xs font-semibold tracking-wide uppercase ${bottomTab === "chat" ? "text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}
           >
-            Birleşik Sohbet
+            {t("dashboard.allChat")}
           </button>
-          <span className="ml-auto text-[10px] text-zinc-600">İ1 — sistem mesajları asla oyun sohbetine yazılmaz</span>
         </div>
-        <div className="h-[calc(100%-1.5rem)]">{bottomTab === "logs" ? <LogPanel /> : <AllChatPanel />}</div>
+        {bottomTab === "logs" ? <LogPanel /> : <AllChatPanel />}
       </div>
 
       {showAdd && <AddBotModal onClose={() => setShowAdd(false)} />}

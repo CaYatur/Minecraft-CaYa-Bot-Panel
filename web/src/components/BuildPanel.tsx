@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import type { BuildRuntime } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
@@ -14,15 +15,15 @@ interface SchematicMeta {
   format: string;
 }
 
-const PHASE_TR: Record<BuildRuntime["phase"], string> = {
-  idle: "Boşta",
-  preparing: "Hazırlanıyor",
-  acquiring: "Malzeme toplanıyor",
-  building: "İnşa ediliyor",
-  cleanup: "Scaffold temizlik",
-  done: "Tamam",
-  failed: "Hata",
-  cancelled: "İptal"
+const PHASE_KEYS: Record<BuildRuntime["phase"], string> = {
+  idle: "build.phases.idle",
+  preparing: "build.phases.preparing",
+  acquiring: "build.phases.acquiring",
+  building: "build.phases.building",
+  cleanup: "build.phases.cleanup",
+  done: "build.phases.done",
+  failed: "build.phases.failed",
+  cancelled: "build.phases.cancelled"
 };
 
 const emptyBuild = (): BuildRuntime => ({
@@ -53,6 +54,7 @@ export function BuildPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
   const servers = useAppStore((s) => s.servers);
+  const { t } = useI18n();
   const [schematics, setSchematics] = useState<SchematicMeta[]>([]);
   const [schematicId, setSchematicId] = useState("");
   const [originMode, setOriginMode] = useState<"here" | "coords" | "player">("here");
@@ -179,7 +181,7 @@ export function BuildPanel({ botId }: { botId: string }) {
   const stop = async () => {
     try {
       await api.post(`/api/bots/${botId}/action`, { type: "stop-build" });
-      toast("info", "İnşaat durduruldu");
+      toast("info", t("build.stopped"));
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -195,7 +197,7 @@ export function BuildPanel({ botId }: { botId: string }) {
     <div className="space-y-4 p-1">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <div className="text-sm font-semibold text-zinc-200">Yapı inşaat</div>
+          <div className="text-sm font-semibold text-zinc-200">{t("build.title")}</div>
           <p className="text-[11px] text-zinc-500">
             .schem · .litematic · .caya.json — döndür/aynala, scaffold temizliği, canlı blok animasyonu.
           </p>
@@ -211,7 +213,7 @@ export function BuildPanel({ botId }: { botId: string }) {
                   : "bg-zinc-800 text-zinc-400"
           }`}
         >
-          {PHASE_TR[build.phase]}
+          {t(PHASE_KEYS[build.phase])}
         </span>
       </div>
 
@@ -356,7 +358,7 @@ export function BuildPanel({ botId }: { botId: string }) {
           onClick={() => void start()}
           className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
-          ▶ İnşa et
+          {t("build.start")}
         </button>
         <button
           type="button"
@@ -372,7 +374,7 @@ export function BuildPanel({ botId }: { botId: string }) {
           onClick={() => void stop()}
           className="rounded-lg bg-red-900/50 px-4 py-1.5 text-sm font-medium text-red-200 hover:bg-red-900/70 disabled:opacity-40"
         >
-          ■ Durdur
+          {t("build.stop")}
         </button>
         <span className="self-center text-[10px] text-zinc-600">
           Scaffold: {bot.config.movement.scaffoldBlocks.join(", ") || "—"}
@@ -382,9 +384,9 @@ export function BuildPanel({ botId }: { botId: string }) {
       {/* Anlık iş + malzeme listesi — butonların altında, scroll ile taşmaz */}
       {(busy || build.activity) && (
         <div className="rounded-lg border border-amber-900/40 bg-amber-950/25 px-3 py-2">
-          <div className="text-[10px] font-semibold tracking-wide text-amber-500/90 uppercase">Şu an</div>
+          <div className="text-[10px] font-semibold tracking-wide text-amber-500/90 uppercase">{t("build.now")}</div>
           <p className="mt-0.5 break-words text-sm text-amber-100">
-            {build.activity || build.label || PHASE_TR[build.phase]}
+            {build.activity || build.label || t(PHASE_KEYS[build.phase])}
           </p>
           {build.activityMaterial && (
             <p className="mono mt-0.5 text-[10px] text-amber-600/90">malzeme: {build.activityMaterial}</p>
@@ -394,16 +396,16 @@ export function BuildPanel({ botId }: { botId: string }) {
 
       <div className="min-w-0 space-y-1.5">
         <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-zinc-500 uppercase">
-          Malzemeler
+          {t("build.materials")}
           {missingCount > 0 && (
             <span className="rounded-full bg-red-950/50 px-2 py-0.5 text-[10px] font-normal normal-case text-red-300">
-              {missingCount} eksik
+              {t("build.missing", { n: missingCount })}
             </span>
           )}
           {(busy || Boolean(build.activity)) && (
             <span className="inline-flex items-center gap-1 text-[10px] font-normal normal-case text-emerald-500/90">
               <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-              canlı
+              {t("build.live")}
             </span>
           )}
           <button
