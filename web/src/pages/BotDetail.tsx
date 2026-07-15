@@ -21,9 +21,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "logs", label: "📋 Loglar" },
   { id: "inventory", label: "🎒 Envanter" },
   { id: "tasks", label: "📌 Görevler" },
-  { id: "combat", label: "⚔ Dövüş" },
-  { id: "survival", label: "🍗 Yaşam" },
-  { id: "work", label: "⛏ İş" }
+  { id: "combat", label: "⚔️ Dövüş" },
+  { id: "survival", label: "🍖 Yaşam" },
+  { id: "work", label: "🪓 İş" }
 ];
 
 export function BotDetail() {
