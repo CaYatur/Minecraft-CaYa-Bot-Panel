@@ -603,19 +603,19 @@ export function SurvivalPanel({ botId }: { botId: string }) {
               type="number"
               min={1}
               max={4}
-              defaultValue={mov.maxSafeDrop ?? 2}
+              defaultValue={mov.maxSafeDrop ?? 3}
               disabled={mov.edgeSafety === false}
               onBlur={(e) =>
                 void patchMove({
-                  maxSafeDrop: Math.max(1, Math.min(4, Number(e.target.value) || 2))
+                  maxSafeDrop: Math.max(1, Math.min(4, Number(e.target.value) || 3))
                 })
               }
               className="mono w-14 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-indigo-500 disabled:opacity-40"
             />
           </label>
           <p className="text-[10px] leading-relaxed text-zinc-600">
-            Pathfinder uçurumdan yol seçmez. Kenarda: atla → köprü → geri çek. Düşerse MLG/scaffold yedek kalır
-            (oyuncu gibi toparlanır) ama amaç düşmemek.
+            1 blok yukarı/aşağı = normal hareket (karışılmaz). Edge safety yalnızca derin boşlukta (≈4+). Geri
+            çekilince ~3 sn sessiz. Düşerse MLG yedek.
           </p>
         </div>
       </div>

@@ -40,8 +40,10 @@ export function ensureMovement(
 
   const cfg = moveCfg(instance);
   const mode = opts?.mode ?? (opts?.parkour ? "parkour" : "goto");
+  // parkour-goto hariç humanize: 1-up kule kapalı ama normal jump-up pathfinder'da var
   const human = cfg.humanize !== false && mode !== "parkour";
-  const parkourOn = opts?.parkour === true || cfg.allowParkour !== false;
+  const parkourOn =
+    opts?.parkour === true || (mode !== "goto" && cfg.allowParkour !== false) || cfg.allowParkour !== false;
   const movements = new Movements(bot);
 
   movements.canDig = Boolean(cfg.canDig);
@@ -52,9 +54,9 @@ export function ensureMovement(
         ? true
         : cfg.allowSprint !== false;
   movements.allowSprinting = Boolean(sprintAllowed);
-  // takipte parkour açık kalsın ama uçurum maxDrop düşük
   movements.allowParkour = parkourOn;
-  movements.allow1by1towers = mode === "parkour" ? Boolean(cfg.allowTower) : human ? Boolean(cfg.allowTower) : true;
+  // 1x1 kule: humanize ile kapalı (eski); jump-up (1 blok basamak) pathfinder getMoveJumpUp ile kalır
+  movements.allow1by1towers = human ? Boolean(cfg.allowTower) : Boolean(cfg.allowTower ?? true);
 
   try {
     (movements as { maxDrop?: number }).maxDrop = safeMaxDropForPath(cfg, mode);
@@ -62,9 +64,11 @@ export function ensureMovement(
     /* eski pathfinder */
   }
 
-  // düşüş maliyeti — pathfinder uçurumu tercih etmesin
+  // liquidCost'u yükseltme — suda/çıkışta eski gibi davran
   try {
-    (movements as { liquidCost?: number }).liquidCost = mode === "parkour" ? 2 : 4;
+    if (mode === "parkour") {
+      (movements as { liquidCost?: number }).liquidCost = 1;
+    }
   } catch {
     /* */
   }
@@ -89,12 +93,14 @@ function pathfinderGoal(
 ): Promise<void> {
   const bot = ensureMovement(instance, {
     allowSprintNow: moveCfg(instance).allowSprint !== false,
-    parkour: moveMode === "parkour" || moveCfg(instance).allowParkour !== false,
+    // parkour flag sadece parkour-goto / explicit; normal goto eski hareket
+    parkour: moveMode === "parkour",
     mode: moveMode
   });
   // kısa insanî gecikme — anında yola çıkma flag’i azaltır
-  const reaction = moveCfg(instance).humanize === false ? 0 : 40 + Math.floor(Math.random() * 90);
+  const reaction = moveCfg(instance).humanize === false || moveMode === "parkour" ? 0 : 40 + Math.floor(Math.random() * 90);
   let edgeBusy = false;
+  let edgeTick = 0;
 
   return new Promise<void>((resolve, reject) => {
     const stopGoal = () => {
@@ -148,15 +154,15 @@ function pathfinderGoal(
         reject(new Error("Bağlantı koptu — hareket görevi sonlandı."));
         return;
       }
-      // uçurum güvenliği + bakış
+      // bakış her tick; uçurum taraması seyrek (normal 1-up bozulmasın)
       void (async () => {
         try {
-          if (!edgeBusy && moveCfg(instance).edgeSafety !== false) {
+          edgeTick++;
+          if (!edgeBusy && moveCfg(instance).edgeSafety !== false && edgeTick % 3 === 0) {
             edgeBusy = true;
             const act = await handleEdgeSafety(instance, token, { pausePath: true });
             edgeBusy = false;
             if (act === "jumped" || act === "bridged" || act === "backed") {
-              // goal'u yeniden kur
               try {
                 bot.pathfinder.setGoal(goal);
               } catch {
@@ -329,10 +335,9 @@ export async function runFollow(
       if (entity) {
         report({ done: 0, total: 0, label: `${playerName} takip (${holdDist}m) · bakış · sprint` });
 
-        // takip: düşük maxDrop — uçurumdan path seçmesin; parkour kısa gap için açık
+        // takip: eski hareket (maxDrop config); kenar taraması ayrı
         ensureMovement(instance, {
           allowSprintNow: canSprint(),
-          parkour: moveCfg(instance).allowParkour !== false,
           mode: "follow"
         });
         const followBot = bot;
@@ -353,16 +358,14 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(ent.position);
 
-          // UÇURUM: düşmeden önce atla / köprü / geri çek
+          // UÇURUM: sadece gerçek void (1-up bozmaz); throttle edgeSafety içinde
           try {
             const act = await handleEdgeSafety(instance, token, { pausePath: true });
             if (act === "jumped" || act === "bridged" || act === "backed") {
-              // takip hedefini yeniden kur
               const ent2 = bot.players[playerName]?.entity;
               if (ent2) {
                 ensureMovement(instance, {
                   allowSprintNow: canSprint(),
-                  parkour: true,
                   mode: "follow"
                 });
                 try {
@@ -376,7 +379,7 @@ export async function runFollow(
                 total: 0,
                 label: `takip ${playerName} · kenar:${act}`
               });
-              await sleep(80);
+              await sleep(60);
               continue;
             }
           } catch {
@@ -386,7 +389,6 @@ export async function runFollow(
           if (Math.random() < 0.05) {
             ensureMovement(instance, {
               allowSprintNow: canSprint(),
-              parkour: moveCfg(instance).allowParkour !== false,
               mode: "follow"
             });
           }

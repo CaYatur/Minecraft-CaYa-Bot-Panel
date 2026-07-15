@@ -416,7 +416,8 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       ladderParkour: true,
       parkourSprint: true,
       edgeSafety: true,
-      maxSafeDrop: 2,
+      // 3 = pathfinder ile uyumlu; edge safety asıl drop≥4'te devreye girer
+      maxSafeDrop: 3,
       bridgeGaps: true,
       preferParkourOverBridge: true
     }
