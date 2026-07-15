@@ -1397,52 +1397,53 @@ export class CombatService {
     if ((bot.health ?? 0) <= 0 || !bot.entity) return;
     const hold = Math.max(0.8, range);
     try {
-      ensureMovement(this.instance, { allowSprintNow: true });
-      // GoalFollow entity'yi canlı takip eder; GoalNear sabit nokta yedek
-      try {
-        bot.pathfinder.setGoal(new goals.GoalFollow(entity, hold), true);
-      } catch {
+      // canDig kapalı: hedefe kazarak değil yürüyerek/atlayarak yaklaş (İ2)
+      ensureMovement(this.instance, { allowSprintNow: true, canDig: false });
+
+      // GoalFollow(dynamic=true) hedefi KENDİSİ izler — döngüde goal yenilenmez
+      // (800ms'de bir setGoal, zıplama ortasında rota iptali = boşluğa düşme demekti).
+      // Yenileme yalnızca entity referansı değişince (chunk'tan çıkıp girme) yapılır.
+      let tracked: Entity =
+        (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
+      const setFollowGoal = (target: Entity) => {
         try {
-          const p = entity.position;
-          bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
+          bot.pathfinder.setGoal(new goals.GoalFollow(target, hold), true);
         } catch {
-          /* */
+          try {
+            const p = target.position;
+            bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
+          } catch {
+            /* */
+          }
         }
-      }
+      };
+      setFollowGoal(tracked);
 
       const t0 = Date.now();
-      let lastRepath = 0;
       while (!token.cancelled && !this.deadPaused && Date.now() - t0 < 12_000) {
         if ((bot.health ?? 0) <= 0 || !bot.entity) break;
-        if (!entity || entity.isValid === false) break;
+        const live = typeof entity.id === "number" ? bot.entities[entity.id] : tracked;
+        if (!live || live.isValid === false) break;
+        if (live !== tracked) {
+          tracked = live;
+          setFollowGoal(tracked);
+        }
 
-        // taze entity (id)
-        const live =
-          typeof entity.id === "number" ? (bot.entities[entity.id] ?? entity) : entity;
         const reach = this.cfg().reach ?? 3;
         if (inMeleeRange(bot, live, reach)) break;
 
-        // ara sıra hedef yenile (entity hareket ediyor)
-        if (Date.now() - lastRepath > 800) {
-          lastRepath = Date.now();
-          try {
-            bot.pathfinder.setGoal(new goals.GoalFollow(live, hold), true);
-          } catch {
-            try {
-              const p = live.position;
-              bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, hold));
-            } catch {
-              /* */
-            }
-          }
-        }
-
+        // Bakış: yürürken pathfinder dümeni sürer — yalnızca vuruş mesafesine
+        // yaklaşınca (ön nişan) veya bot dururken hedefe bak (D1 hazırlığı).
         try {
-          await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
+          const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+          const nearlyThere = distanceEyeToEntity(bot, live) <= reach + 1.5;
+          if (nearlyThere || pf.isMoving?.() === false) {
+            await stepLookAtEntity(bot, live, this.cfg().turnSpeedDegPerTick ?? 24);
+          }
         } catch {
           /* */
         }
-        await sleep(100);
+        await sleep(120);
       }
       try {
         bot.pathfinder.setGoal(null);

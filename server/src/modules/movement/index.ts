@@ -3,9 +3,22 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
-import { easeLookAt, entityLookPoint, stepLookAlongMotion, stepLookAtEntity } from "./look";
+import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
+
+/**
+ * HAREKET ÇEKİRDEĞİ — tek altın kural (TODO §12'ye de yazıldı):
+ * mineflayer-pathfinder, aktif bir goal varken DÜMENİN SAHİBİDİR — yürüyüş yönünü
+ * kendi verdiği bakış (yaw) ile çizer. Rota aktifken bot.look'a dokunmak botu yanlış
+ * yöne yürütür, zıplamaları ıskalatır, merdivenden düşürür ("geri atılma" hatası).
+ * İnsanî bakış SADECE bot dururken (pathfinder.isMoving() === false) uygulanır.
+ * Aynı sebeple takipte goal sürekli yenilenmez: GoalFollow(dynamic=true) hedefi
+ * kendisi izler; yenileme yalnızca entity REFERANSI değişince yapılır.
+ */
 
 const GOTO_TIMEOUT_MS = 180_000;
+const STUCK_WINDOW_MS = 10_000; // bu süre yer değiştirme yoksa: 1 kez rota tazele, sonra pes et
+const FOLLOW_TICK_MS = 150;
+const FOLLOW_REPORT_MS = 1500; // panel report en fazla bu sıklıkta (10Hz spam yok)
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
@@ -17,50 +30,51 @@ function moveCfg(instance: BotInstance): MovementConfig {
   return instance.config.movement;
 }
 
-/** İnsanî dönüş hızı (°/tick) — yüksek değer AC flag riski */
+/** İnsanî dönüş hızı (°/tick) — sadece DURURKEN yapılan bakışlarda kullanılır */
 function turnSpeed(instance: BotInstance): number {
   const c = moveCfg(instance);
   return Math.max(8, Math.min(28, c.lookTurnDegPerTick ?? 16));
 }
 
-/**
- * Pathfinder Movements:
- * - follow/goto: allowParkour config’ten AÇIK (atlanabilir boşluklardan atlansın)
- * - maxDrop: takipte ürkek düşme yok (config maxDrop, genelde 3)
- * - parkour-goto: daha agresif maxDrop + gap jump yedek
- * - Bakış path ile yarışırsa 1-up “geri at” olabilir — goto’da bakış yumuşak/sadece yerde
- */
-export function ensureMovement(
-  instance: BotInstance,
-  opts?: { allowSprintNow?: boolean; parkour?: boolean; mode?: "follow" | "goto" | "parkour" }
-): Bot {
+function pfIsMoving(bot: Bot): boolean {
+  try {
+    const pf = bot.pathfinder as unknown as { isMoving?(): boolean };
+    return pf.isMoving?.() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export interface EnsureMovementOpts {
+  allowSprintNow?: boolean;
+  /** true → parkur zorla açık (config'i ezer) */
+  parkour?: boolean;
+  /** takip için canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
+  canDig?: boolean;
+  /** geriye dönük uyum: "follow" canDig=false varsayar; başka etkisi yok */
+  mode?: "follow" | "goto" | "parkour";
+}
+
+/** pathfinder eklentisini yükle + Movements'ı config'ten kur */
+export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts): Bot {
   const bot = requireBot(instance);
-  const anyBot = bot as unknown as { pathfinder?: { setMovements(m: unknown): void } };
+  const anyBot = bot as unknown as { pathfinder?: unknown };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
 
   const cfg = moveCfg(instance);
-  const mode = opts?.mode ?? (opts?.parkour ? "parkour" : "goto");
-  // Parkur açık: config allowParkour (varsayılan true). Kapalıysa sadece yürüyüş/1-up.
-  const parkourOn =
-    mode === "parkour" || opts?.parkour === true ? true : cfg.allowParkour !== false;
-
   const movements = new Movements(bot);
-  movements.canDig = Boolean(cfg.canDig);
-  const sprintAllowed =
-    opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
-  movements.allowSprinting = Boolean(sprintAllowed);
-  movements.allowParkour = parkourOn;
-  movements.allow1by1towers = Boolean(cfg.allowTower);
 
-  try {
-    const baseDrop = Math.max(1, Math.min(6, cfg.maxDrop ?? 3));
-    // parkour-goto: biraz daha serbest drop; follow/goto: config (atlanır, uçuruma atılmaz)
-    (movements as { maxDrop?: number }).maxDrop =
-      mode === "parkour"
-        ? Math.max(baseDrop, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2))
-        : Math.min(4, baseDrop);
-  } catch {
-    /* */
+  const digDefault = opts?.mode === "follow" ? false : Boolean(cfg.canDig);
+  movements.canDig = opts?.canDig !== undefined ? opts.canDig : digDefault;
+  movements.allowSprinting = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
+  // Parkur: pathfinder'ın YERLEŞİK parkuru (1-4 blok boşluk + sprint jump) — merdiven
+  // tırmanışı zaten doğal yetenek, ayrı bayrak gerekmez.
+  movements.allowParkour = opts?.parkour === true ? true : cfg.allowParkour !== false;
+  movements.allow1by1towers = Boolean(cfg.allowTower);
+  // DOĞRU özellik adı maxDropDown'dur ("maxDrop" pathfinder'da YOK — eski kod sessizce no-op'tu)
+  movements.maxDropDown = Math.max(2, Math.min(6, cfg.maxDrop ?? 4));
+  if ("canOpenDoors" in movements) {
+    (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = true;
   }
 
   const registry = (bot as unknown as { registry: { itemsByName: Record<string, { id: number } | undefined> } })
@@ -74,29 +88,31 @@ export function ensureMovement(
   return bot;
 }
 
+/**
+ * Statik hedefe git; söz verir. Bakış müdahalesi YOK — pathfinder sürer.
+ * Takılma bekçisi: STUCK_WINDOW_MS boyunca yer değiştirme yoksa rota bir kez
+ * tazelenir; ikinci pencerede de kıpırdamazsa anlaşılır hatayla düşer (Faz 4 [~] maddesi).
+ */
 function pathfinderGoal(
   instance: BotInstance,
   goal: goals.Goal,
   token: TaskToken,
-  timeoutMs = GOTO_TIMEOUT_MS,
-  lookTarget?: { x: number; y: number; z: number } | (() => { x: number; y: number; z: number } | null),
-  moveMode: "follow" | "goto" | "parkour" = "goto"
+  opts?: { timeoutMs?: number; onStuckRetry?: () => void }
 ): Promise<void> {
-  const bot = ensureMovement(instance, {
-    allowSprintNow: moveCfg(instance).allowSprint !== false,
-    // parkour mode zorla açık; goto/follow config’ten (allowParkour)
-    parkour: moveMode === "parkour" ? true : undefined,
-    mode: moveMode
-  });
-  const reaction = moveCfg(instance).humanize === false || moveMode === "parkour" ? 0 : 40 + Math.floor(Math.random() * 90);
+  const bot = requireBot(instance);
+  const timeoutMs = opts?.timeoutMs ?? GOTO_TIMEOUT_MS;
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    let lastPos = bot.entity?.position?.clone?.() ?? null;
+    let lastMoveAt = Date.now();
+    let stuckRetried = false;
+
     const stopGoal = () => {
       try {
         bot.pathfinder.setGoal(null);
       } catch {
-        /* */
+        /* bot düşmüş olabilir */
       }
     };
     const cleanup = () => {
@@ -111,7 +127,7 @@ function pathfinderGoal(
       cleanup();
       fn();
     };
-    const onReached = () => finish(() => resolve());
+    const onReached = () => finish(resolve);
     const onPath = (result: { status: string }) => {
       if (result.status === "noPath") {
         finish(() => {
@@ -126,16 +142,6 @@ function pathfinderGoal(
       }
     };
 
-    const start = async () => {
-      if (reaction > 0) await sleep(reaction);
-      if (token.cancelled) {
-        finish(() => reject(new Error(token.reason ?? "Görev iptal edildi.")));
-        return;
-      }
-      bot.pathfinder.setGoal(goal);
-    };
-    void start();
-
     const watch = setInterval(() => {
       if (settled) return;
       if (token.cancelled) {
@@ -145,22 +151,34 @@ function pathfinderGoal(
         });
         return;
       }
-      if (instance.status !== "online") {
+      if (instance.status !== "online" || !bot.entity) {
         finish(() => reject(new Error("Bağlantı koptu — hareket görevi sonlandı.")));
         return;
       }
-      // Goto: hafif bakış (pathfinder look ile yarışmasın diye yavaş + sadece yerde)
-      if (moveMode === "parkour") return;
-      if (!bot.entity?.onGround) return;
-      void (async () => {
-        try {
-          const lt = typeof lookTarget === "function" ? lookTarget() : lookTarget;
-          if (lt) await stepLookAlongMotion(bot, lt, Math.min(12, turnSpeed(instance)));
-        } catch {
-          /* */
+
+      // takılma bekçisi
+      const pos = bot.entity.position;
+      if (!lastPos || pos.distanceTo(lastPos) > 0.35) {
+        lastPos = pos.clone();
+        lastMoveAt = Date.now();
+      } else if (Date.now() - lastMoveAt > STUCK_WINDOW_MS) {
+        if (!stuckRetried) {
+          stuckRetried = true;
+          lastMoveAt = Date.now();
+          opts?.onStuckRetry?.();
+          try {
+            bot.pathfinder.setGoal(goal); // sıfırdan yeniden hesapla
+          } catch {
+            /* */
+          }
+        } else {
+          finish(() => {
+            stopGoal();
+            reject(new Error("İlerleme yok — bot takıldı (rota iki kez hesaplandı, hedefe gidilemiyor)."));
+          });
         }
-      })();
-    }, 200);
+      }
+    }, 1000);
 
     const deadline = setTimeout(() => {
       finish(() => {
@@ -171,6 +189,7 @@ function pathfinderGoal(
 
     bot.on("goal_reached", onReached);
     bot.on("path_update", onPath);
+    bot.pathfinder.setGoal(goal);
   });
 }
 
@@ -186,31 +205,16 @@ export async function runGoto(
   const bot = requireBot(instance);
   const dist = Math.round(bot.entity.position.distanceTo({ x, y, z } as never));
   report({ done: 0, total: dist, label: `hedefe gidiliyor (${dist} blok)` });
-  ensureMovement(instance, {
-    allowSprintNow: moveCfg(instance).allowSprint !== false,
-    mode: "goto"
+
+  ensureMovement(instance, { mode: "goto" });
+  if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
+  if (token.cancelled) throw new Error(token.reason ?? "Görev iptal edildi.");
+
+  await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
+    onStuckRetry: () => report({ done: 0, total: dist, label: "takıldı — rota yeniden hesaplanıyor" })
   });
-  try {
-    await pathfinderGoal(
-      instance,
-      new goals.GoalNear(x, y, z, Math.max(1, range)),
-      token,
-      GOTO_TIMEOUT_MS,
-      { x, y, z },
-      "goto"
-    );
-  } catch (e) {
-    // noPath → gelişmiş parkur (izole; normal takibi bozmaz)
-    const msg = e instanceof Error ? e.message : String(e);
-    const parkour = moveCfg(instance).allowParkour !== false;
-    if (parkour && (msg.includes("noPath") || msg.includes("yol") || msg.includes("zaman"))) {
-      const { runParkourGoto } = await import("./parkour.js");
-      report({ done: 0, total: dist, label: `parkur deneniyor…` });
-      await runParkourGoto(instance, x, y, z, range, token, report);
-    } else {
-      throw e;
-    }
-  }
+
+  // varışta hedefe bak (bot artık DURUYOR — bakış serbest)
   try {
     await easeLookAt(bot, { x, y: y + 1.2, z }, turnSpeed(instance), 8);
   } catch {
@@ -218,8 +222,6 @@ export async function runGoto(
   }
   report({ done: dist, total: dist, label: "hedefe ulaşıldı" });
 }
-
-export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour.js";
 
 export async function runGotoPlayer(
   instance: BotInstance,
@@ -239,41 +241,16 @@ export async function runGotoPlayer(
     );
   }
   report({ done: 0, total: 1, label: `${playerName} oyuncusuna gidiliyor` });
+
+  ensureMovement(instance, { mode: "goto" });
+  if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120));
+  if (token.cancelled) throw new Error(token.reason ?? "Görev iptal edildi.");
+
   const p = entity.position;
-  ensureMovement(instance, {
-    allowSprintNow: moveCfg(instance).allowSprint !== false,
-    mode: "goto"
+  await pathfinderGoal(instance, new goals.GoalNear(p.x, p.y, p.z, Math.max(1, range)), token, {
+    onStuckRetry: () => report({ done: 0, total: 1, label: "takıldı — rota yeniden hesaplanıyor" })
   });
 
-  try {
-    await pathfinderGoal(
-      instance,
-      new goals.GoalNear(p.x, p.y, p.z, Math.max(1, range)),
-      token,
-      GOTO_TIMEOUT_MS,
-      () => {
-        const e = bot.players[playerName]?.entity;
-        return e ? entityLookPoint(e) : { x: p.x, y: p.y + 1.5, z: p.z };
-      },
-      "goto"
-    );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const parkour = moveCfg(instance).allowParkour !== false;
-    if (parkour && (msg.includes("noPath") || msg.includes("yol") || msg.includes("zaman"))) {
-      const { runParkourGoto } = await import("./parkour.js");
-      report({ done: 0, total: 1, label: `parkur → ${playerName}` });
-      await runParkourGoto(instance, p.x, p.y, p.z, range, token, report, {
-        liveTarget: () => {
-          const e = bot.players[playerName]?.entity;
-          if (!e) return null;
-          return { x: e.position.x, y: e.position.y, z: e.position.z };
-        }
-      });
-    } else {
-      throw e;
-    }
-  }
   const e2 = bot.players[playerName]?.entity;
   if (e2) {
     try {
@@ -286,9 +263,12 @@ export async function runGotoPlayer(
 }
 
 /**
- * Sürekli takip: GoalFollow + sprint + hedefe bakış.
- * Pathfinder parkour config’ten açık → atlanabilir boşluklardan atlar (safe-only değil).
- * Özel merdiven kilidi / kenar geri-çek YOK (eski “geri geri at” spam’ini tetiklemez).
+ * Sürekli takip. Parkur yapan oyuncuyu da izler: GoalFollow(dynamic=true) hedef
+ * hareket ettikçe rotayı KENDİSİ yeniler; allowParkour açıkken atlanabilir
+ * boşluklardan atlar, merdivenlere doğal tırmanır. Döngüde goal YENİLENMEZ
+ * (path churn zıplama ortasında iptal = boşluğa düşme demekti) — yalnızca entity
+ * referansı değişince (menzilden çıkıp girince) bir kez yeniden kurulur.
+ * canDig takipte HEP kapalı: bot, birinin parkurunu/haritasını kazarak izlemez.
  */
 export async function runFollow(
   instance: BotInstance,
@@ -298,145 +278,100 @@ export async function runFollow(
   report: ProgressFn
 ): Promise<void> {
   const holdDist = Math.max(1, Math.min(16, distance));
-  const distJitter = () => holdDist + (Math.random() * 0.35 - 0.1);
-  const canSprint = () => moveCfg(instance).allowSprint !== false;
-  const parkourOn = () => moveCfg(instance).allowParkour !== false;
+  let lastReportAt = 0;
+  let lastReportLabel = "";
+
+  const throttledReport = (label: string) => {
+    const now = Date.now();
+    if (label === lastReportLabel && now - lastReportAt < FOLLOW_REPORT_MS) return;
+    lastReportAt = now;
+    lastReportLabel = label;
+    report({ done: 0, total: 0, label });
+  };
 
   const clearGoal = (bot: Bot) => {
     try {
-      const pf = bot.pathfinder as { setGoal?(g: null): void; stop?(): void };
-      try {
-        pf?.stop?.();
-      } catch {
-        /* */
-      }
-      pf?.setGoal?.(null);
+      const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+      pf.stop?.();
+      pf.setGoal?.(null);
     } catch {
       /* */
     }
-    for (const k of ["forward", "back", "left", "right", "jump", "sprint", "sneak"] as const) {
-      try {
-        bot.setControlState(k, false);
-      } catch {
-        /* */
-      }
+    try {
+      bot.clearControlStates();
+    } catch {
+      /* */
     }
   };
 
   try {
     while (!token.cancelled) {
       const bot = requireBot(instance);
-      if ((bot.health ?? 0) <= 0 || !bot.entity) {
-        clearGoal(bot);
-        throw new Error("Bot öldü — takip durdu");
+      if ((bot.health ?? 0) <= 0 || !bot.entity) throw new Error("Bot öldü — takip durdu.");
+
+      let tracked = bot.players[playerName]?.entity ?? null;
+      if (!tracked) {
+        throttledReport(`${playerName} görünmüyor — bekleniyor`);
+        await sleep(1200);
+        if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
+        continue;
       }
 
-      const entity = bot.players[playerName]?.entity;
-      if (entity) {
-        report({
-          done: 0,
-          total: 0,
-          label: `${playerName} takip (${holdDist}m)${parkourOn() ? " · parkur" : ""}`
-        });
-
-        ensureMovement(instance, {
-          allowSprintNow: canSprint(),
-          mode: "follow"
-          // parkour: config allowParkour (varsayılan açık)
-        });
-        const followBot = bot;
-        try {
-          followBot.pathfinder.setGoal(new goals.GoalFollow(entity, distJitter()), true);
-        } catch {
-          /* */
-        }
-
-        while (!token.cancelled && instance.status === "online") {
-          if ((bot.health ?? 0) <= 0 || !bot.entity) {
-            clearGoal(followBot);
-            throw new Error("Bot öldü — takip durdu");
-          }
-          const ent = bot.players[playerName]?.entity;
-          if (!ent) break;
-
-          const d = bot.entity.position.distanceTo(ent.position);
-
-          if (Math.random() < 0.05) {
-            ensureMovement(instance, {
-              allowSprintNow: canSprint(),
-              mode: "follow"
-            });
-          }
-
-          if (Math.random() < 0.08) {
-            try {
-              followBot.pathfinder.setGoal(new goals.GoalFollow(ent, distJitter()), true);
-            } catch {
-              /* */
-            }
-          }
-
-          // Zıplarken bakış pathfinder yaw’ını bozmasın (geri-at azaltır)
-          const jumping =
-            !bot.entity.onGround || (bot.entity.velocity?.y ?? 0) > 0.08;
-          if (!jumping) {
-            try {
-              await stepLookAtEntity(bot, ent, turnSpeed(instance));
-            } catch {
-              /* */
-            }
-          }
-
-          report({
-            done: 0,
-            total: 0,
-            label: `takip ${playerName} · ${d.toFixed(1)}m${canSprint() ? " · sprint" : ""}${
-              parkourOn() ? " · parkur" : ""
-            }`
-          });
-
-          await sleep(90 + Math.floor(Math.random() * 50));
-        }
-
-        clearGoal(followBot);
-      } else {
-        report({ done: 0, total: 0, label: `${playerName} görünmüyor — bekleniyor` });
-        await sleep(1200 + Math.floor(Math.random() * 400));
+      ensureMovement(instance, { mode: "follow" });
+      try {
+        bot.pathfinder.setGoal(new goals.GoalFollow(tracked, holdDist), true);
+      } catch {
+        /* pathfinder bir tık sonra hazır olabilir */
       }
+
+      // iç döngü: aynı entity referansı geçerli olduğu sürece goal'a DOKUNMA
+      while (!token.cancelled && instance.status === "online") {
+        if ((bot.health ?? 0) <= 0 || !bot.entity) {
+          clearGoal(bot);
+          throw new Error("Bot öldü — takip durdu.");
+        }
+        const cur = bot.players[playerName]?.entity ?? null;
+        if (!cur || cur !== tracked) {
+          tracked = cur; // kayboldu ya da referans tazelendi → dış döngü yeniden kurar
+          break;
+        }
+
+        // insanî bakış: SADECE dururken (mesafedeyken oyuncuya bakar; yürürken pathfinder sürer)
+        if (!pfIsMoving(bot) && bot.entity.onGround) {
+          try {
+            await stepLookAtEntity(bot, cur, turnSpeed(instance));
+          } catch {
+            /* */
+          }
+        }
+
+        const d = bot.entity.position.distanceTo(cur.position);
+        throttledReport(`takip: ${playerName} · ${d.toFixed(1)}m (hedef ${holdDist}m)`);
+        await sleep(FOLLOW_TICK_MS);
+      }
+
+      clearGoal(bot);
       if (instance.status !== "online") throw new Error("Bağlantı koptu — takip sonlandı.");
     }
   } finally {
-    try {
-      const b = instance.bot;
-      if (b) clearGoal(b);
-    } catch {
-      /* */
-    }
+    const b = instance.bot;
+    if (b) clearGoal(b);
   }
 }
 
 export function stopMovement(instance: BotInstance) {
   instance.tasks.cancelAll("kullanıcı durdurdu");
-  const bot = instance.bot as unknown as {
-    pathfinder?: { setGoal(g: null): void };
-    clearControlStates?: () => void;
-  } | null;
+  const bot = instance.bot;
+  if (!bot) return;
   try {
-    bot?.pathfinder?.setGoal(null);
+    const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+    pf.stop?.();
+    pf.setGoal?.(null);
   } catch {
     /* */
   }
   try {
-    const b = instance.bot;
-    if (b) {
-      b.setControlState("forward", false);
-      b.setControlState("back", false);
-      b.setControlState("left", false);
-      b.setControlState("right", false);
-      b.setControlState("jump", false);
-      b.setControlState("sprint", false);
-      b.setControlState("sneak", false);
-    }
+    bot.clearControlStates();
   } catch {
     /* */
   }
@@ -446,4 +381,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export { stepLookAtEntity, easeLookAt, stepLookAt } from "./look";
+// Deneysel el-yapımı parkur SADECE açık "parkour-goto" aksiyonuyla erişilir —
+// normal goto/follow akışına otomatik karışmaz (güvenilirlik için ayrıştırıldı).
+export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";
+export { stepLookAtEntity, easeLookAt, stepLookAt, entityLookPoint } from "./look";

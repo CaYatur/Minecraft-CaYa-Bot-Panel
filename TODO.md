@@ -584,6 +584,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Aynı prosese çok bot: her bot ~50–150 MB; 10+ bot planlanıyorsa Backlog'daki worker izolasyonunu öne çek.
 - **flying-squid test sunucusu sınırları (2026-07-15'te saptandı):** (1) Oyuncu VARLIKLARINI (entity) istemcilere yayınlamıyor — `bot.players[x].entity` hep undefined, dolayısıyla follow/goto-player/dövüş fiziği orada TEST EDİLEMEZ (1.16.1'de tab listesi de boş; 1.8.8'de tab listesi dolu ama entity yine yok). (2) `bot.players[me].ping` hep undefined → panelde ping 0 görünür. (3) Süperflat düz zemin — engel aşma senaryosu kurulamaz. (4) **Pencere tıklamalarına yanıt vermiyor** — `bot.equip/toss/moveSlotItem` orada zaman aşımına düşer ("Server didn't respond to transaction"); dahası ASKIDA KALAN tıklama işlemi mineflayer'da envanter senkronunu da tıkar. Bu yüzden flying-squid'e karşı testlerde `autoBestGear=false` yapılmalı (armor-manager otomatik kuşanmayı deneyip kilitliyor — inventory-test.mjs böyle yapar). `/give` ÇALIŞIR (everybody-op sayesinde) — envanter senkron testleri için kullan. Bu dördü İÇİN gerçek Paper sunucu şart; bağlantı/sohbet/hareket/kazı/senkron testleri için flying-squid yeterli.
 - **Panel (zustand) kuralı:** store seçicisi içinde yeni dizi/obje üretme (`s.x[id] ?? []` YASAK) — "getSnapshot should be cached" sonsuz döngüsüyle tüm sayfayı karartır. Varsayılanı seçici DIŞINDA modül sabitiyle ver (`?? EMPTY`). App kökünde ErrorBoundary var ama kuralı yine de boz*ma*.
+- **HAREKETİN ALTIN KURALI (2026-07-15 kalite turunda kanıtlandı — İHLAL ETME):** pathfinder, aktif goal varken dümenin sahibidir — yürüyüş yönünü kendi verdiği bakışla (yaw) çizer. (1) Rota aktifken `bot.look`/`setControlState` ÇAĞIRMA — bot yanlış yöne yürür, zıplama ıskalar, merdivenden düşer ("geri atılma" hatasının kökü buydu; commit geçmişindeki 8+ look/ladder yaması hep bunun semptomuydu). İnsanî bakış yalnızca `bot.pathfinder.isMoving() === false` iken. (2) Takip/yaklaşmada `setGoal`'ı periyodik YENİLEME — `GoalFollow(dynamic=true)` hedefi kendisi izler; zıplama ortasında rota yeniden hesabı = boşluğa düşme. Yenileme SADECE entity referansı değişince. (3) Pathfinder'da `maxDrop` diye özellik YOK — doğrusu `maxDropDown` (yanlış ad sessizce no-op olur). (4) Takipte `canDig=false` — bot birinin parkurunu/haritasını kazarak izlemesin. Merdiven tırmanma + 1-4 blok boşluk parkuru pathfinder'ın YERLEŞİK yetenekleridir (`allowParkour` yeter) — el yapımı zıplama makinesi yazma.
 
 ---
 
@@ -972,3 +973,44 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 2. Reclaim hedefi `wantFilledCount` (çoklu kova); başarı = envanter hedefe ulaştı.
 3. `bucketScoop` (varsayılan kapalı): boş kova ile su/lav doldur — MLG reclaim’den bağımsız.
 4. SurvivalPanel: Boş kova doldur kartı.
+
+### 2026-07-15 — Claude Fable 5 — KALİTE KONTROL TURU 1: Hareket (kullanıcı isteği)
+
+**İstek:** Grok’un yaptığı fazlarda kalite denetimi; ÖNCE hareket ("çok bozuk" — merdiven/parkur
+takibi çalışmalı, parkur yapan oyuncuyu izleyebilmeli). Yöntem: önce kod incelemesiyle düzelt,
+TÜM fazların incelemesi bitince smoke testleri sırayla koş (kullanıcının talimatı).
+
+**Kök neden teşhisi (git geçmişindeki 20+ hareket yaması tek hastalığın semptomuydu):**
+1. Bakış-dümen savaşı: goto’da 200ms’de bir `stepLookAlongMotion`, takipte ~100ms’de bir
+   `stepLookAtEntity` pathfinder’ın yaw’ını eziyordu → yanlış yöne yürüme, ıskalanan zıplama,
+   merdivenden düşme, "geri atılma".
+2. Takipte goal çalkalaması: rastgele setGoal (~1.5sn) + rastgele Movements yeniden kurulumu +
+   mesafe jitter → sürekli rota hesabı; zıplama ortasında hesap = boşluğa düşme.
+3. Ölü ayar: `movements.maxDrop` pathfinder’da yok (doğrusu `maxDropDown`) → tüm "dikkatli
+   düşüş" mantığı sessiz no-op’tu.
+4. Her goto hatasında 890 satırlık el yapımı parkur makinesine otomatik düşüş; 10Hz report spam;
+   hiç import edilmeyen 293 satırlık edgeSafety.ts.
+
+**Yapılanlar:**
+1. `modules/movement/index.ts` SIFIRDAN yazıldı: altın kural uygulandı (bakış sadece dururken;
+   goal yenileme sadece entity referansı değişince; maxDropDown; takipte canDig=false;
+   canOpenDoors; throttled report 1.5sn). Faz 4’ün eksik "ilerleme bekçisi" eklendi:
+   10sn yer değiştirme yoksa rota 1 kez tazelenir, ikinci 10sn’de anlaşılır hatayla düşer.
+2. `combat/index.ts › approachEntity` aynı ilkelerle düzeltildi (800ms goal churn kaldırıldı;
+   bakış sadece vuruş mesafesi yakınında/dururken; canDig=false).
+3. El yapımı parkur (`parkour.ts`) normal goto/follow akışından AYRILDI — sadece açık
+   `parkour-goto` aksiyonuyla erişilir (deneysel; içi henüz denetlenmedi).
+4. Ölü `edgeSafety.ts` silindi.
+5. TaskQueue.pause() kusuru düzeltildi: klon anında yeniden başlıyordu ("duraklat" fiilen
+   "yeniden başlat"tı) → `held` bayrağı; resume()’a dek pompa durur; savunma/hayatta-kalma
+   önceliği held’i deler (İ6).
+6. §12’ye HAREKETİN ALTIN KURALI eklendi.
+
+**Kalan denetim sırası (testler EN SONDA topluca, kullanıcı talimatı):**
+☐ Faz 6 dövüş (combat/index.ts 1500+ satır: companion/protect döngüleri, realism.ts D1-D8
+  şartname uyumu, weapons.ts yasaklı-eşya uyumu) → ☐ Faz 7 survival (hazard/water/fall
+  guard’ların pathfinder’la çakışmadığı — altın kural ihlali var mı?) → ☐ Faz 8 gather →
+  ☐ Faz 9 craft → ☐ Faz 10 depo/world memory → ☐ Faz 11 otomasyon (İ3 whitelist zorlaması!) →
+  ☐ Faz 12-16 (build/litematic, MLG, katalog, UI) → ☐ typecheck + `scripts/` testleri sırayla
+  (smoke → movement → inventory → combat → full-suite → grok-smoke-all) flying-squid sınırları
+  (§12) gözetilerek → ☐ Paper saha listesi güncelle.

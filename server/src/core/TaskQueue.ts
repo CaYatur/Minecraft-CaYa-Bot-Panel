@@ -52,6 +52,8 @@ export class TaskQueue extends EventEmitter {
   private pumping = false;
   private seq = 0;
   private history: TaskSummary[] = [];
+  /** pause(): kuyruk tutulur — resume()'a dek yeni görev ÇALIŞTIRILMAZ (kuyruğa eklenebilir) */
+  private held = false;
 
   /** runner'ı üreten fabrika alınır — görev ÇALIŞMA anında taze bot referansı kurabilsin */
   enqueue(def: TaskDef, makeRunner: () => TaskRunner): TaskSummary {
@@ -71,6 +73,9 @@ export class TaskQueue extends EventEmitter {
     if (cur && def.priority > cur.def.priority) {
       this.preempt(cur, `yüksek öncelikli görev geldi: ${def.label}`);
     }
+
+    // İ6: savunma/hayatta-kalma görevleri kullanıcı duraklatmasını deler (bot ölmesin)
+    if (this.held && def.priority >= PRIORITY.DEFENSE) this.held = false;
 
     this.emitUpdate();
     void this.pump();
@@ -109,36 +114,46 @@ export class TaskQueue extends EventEmitter {
     this.emitUpdate();
   }
 
-  /** Faz 10: çalışan görevi pause et — token cancel + requeue with same def (context = params) */
+  /**
+   * Faz 10: duraklat. Çalışan görev iptal edilip paramlarıyla kuyruğun önüne
+   * yeniden eklenir; kuyruk `held` ile TUTULUR — resume()'a dek hiçbir görev
+   * başlamaz (önceki sürümde pompa hemen devam ettiği için pause fiilen
+   * "yeniden başlat" davranıyordu). Savunma/hayatta-kalma önceliği held'i deler (İ6).
+   */
   pause(reason = "duraklatıldı"): boolean {
     const cur = this.current;
-    if (!cur) return false;
-    cur.token.cancelled = true;
-    cur.token.reason = reason;
-    cur.state = "paused";
-    if (cur.def.requeueOnPreempt !== false) {
-      const clone: InternalTask = {
-        id: newId(),
-        seq: this.seq++,
-        def: { ...cur.def, params: { ...cur.def.params, _pausedFrom: cur.id } },
-        state: "queued",
-        token: { cancelled: false },
-        makeRunner: cur.makeRunner
-      };
-      // paused tasks go front after sort by keeping high seq? put at front of same priority via lower seq
-      clone.seq = -1;
-      this.queue.unshift(clone);
+    if (!cur && this.queue.length === 0) return false;
+    this.held = true;
+    if (cur) {
+      cur.token.cancelled = true;
+      cur.token.reason = reason;
+      if (cur.def.requeueOnPreempt !== false) {
+        const clone: InternalTask = {
+          id: newId(),
+          seq: -1, // aynı öncelikte en öne
+          def: cur.def,
+          state: "queued",
+          token: { cancelled: false },
+          makeRunner: cur.makeRunner
+        };
+        this.queue.unshift(clone);
+        this.sortQueue();
+      }
     }
     this.emitUpdate();
     return true;
   }
 
-  /** resume: no-op if already queued via pause requeue; pump continues */
+  /** duraklatmayı kaldır — kuyruk kaldığı yerden akar */
   resume(): boolean {
-    // paused clones already in queue — ensure pump
+    this.held = false;
     void this.pump();
     this.emitUpdate();
     return this.queue.length > 0 || this.current != null;
+  }
+
+  get isHeld(): boolean {
+    return this.held;
   }
 
   get currentSummary(): TaskSummary | null {
@@ -179,7 +194,7 @@ export class TaskQueue extends EventEmitter {
     if (this.pumping) return;
     this.pumping = true;
     try {
-      while (this.queue.length > 0) {
+      while (this.queue.length > 0 && !this.held) {
         this.sortQueue();
         const task = this.queue.shift()!;
         this.current = task;
