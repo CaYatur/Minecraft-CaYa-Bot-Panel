@@ -14,7 +14,8 @@
     "build": "npm run build -w server && npm run build -w web",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "testserver": "node test-server/start.cjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test:combat": "node scripts/combat-test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Planlama tamam, geliştirme başlamadı (Faz 0 sırada)**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 0–6 ✅* · Sırada Faz 7 (hayatta kalma)**
 
 ---
 
@@ -252,7 +252,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 3 | Sohbet sistemi (izle + yaz) ve log paneli | ✅ Bitti |
 | 4 | Hareket: pathfinder, waypoint, engel aşma | ✅ Bitti* (engel/takip fiziği Paper'da doğrulanacak) |
 | 5 | Envanter arayüzü ve kısıtlar | ✅ Bitti* (kuşan/at fiziği Paper'da doğrulanacak) |
-| 6 | Gerçekçi dövüş sistemi | ☐ Bekliyor |
+| 6 | Gerçekçi dövüş sistemi | ✅ Bitti* (vuruş/savunma fiziği Paper'da doğrulanacak) |
 | 7 | Hayatta kalma: yeme, avlanma, pişirme | ☐ Bekliyor |
 | 8 | Kaynak toplama + halka arama | ☐ Bekliyor |
 | 9 | Üretim: craft zinciri + fırın | ☐ Bekliyor |
@@ -341,19 +341,21 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [~] Envanter dolu uyarısı: 36/36'da Log WARN (geçiş bazlı) + kart rozeti (30+ sarı, 36 kırmızı) kodda; 36 slotu fiilen doldurma senaryosu Paper'da denenecek.
 - [~] **Kabul:** Kısıt akışı ✓ (yasaklı kask kuşanma reddi + korunan dirt atma reddi, otomatik test). Panelden giydirme/atma fiziği → Paper. "Dövüşte yasaklıysa taş kılıca geçer" → Faz 6'daki silah seçicisiyle birlikte test edilecek.
 
-### Faz 6 — Gerçekçi Dövüş Sistemi
+### Faz 6 — Gerçekçi Dövüş Sistemi ✅*
 
 > Ayrıntılı kurallar: §9. Bu faz o şartnameyi kod haline getirir.
+> *Saha notu: flying-squid entity yayınlamaz → gerçek vuruş/savunma/LOS fiziği Paper'da doğrulanır.
+> API + silah mantığı + config + panel + görev kuyruğu: `scripts/combat-test.mjs` (2026-07-15 geçti).*
 
-- [ ] `combat/RealismLayer`: vuruş öncesi bakış zorunluluğu, menzil ≤ 3.0, görüş hattı (raycast) kontrolü, sürüme göre vuruş hızı (1.9+ tam şarj / 1.8 CPS sınırı), yumuşatılmış dönüş, insan tepki gecikmesi. Tüm vuruşlar bu katmandan geçer — pvp modülünün ham `attack`'ine doğrudan erişim yasak.
-- [ ] Savunma modu (bot başına: `kapalı | mob | oyuncu | hepsi`): bota vuran hedefe döner, bakarak karşılık verir; saldırgan kaçarsa X blok kovalar sonra bırakır (config).
-- [ ] Hedefli saldırı: `attack <oyuncuAdı>` — görüş alanındaysa doğrudan; değilse tab listesinden varlığını doğrula, son görülen konuma/verilen waypoint'e git, bulamazsa Log'a bilgi (İ1 — sohbete yazmaz).
-- [ ] Mob temizleme görevi: yarıçap içindeki düşman mobları önceliklendirip temizle (en yakın önce; creeper mesafe taktiği: patlama menzilinden çıkma).
-- [ ] Kaçış: can `fleeAtHealth` (varsayılan 6) altına inerse dövüşü bırak, saldırgandan uzaklaş / güvenli waypoint'e koş; can yenilenince görev kuyruğuna dön (İ6).
-- [ ] Ölüm yönetimi: ölüm konumu kaydedilir (`death waypoint` otomatik), respawn sonrası state resync; "eşyalarını geri toplamaya git" tek tık görevi (despawn süresi ~5 dk — panelde geri sayım).
-- [ ] Silah seçimi: en iyi silahı kullan (kısıt listesine uyarak); ok/yay Backlog.
-- [ ] Panel: bot detayında Dövüş kartı — savunma modu seçici, gerçekçilik ayarları, aktif hedef göstergesi, "saldır: <isim>" girişi, "dövüşü bırak".
-- [ ] **Kabul:** Bota vurulunca dönüp bakarak karşılık verir; duvar arkasındaki hedefe vuruş **yapamaz**; vuruş temposu izlenen videoda insan gibi görünür; canı azalınca kaçar.
+- [x] `combat/RealismLayer` (`modules/combat/realism.ts`): D1 bakış (smoothLookAt), D2 menzil, D3 raycast LOS, D4 tempo (1.9+ charge / 1.8 CPS), D5 yumuşak dönüş, D6 tepki gecikmesi, D7 opsiyonel jump-crit. Tüm vuruşlar `tryRealisticAttack` — pvp eklentisi yok.
+- [x] Savunma modu (`off|mob|player|all`): health düşüşünde aday hedef → DEFENSE `defend` görevi; `chaseDistance` aşınca bırak. *(Entity fiziği Paper.)*
+- [x] Hedefli saldırı: `attack` / `saldir <oyuncu>` — entity varsa yaklaş+vur; tab'de yoksa Log INFO (İ1). *(Entity Paper.)*
+- [x] Mob temizleme: `clear-mobs` yarıçap; hostile listesi; creeper standoff. *(Entity Paper.)*
+- [x] Kaçış: `fleeAtHealth` altında SURVIVAL `flee`; panel/komut `kac`.
+- [x] Ölüm: `lastDeath` + loot geri sayım (~5 dk); otomatik waypoint `ölüm-<bot>`; `loot-death` → goto.
+- [x] Silah seçimi: `weapons.ts` skor + `bannedItems`; saldırı/savunma öncesi `equipBestWeapon`.
+- [x] Panel: ⚔ Dövüş sekmesi (`CombatPanel`); TasksPanel komutları; `bot:combat` socket.
+- [~] **Kabul (Paper):** vurulunca bakarak karşılık; duvar arkasına vuramaz; tempo insanî; can düşünce kaçar. API/mantık ✓ (`combat-test.mjs`).
 
 ### Faz 7 — Hayatta Kalma: Yeme, Avlanma, Pişirme
 
@@ -530,3 +532,44 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Eşya görselleri v1: metin çipi + dayanıklılık barı. minecraft-assets ikon paketi (tüm sürümler, yüzlerce MB) Backlog'a — eklenirse sunucudan `/api/assets` statik rotası ile servis edilmeli.
 - 2026-07-15 — PanelError `core/errors.ts`e taşındı (inventory→BotManager döngüsel import'unu kırmak için); BotManager geriye dönük re-export ediyor.
 - 2026-07-15 — armor-manager, pencere tıklaması desteklemeyen sunucuda (flying-squid) askıda kalıp envanter senkronunu tıkıyor — §12'ye gotcha yazıldı; gerçek sunucularda sorun beklenmez (tıklamalar anında yanıtlanır).
+- 2026-07-15 — Faz 6 dövüş: mineflayer-pvp kullanılmadı; `CombatService` + `RealismLayer` (custom). Snapshot'a `combat` alanı ve `bot:combat` socket eklendi. Ölüm → `ölüm-<username>` waypoint (BotManager deathAt).
+
+---
+
+## 15. AI Oturum Günlüğü (Devir Notları)
+
+> Format: kim, ne zaman, hangi faz(lar), madde madde iş + sorun/çözüm.
+> Yeni devralan AI burayı okuyup kaldığı yerden devam eder.
+
+### 2026-07-15 — Grok 4.5 (xAI) — Faz 6 tamamlandı (✅*)
+
+**Kapsam:** Faz 6 Gerçekçi Dövüş Sistemi — sıfırdan kod + panel + test + commit.
+
+**Yapılanlar (detay):**
+
+1. **TODO protokolü:** Header + §7 tablo 🔨→✅*; Faz 6 maddeleri `[~]`/`[x]`; saha notu (flying-squid entity); bu oturum günlüğü (§15).
+2. **`server/src/modules/combat/weapons.ts`:** Silah skoru, 1.9+ attack speed cooldown, `pickBestWeaponName` + banned filter.
+3. **`server/src/modules/combat/mobs.ts`:** Hostile mob seti, creeper güvenli mesafe sabiti.
+4. **`server/src/modules/combat/realism.ts` (RealismLayer / §9):** `smoothLookAt`, menzil, LOS (raycast + fallback örnekleme), tempo, jump-crit, `tryRealisticAttack` tek giriş.
+5. **`server/src/modules/combat/index.ts` (`CombatService`):** attach/detach, savunma (health drop), attack/clear-mobs/flee/loot-death görevleri, silah kuşanma, `getRuntime()` panele.
+6. **BotInstance:** `combat` servisi, `getLogger()`, snapshot.combat, aksiyonlar `attack|clear-mobs|flee|loot-death|stop-combat`, spawn attach / teardown detach.
+7. **BotManager:** `deathAt` → `ölüm-<bot>` waypoint upsert.
+8. **Socket/events:** `bot:combat` (server + web mirror).
+9. **Panel:** `CombatPanel.tsx` (mevcut koyu kart/sekme dili), BotDetail'e ⚔ sekmesi, TasksPanel komutları (`attack`, `mobtemizle`, `kac`, `loot`).
+10. **Test:** `scripts/combat-test.mjs` — silah mantığı, config, 400 redleri, stop-combat, online attack denemesi; **tümü geçti**.
+11. **Typecheck:** server + web temiz.
+
+**Sorunlar ve çözümler:**
+
+| Sorun | Çözüm |
+|---|---|
+| `tsc` NodeNext: dynamic `import("../movement")` uzantı istiyor | Statik import `runGoto` / `goals` |
+| `Entity.eyeHeight` tipte yok | `(bot.entity as { eyeHeight?: number }).eyeHeight ?? 1.62` |
+| flying-squid entity yok → PvP fiziği test edilemez | API/mantık testi + TODO `✅*` + Paper checklist (önceki AI ile aynı dürüstlük) |
+| pvp eklentisi §3'te yazıyor, §14 custom diyor | Custom RealismLayer uygulandı; §14'e net karar satırı |
+
+**Bilerek bırakılan borçlar:** Paper'da savuş/LOS/creeper standoff kabulü; ok/yay Backlog; armor-manager hâlâ bannedItems'ı otomatik delmesin diye ayrı (Faz 5 borcu).
+
+**Sıradaki faz:** **Faz 7 — Hayatta kalma** (yeme, av, pişirme). Faz 7 av için dövüş API'sini kullanır; halka arama hâlâ Faz 8'de (yakın çevre avı ile başlanabilir).
+
+**Commit beklentisi:** `faz6: gercekci dovus — RealismLayer, savunma, panel, combat-test`

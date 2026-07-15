@@ -17,6 +17,7 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     inst.on("chatQueue", (length: number) => io.emit(EV.BOT_CHAT_QUEUE, { botId: inst.config.id, length }));
     inst.on("task", (p) => io.emit(EV.BOT_TASK, p));
     inst.on("inventory", (p) => io.emit(EV.BOT_INVENTORY, p));
+    inst.on("combat", (p) => io.emit(EV.BOT_COMBAT, p));
   };
 
   for (const inst of manager.bots.values()) wireInstance(inst);

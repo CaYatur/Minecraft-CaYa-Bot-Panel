@@ -247,6 +247,41 @@ export class BotManager extends EventEmitter {
 
   private instantiate(cfg: BotConfig): BotInstance {
     const inst = new BotInstance(cfg, (sid) => this.getServer(sid));
+    // Faz 6: ölüm konumu → sunucu bazlı "ölüm-<bot>" waypoint (loot için)
+    inst.on(
+      "deathAt",
+      (info: {
+        username: string;
+        serverId: string;
+        x: number;
+        y: number;
+        z: number;
+        dimension: string;
+        ts: number;
+      }) => {
+        try {
+          const name = `ölüm-${info.username}`;
+          const existing = this.waypoints.forServer(info.serverId).find((w) => w.name.toLowerCase() === name.toLowerCase());
+          if (existing) {
+            try {
+              this.waypoints.delete(existing.id);
+            } catch {
+              /* ignore */
+            }
+          }
+          this.createWaypoint(info.serverId, {
+            name,
+            x: info.x,
+            y: info.y,
+            z: info.z,
+            dimension: info.dimension,
+            note: `Otomatik ölüm noktası ${new Date(info.ts).toISOString()}`
+          });
+        } catch (err) {
+          this.log.warn("Ölüm waypoint yazılamadı", err instanceof Error ? err.message : String(err));
+        }
+      }
+    );
     this.bots.set(cfg.id, inst);
     return inst;
   }

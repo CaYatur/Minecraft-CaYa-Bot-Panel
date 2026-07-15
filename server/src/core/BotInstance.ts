@@ -4,6 +4,7 @@ import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import { parseChatMessage } from "../modules/chat/parse";
+import { CombatService } from "../modules/combat";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { runFollow, runGoto, runGotoPlayer, stopMovement } from "../modules/movement";
 import type {
@@ -38,6 +39,7 @@ export class BotInstance extends EventEmitter {
   readonly tasks = new TaskQueue();
 
   bot: Bot | null = null;
+  readonly combat: CombatService;
   private wantsRunning = false;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -56,6 +58,7 @@ export class BotInstance extends EventEmitter {
   ) {
     super();
     this.log = createLogger("bot", config.id);
+    this.combat = new CombatService(this);
     this.limiter = new ChatRateLimiter(
       (text) => {
         if (this.bot && this.status === "online") {
@@ -126,6 +129,11 @@ export class BotInstance extends EventEmitter {
     return this.limiter.length;
   }
 
+  /** modules (combat vb.) için paylaşılan logger — sohbete asla yazmaz (İ1) */
+  getLogger(): BotLogger {
+    return this.log;
+  }
+
   getSnapshot(): BotSnapshot {
     return {
       config: this.config,
@@ -133,7 +141,8 @@ export class BotInstance extends EventEmitter {
       runtime: this.runtime,
       chatQueueLength: this.limiter.length,
       tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries },
-      inventory: this.lastInventory
+      inventory: this.lastInventory,
+      combat: this.combat.getRuntime()
     };
   }
 
@@ -173,6 +182,7 @@ export class BotInstance extends EventEmitter {
       }
       case "stop":
         stopMovement(this);
+        this.combat.stopCombat("kullanıcı stop");
         this.log.info("Hareket ve görev kuyruğu durduruldu (kullanıcı)");
         return null;
       case "chat": {
@@ -180,6 +190,19 @@ export class BotInstance extends EventEmitter {
         this.sendChat(text);
         return null;
       }
+      // ---- Faz 6 dövüş --------------------------------------------------------
+      case "attack":
+        return this.combat.enqueueAttackPlayer(str(action.player, "player"));
+      case "clear-mobs":
+        return this.combat.enqueueClearMobs(Number(action.radius ?? 16));
+      case "flee":
+        return this.combat.enqueueFlee(action.from ? String(action.from) : undefined);
+      case "loot-death":
+        return this.combat.enqueueLootDeath();
+      case "stop-combat":
+        this.combat.stopCombat("panel");
+        this.tasks.cancelAll("dövüş bırakıldı");
+        return null;
       default:
         throw new Error(`Bilinmeyen aksiyon tipi: ${type || "(boş)"}`);
     }
@@ -248,6 +271,7 @@ export class BotInstance extends EventEmitter {
         invHooked = true;
         this.hookInventory(bot);
         if (this.config.inventory.autoBestGear) this.loadArmorManager(bot);
+        this.combat.attach(bot);
       }
       this.scheduleInventorySync(); // respawn sonrası tam resync (TODO §12)
     });
@@ -269,6 +293,7 @@ export class BotInstance extends EventEmitter {
       this.emitVitals();
     });
 
+    // death: CombatService kaydı + ölüm waypoint (BotManager deathAt dinler)
     bot.on("death", () => {
       this.log.warn("Bot öldü", `Konum: ${fmtPos(this.runtime.position)}`);
     });
@@ -345,6 +370,7 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.invTimer);
       this.invTimer = null;
     }
+    this.combat.detach();
     const bot = this.bot;
     this.bot = null;
     if (bot) {

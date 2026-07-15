@@ -31,6 +31,25 @@ export interface CombatConfig {
   chaseDistance: number;
 }
 
+/** last death position for loot recovery (Faz 6) */
+export interface DeathRecord {
+  x: number;
+  y: number;
+  z: number;
+  dimension: string;
+  ts: number;
+  /** Date.now() deadline for ~5 min item despawn */
+  lootUntil: number;
+}
+
+export interface CombatRuntime {
+  defendMode: CombatConfig["defendMode"];
+  fighting: boolean;
+  mode: "idle" | "attacking" | "defending" | "fleeing";
+  activeTarget: string | null;
+  lastDeath: DeathRecord | null;
+}
+
 export interface MovementConfig {
   canDig: boolean;
   allowSprint: boolean;
@@ -145,6 +164,7 @@ export interface BotSnapshot {
   chatQueueLength: number;
   tasks: { current: TaskSummary | null; queue: TaskSummary[] };
   inventory: InventorySnapshot | null;
+  combat: CombatRuntime;
 }
 
 export interface StateSnapshot {

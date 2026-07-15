@@ -34,6 +34,23 @@ export interface BotConfig {
   movement: { canDig: boolean; allowSprint: boolean; allowParkour: boolean; scaffoldBlocks: string[] };
 }
 
+export interface DeathRecord {
+  x: number;
+  y: number;
+  z: number;
+  dimension: string;
+  ts: number;
+  lootUntil: number;
+}
+
+export interface CombatRuntime {
+  defendMode: "off" | "mob" | "player" | "all";
+  fighting: boolean;
+  mode: "idle" | "attacking" | "defending" | "fleeing";
+  activeTarget: string | null;
+  lastDeath: DeathRecord | null;
+}
+
 export interface BotRuntimeState {
   health: number;
   food: number;
@@ -111,6 +128,7 @@ export interface BotSnapshot {
   chatQueueLength: number;
   tasks: { current: TaskSummary | null; queue: TaskSummary[] };
   inventory: InventorySnapshot | null;
+  combat: CombatRuntime;
 }
 
 export interface StateSnapshot {

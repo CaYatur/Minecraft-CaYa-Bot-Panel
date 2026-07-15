@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
+import { CombatPanel } from "../components/CombatPanel";
 import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
@@ -11,13 +12,14 @@ import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-type Tab = "chat" | "logs" | "inventory" | "tasks";
+type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "💬 Sohbet" },
   { id: "logs", label: "📋 Loglar" },
   { id: "inventory", label: "🎒 Envanter" },
-  { id: "tasks", label: "📌 Görevler" }
+  { id: "tasks", label: "📌 Görevler" },
+  { id: "combat", label: "⚔ Dövüş" }
 ];
 
 export function BotDetail() {
@@ -144,6 +146,7 @@ export function BotDetail() {
         {tab === "logs" && <LogPanel botId={id} />}
         {tab === "inventory" && <InventoryPanel botId={id} />}
         {tab === "tasks" && <TasksPanel botId={id} />}
+        {tab === "combat" && <CombatPanel botId={id} />}
       </div>
     </div>
   );

@@ -4,7 +4,8 @@ import { fmtPos } from "../lib/format";
 import type { TaskSummary, Waypoint } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-const CMD_HELP = "goto x y z · follow isim [mesafe] · yanina isim · wp isim · wpkaydet isim · say metin · stop";
+const CMD_HELP =
+  "goto x y z · follow isim · yanina isim · wp isim · wpkaydet isim · say metin · attack isim · mobtemizle [r] · kac · loot · stop";
 
 // zustand kuralı: seçici içinde yeni dizi/obje ÜRETME (sonsuz render döngüsü yapar).
 // Boş varsayılanlar modül sabiti olarak dışarıda tutulur.
@@ -64,8 +65,16 @@ export function TasksPanel({ botId }: { botId: string }) {
         await saveWaypointHere(parts[1]!);
       } else if (verb === "say" || verb === "de") {
         await act({ type: "chat", text: parts.slice(1).join(" ") });
+      } else if ((verb === "attack" || verb === "saldir" || verb === "saldır") && parts[1]) {
+        await act({ type: "attack", player: parts[1] });
+      } else if (verb === "mobtemizle" || verb === "clearmobs") {
+        await act({ type: "clear-mobs", radius: parts[1] ? Number(parts[1]) : 16 });
+      } else if (verb === "kac" || verb === "kaç" || verb === "flee") {
+        await act({ type: "flee" });
+      } else if (verb === "loot" || verb === "olum" || verb === "ölüm") {
+        await act({ type: "loot-death" });
       } else if (verb === "stop" || verb === "dur") {
-        await act({ type: "stop" }, "Hareket durduruldu");
+        await act({ type: "stop" }, "Hareket/dövüş durduruldu");
       } else {
         throw new Error(`Anlaşılmadı. Komutlar: ${CMD_HELP}`);
       }
