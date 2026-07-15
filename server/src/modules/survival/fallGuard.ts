@@ -335,7 +335,11 @@ export class FallGuardService {
       void this.processRecoverQueue(bot);
     }
 
-    if (bot.entity.onGround || isInLiquid(bot)) {
+    const vy0 = bot.entity.velocity?.y ?? 0;
+    const grounded = isEffectivelyGrounded(bot);
+
+    // Yere değiyor / suda / merdivende — MLG YOK (sadece geri-al)
+    if (grounded) {
       if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
         this.state.lastAction =
@@ -343,22 +347,20 @@ export class FallGuardService {
         this.fallPeakY = null;
         this.emit(true);
       }
-      // yere bastıktan sonra da reclaim tick'te işlenir
       return;
     }
 
-    const vy = bot.entity.velocity?.y ?? 0;
+    const vy = vy0;
     const metaFall = Number((bot.entity as { fallDistance?: number }).fallDistance ?? 0);
     const feetY = bot.entity.position.y;
-    // daha hassas düşüş algısı (küçük vy de düşüş olabilir)
-    const falling = vy < -0.15 || metaFall > 0.8 || (this.fallPeakY != null && feetY < this.fallPeakY - 0.4);
+    // düşüş: net aşağı hız veya ciddi fallDistance (küçük zıplama ≠ MLG)
+    const falling = vy < -0.28 || metaFall > 2.5 || (this.fallPeakY != null && feetY < this.fallPeakY - 1.2 && vy < -0.15);
     if (!falling) {
       if (this.state.falling) {
         this.state.falling = false;
         this.fallPeakY = null;
         this.emit(true);
       }
-      // havada değil, yerde de değil (nadir) — yine reclaim dene
       return;
     }
 
@@ -369,7 +371,7 @@ export class FallGuardService {
     const groundInfo = findLandingBelow(bot);
     if (groundInfo?.soft) {
       const remSoft = Math.max(0, feetY - groundInfo.standY);
-      if (remSoft < 10) {
+      if (remSoft < 12) {
         this.state = {
           active: false,
           falling: true,
@@ -387,14 +389,31 @@ export class FallGuardService {
     }
 
     const remaining = groundInfo != null ? Math.max(0, feetY - groundInfo.standY) : estimateRemainingBlind(bot);
+
+    // --- zaten yere yapışık / yumuşak iniş: su dökme ---
+    // remaining çok küçük + yavaş = ayak değiyor (onGround bayrağı gecikebilir)
+    if (remaining <= 0.45) {
+      this.state.lastAction = "yerde (kalan≤0.45) — MLG yok";
+      this.fallPeakY = null;
+      this.emit();
+      return;
+    }
+    if (remaining <= 1.15 && Math.abs(vy) < 0.5) {
+      this.state.lastAction = "yumuşak iniş (yavaş+yakın) — MLG yok";
+      this.emit();
+      return;
+    }
+    // kısa düşüş (2-3 blok zıplama / basamak): hasar yok denecek kadar
+    if (metaFall < 3.2 && remaining < 2.8 && Math.abs(vy) < 0.95) {
+      this.state.lastAction = "kısa düşüş — MLG yok";
+      this.emit();
+      return;
+    }
+
     const fromPeak =
       groundInfo != null && this.fallPeakY != null ? Math.max(0, this.fallPeakY - groundInfo.standY) : remaining;
-    // en iyi düşüş mesafesi tahmini: meta + kalan veya peak
-    const bestFall = Math.max(
-      metaFall > 0.2 ? metaFall + Math.max(0, remaining - 0.25) : 0,
-      fromPeak,
-      metaFall
-    );
+    // en iyi düşüş mesafesi: meta (gerçek) öncelikli; peak abartmasın
+    const bestFall = Math.max(metaFall, Math.min(fromPeak, metaFall > 1 ? metaFall + Math.max(0, remaining - 0.5) : fromPeak));
 
     const { feather, protection } = armorFallEnchants(bot);
     const resistance = resistanceAmplifier(bot);
@@ -430,13 +449,19 @@ export class FallGuardService {
       this.emit();
       return;
     }
+    // hasar 0 tahmin — dökme
+    if (predictedDamage < 1 && !lethal) {
+      this.state.lastAction = "hasar≈0 — MLG yok";
+      this.emit();
+      return;
+    }
 
     if (this.busy) {
       this.emit();
       return;
     }
-    // başarısız MLG sonrası hızlı yeniden dene
-    if (Date.now() - this.lastMlgAt < 120) return;
+    // başarılı MLG sonrası kısa bastırma (çift döküm / yerdeyken tekrar)
+    if (Date.now() - this.lastMlgAt < 450) return;
 
     const method = pickBestMethod(options, remaining, lethal, predictedDamage, Math.abs(vy));
     if (method === "none") {
@@ -519,21 +544,36 @@ export class FallGuardService {
         /* */
       }
 
-      // yerleştirmeden hemen önce anında yere bak
+      // son kontrol: yere değdiyse dökme
+      if (isEffectivelyGrounded(bot)) {
+        this.state.lastAction = "MLG iptal — yere değdi";
+        this.fallPeakY = null;
+        this.log().info("MLG iptal", "yere değmiş / güvenli");
+        return;
+      }
+      const remNow = (() => {
+        const g = findLandingBelow(bot);
+        if (!g || !bot.entity) return remaining;
+        return Math.max(0, bot.entity.position.y - g.standY);
+      })();
+      if (remNow <= 0.4) {
+        this.state.lastAction = "MLG iptal — kalan çok az";
+        this.log().info("MLG iptal", `kalan ${remNow.toFixed(2)}`);
+        return;
+      }
+
       await snapLookDown(bot);
 
-      const ok = await this.executeMethod(bot, chosen, remaining);
+      const ok = await this.executeMethod(bot, chosen, remNow);
       if (ok) {
         this.lastMlgAt = Date.now();
         this.state.lastAction = `uygulandı: ${chosen}`;
-        this.log().info(`MLG başarılı: ${chosen}`, `kalan≈${(bot.entity?.position.y ?? 0).toFixed(1)}`);
-        // iniş sonrası geri alma — su neredeyse kesin
+        this.log().info(`MLG başarılı: ${chosen}`, `kalan≈${remNow.toFixed(1)}`);
         this.scheduleReclaimAfterLand(chosen);
       } else {
-        // hızlı retry izni
         this.lastMlgAt = Date.now() - 50;
         this.state.lastAction = `başarısız: ${chosen} — yeniden denenecek`;
-        this.log().warn("Düşüş kurtarma yerleşmedi", `${chosen} · kalan ${remaining.toFixed(1)}`);
+        this.log().warn("Düşüş kurtarma yerleşmedi", `${chosen} · kalan ${remNow.toFixed(1)}`);
       }
     } catch (e) {
       this.lastMlgAt = Date.now() - 50;
@@ -694,13 +734,20 @@ export class FallGuardService {
         );
       }
 
-      if (bot.entity.onGround && (isInLiquid(bot) || hasSoftNearFeet(bot))) {
-        const p = bot.entity.position;
-        return markSuccess(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), "iniş-su");
+      // Yere değdi / yumuşak — yeni su DÖKME (zaten yerleşmediyse)
+      if (isEffectivelyGrounded(bot)) {
+        if (isInLiquid(bot) || hasSoftNearFeet(bot)) {
+          const p = bot.entity.position;
+          // sadece zaten suda/yumuşak — dökmeden başarı sayma; envanter değişmediyse false
+          return false;
+        }
+        this.log().info("MLG döküm iptal", "yere değdi (su dökülmedi)");
+        return false;
       }
+
       if (isInLiquid(bot) || (method === "powder_snow" && hasPowderSnowNear(bot))) {
-        const p = bot.entity.position;
-        return markSuccess(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), "sıvı");
+        // zaten suda — dökme; envanter değişmediyse MLG gereksiz
+        return false;
       }
 
       const land = findLandingBelow(bot);
@@ -1485,6 +1532,58 @@ function isInLiquid(bot: Bot): boolean {
   } catch {
     /* */
   }
+  return false;
+}
+
+/**
+ * onGround bayrağı gecikebilir / kenarda false kalabilir.
+ * Ayak altı blok + kalan mesafe + hız ile "yere değiyor" say.
+ */
+function isEffectivelyGrounded(bot: Bot): boolean {
+  if (!bot.entity) return false;
+  try {
+    if (bot.entity.onGround) return true;
+  } catch {
+    /* */
+  }
+  if (isInLiquid(bot)) return true;
+
+  const pos = bot.entity.position;
+  const vy = bot.entity.velocity?.y ?? 0;
+
+  // merdiven / scaffolding / vine üzerinde
+  try {
+    const at = bot.blockAt(v3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)));
+    const n = at?.name?.replace(/^minecraft:/, "") ?? "";
+    if (n === "ladder" || n === "scaffolding" || n.includes("vine") || n === "cobweb" || n === "powder_snow") {
+      return true;
+    }
+  } catch {
+    /* */
+  }
+
+  const land = findLandingBelow(bot);
+  if (!land) return false;
+  const rem = pos.y - land.standY;
+
+  // neredeyse durmuş + yere çok yakın
+  if (rem <= 0.35) return true;
+  if (rem <= 0.85 && vy > -0.45) return true;
+  // yavaşça iniyor ve 1 bloktan az
+  if (rem <= 1.05 && vy > -0.35 && Math.abs(vy) < 0.55) return true;
+
+  // ayak hizasının hemen altı dolu ve collision
+  try {
+    const belowY = Math.floor(pos.y - 0.12);
+    const below = bot.blockAt(v3(Math.floor(pos.x), belowY, Math.floor(pos.z)));
+    if (below && !isAirName(below.name) && !isFallThroughName(below.name)) {
+      const top = belowY + (below.boundingBox === "block" || !below.boundingBox ? 1 : 0.5);
+      if (pos.y - top <= 0.28 && vy > -0.6) return true;
+    }
+  } catch {
+    /* */
+  }
+
   return false;
 }
 
