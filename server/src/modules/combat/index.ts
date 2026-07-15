@@ -350,9 +350,20 @@ export class CombatService {
     if (!dropped) return;
 
     const mode = this.cfg().defendMode;
+    // otomasyon her zaman (savunma kapalı olsa da) saldırgan adayını dener
+    const attackerForRules = this.pickDefenseTarget(mode === "off" ? "all" : mode);
+    if (attackerForRules) {
+      const label0 = labelEntity(attackerForRules);
+      const isPlayer = Boolean(attackerForRules.username) || attackerForRules.type === "player";
+      this.instance.emit("attacked", {
+        botId: this.instance.config.id,
+        attacker: label0,
+        source: isPlayer ? ("player" as const) : ("mob" as const)
+      });
+    }
+
     if (mode === "off") {
       if (hp <= (this.cfg().fleeAtHealth ?? 6) && this.mode !== "fleeing") {
-        // still flee on critical even if defend off? TODO says flee during combat — only if fighting
         if (this.mode === "attacking" || this.mode === "defending") {
           this.enqueueFlee();
         }
@@ -368,8 +379,7 @@ export class CombatService {
       return;
     }
 
-    // find attacker candidate
-    const attacker = this.pickDefenseTarget(mode);
+    const attacker = attackerForRules ?? this.pickDefenseTarget(mode);
     if (!attacker) return;
 
     const label = labelEntity(attacker);

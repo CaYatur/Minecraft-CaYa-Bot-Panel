@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
+import { ItemPicker } from "./ItemPicker";
 
 /** Faz 8–10 — Toplama / üret / depo. Tasarım dili: TasksPanel kartları. */
 export function GatherCraftPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
+  const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
   const [woodN, setWoodN] = useState("16");
-  const [ore, setOre] = useState("iron");
+  const [woodType, setWoodType] = useState("oak_log");
+  const [ore, setOre] = useState("iron_ore");
   const [oreN, setOreN] = useState("8");
   const [mode, setMode] = useState<"legit" | "utility">("legit");
   const [craftItem, setCraftItem] = useState("stick");
@@ -16,6 +19,7 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
 
   if (!bot) return null;
   const online = bot.status === "online";
+  const version = servers.find((s) => s.id === bot.config.serverId)?.version ?? "auto";
 
   const act = async (action: Record<string, unknown>, msg?: string) => {
     try {
@@ -58,6 +62,10 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
         {/* toplama */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
           <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Toplama</div>
+          <div className="mb-2">
+            <span className="mb-1 block text-[10px] text-zinc-500">Ağaç / kütük (katalog)</span>
+            <ItemPicker version={version} kind="blocks" value={woodType} onChange={setWoodType} placeholder="oak_log…" />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
               value={woodN}
@@ -67,7 +75,12 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
             />
             <button
               disabled={!online}
-              onClick={() => act({ type: "collect-wood", count: Number(woodN) || 16 }, "Odun toplama")}
+              onClick={() =>
+                act(
+                  { type: "collect-wood", count: Number(woodN) || 16, logType: woodType.endsWith("_log") ? woodType : undefined },
+                  "Odun toplama"
+                )
+              }
               className={btnAccent}
             >
               Odun Topla
@@ -81,13 +94,15 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
             </button>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <input
-              value={ore}
-              onChange={(e) => setOre(e.target.value)}
-              placeholder="cevher"
-              className={`w-28 ${inputCls}`}
-            />
+          <div className="mt-3 mb-1 text-[10px] text-zinc-500">Maden (katalog)</div>
+          <ItemPicker
+            version={version}
+            kind="ores"
+            value={ore}
+            onChange={setOre}
+            placeholder="iron_ore…"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <input value={oreN} onChange={(e) => setOreN(e.target.value)} className={`mono w-14 ${inputCls}`} />
             <select
               value={mode}
@@ -99,7 +114,12 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
             </select>
             <button
               disabled={!online}
-              onClick={() => act({ type: "mine", ore, count: Number(oreN) || 8, mode }, `Maden: ${ore}`)}
+              onClick={() =>
+                act(
+                  { type: "mine", ore: ore.replace(/_ore$/, "").replace(/^deepslate_/, ""), count: Number(oreN) || 8, mode },
+                  `Maden: ${ore}`
+                )
+              }
               className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-amber-300 hover:bg-zinc-700 disabled:opacity-40"
             >
               Maden Topla
@@ -114,8 +134,11 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
         {/* üret */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
           <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Üret</div>
+          <div className="mb-2">
+            <span className="mb-1 block text-[10px] text-zinc-500">Üretilecek eşya (katalog)</span>
+            <ItemPicker version={version} kind="items" value={craftItem} onChange={setCraftItem} placeholder="stick…" />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <input value={craftItem} onChange={(e) => setCraftItem(e.target.value)} className={`w-36 ${inputCls}`} />
             <input value={craftN} onChange={(e) => setCraftN(e.target.value)} className={`mono w-14 ${inputCls}`} />
             <button onClick={() => void loadPlan()} className={btnSecondary}>
               Plan Önizle

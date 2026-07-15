@@ -7,6 +7,7 @@ import { GatherCraftPanel } from "../components/GatherCraftPanel";
 import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
+import { NearbyPlayers } from "../components/NearbyPlayers";
 import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
 import { api } from "../lib/api";
@@ -129,6 +130,8 @@ export function BotDetail() {
           📍 {fmtPos(bot.runtime.position)} <span className="text-zinc-600">({dimensionLabel(bot.runtime.dimension)})</span>
         </div>
       </div>
+
+      <NearbyPlayers botId={id} />
 
       {/* tabs */}
       <div className="flex gap-1 border-b border-zinc-800">

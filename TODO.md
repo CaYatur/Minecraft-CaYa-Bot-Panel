@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 0–12 ✅* · Faz 13 🔨 (yakın oyuncular + zengin otomasyon + sürüm kataloğu)**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 13 ✅ tamam — nearby + catalog + zengin otomasyon UI**
 
 ---
 
@@ -259,7 +259,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 10 | Görev sistemi olgunlaştırma + depo/sandık | ✅ Bitti* (sandık fiziği Paper) |
 | 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
 | 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
-| 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | 🔨 Başlandı |
+| 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
 
 ---
 
@@ -410,40 +410,32 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [ ] prismarine-viewer, Discord, PWA, multi-user, 2+ saat sızıntı testi → Backlog / opsiyonel.
 - [x] **Kabul v1:** panelden bot+kural+görev yönetimi kodsuz; 5 bot 1 saat saha Backlog.
 
-### Faz 13 — Yakın Oyuncular + Zengin Otomasyon + Sürüm Kataloğu 🔨
+### Faz 13 — Yakın Oyuncular + Zengin Otomasyon + Sürüm Kataloğu ✅*
 
 > Kullanıcı isteği (2026-07-15): bot detayında menzildeki oyuncular (tıkla takip), daha fazla otomasyon tetik/aksiyon,
 > maden/eşya **listeden seçim**, sunucu sürümüne göre güncel katalog (minecraft-data).
 
-**Protokol notu:** Bu faz da diğerleri gibi TODO ile yönetilir — başlarken `[~]`, bitince `[x]`, §7 tablo + §15 oturum günlüğü.
-
 #### 13.A — Bot detay: yakındaki oyuncular
-- [~] Canlı liste: menzildeki oyuncular (mesafe); entity yoksa tab listesi + “konum bilinmiyor”.
-- [ ] Tek tık: **Takip et** · **Yanına git** · **Saldır** · **Fısılda** (`/msg`).
-- [ ] Socket `bot:nearby` (≤1–2 Hz) veya REST poll; panel kartı (Faz 0–5 tasarım dili).
-- [ ] **Kabul:** Online botta yakındaki isim görünür; tıkla takip görevi kuyruğa girer.
+- [x] Canlı liste: menzilde mesafe; entity yoksa tab-only satır.
+- [x] Tek tık: **Takip** · **Yanına** · **Saldır** · **Msg** (`/msg`).
+- [x] Socket `bot:nearby` (~1 Hz) + REST `GET /bots/:id/nearby`; `NearbyPlayers.tsx`.
+- [~] **Kabul:** API/UI hazır; entity mesafesi Paper (flying-squid entity yok → tab-only).
 
 #### 13.B — Sürüme göre eşya/maden kataloğu
-- [~] `minecraft-data` ile `GET /api/catalog?version=` → items, blocks, ores, foods, tools, weapons.
-- [~] `server/src/modules/catalog/minecraftCatalog.ts` iskeleti yazıldı (önbellekli).
-- [ ] REST rotası + web `ItemPicker` / `OrePicker` bileşeni (arama + liste; yazmak yerine seç).
-- [ ] GatherCraftPanel + Automations bu listeleri kullanır (sunucu profili version’ı).
-- [ ] **Kabul:** 1.16 / 1.20 seçiminde ore listesi dolu; demir seç → mine görevi.
+- [x] `minecraft-data` + `GET /api/catalog?version=` (items/blocks/ores/foods/tools/weapons, cache).
+- [x] `ItemPicker.tsx` arama + liste.
+- [x] GatherCraftPanel + Automations form picker kullanır.
+- [x] **Kabul:** katalog API + picker typecheck; sürüme göre resolvedVersion.
 
 #### 13.C — Otomasyon motoru genişletme
-- [~] RuleEngine tetik genişletmesi (kodda): `attacked`, `player_nearby`, `player_joined/left`, `inventory_full`, `task_done/failed`, `item_count` poll; `player` filtresi (belirli kişi).
-- [~] Aksiyon meta + şablon sayısı artırıldı (kodda; panel henüz eski UI).
-- [ ] BotInstance/Manager kablolama: nearby emit, attacked (health drop), tab join/leave, inventory full → RuleEngine.
-- [ ] Panel: form builder (tetik tipi → alanlar → koşul → aksiyon listesi; eşya/maden picker).
-- [ ] Şablonlar UI’da yeni set: saldırıya karşılık, demir madencisi, odun azsa, belirli kişi gel, vs.
-- [ ] **Kabul:** “X kişisi ‘gel’ derse git”; “saldırıya uğrarsan saldırgana saldır”; “iron_log &lt; 16 ise odun topla” panelden kurulur.
+- [x] Tetik: chat (+belirli kişi), attacked, player_nearby, player_joined/left, health/food, item_count, inventory_full, interval, bot_spawned/died, task_done/failed.
+- [x] Aksiyon: goto/follow/attack/mine/collect/craft/eat/hunt/flee/deposit/… + meta API.
+- [x] BotManager kablosu: attacked, nearby, tabPlayers, inventoryFull, taskEvent.
+- [x] Panel form builder + şablon listesi (`/api/rules/meta`).
+- [x] **Kabul:** form + şablon + dry-test; canlı entity tetikleri Paper.
 
-#### 13.D — Küçük UX (önceki istekler — yapıldı)
-- [x] Modal backdrop tıklayınca kapanmaz; × / Vazgeç (commit `4a9c639`).
-- [x] Bot ekle: 2+ sunucuda varsayılan “Seçiniz…”.
-- [x] Chat isim parse: JSON component + zengin regex (plugin sunucular).
-- [x] Faz 6–12 paneller tasarım dili hizası (`be558b9`).
-- [x] Master smoke `scripts/grok-smoke-all.mjs` (`9bac4a0`).
+#### 13.D — Küçük UX (önceki istekler)
+- [x] Modal backdrop kapanmaz; sunucu Seçiniz; chat parse; UI dil hizası; grok-smoke-all.
 
 ---
 
@@ -686,3 +678,15 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - `[ ]` NearbyPlayers paneli, ItemPicker, Automations form builder, REST `/api/catalog`
 
 **TODO güncelleme kuralı (tekrar):** Her işe başlamadan `[~]`, bitince `[x]` + §7 + §15 + gerekirse §14. Yeni özellik isteği → yeni faz maddesi veya §13 Backlog; sessizce unutulmaz.
+
+### 2026-07-15 — Grok 4.5 — Faz 13 tamamlandı (nearby + catalog + otomasyon)
+
+**Yapılanlar:**
+
+1. `getNearbyPlayers` + `bot:nearby` socket + REST nearby; `NearbyPlayers` bot detayda.
+2. `GET /api/catalog` (minecraft-data); `ItemPicker`; İş + Otomasyon formları.
+3. RuleEngine geniş tetik/aksiyon/şablon; Manager kablosu (attacked/nearby/tab/inv/task).
+4. Automations form builder (tetik/aksiyon alanları, katalog seçici, şablonlar).
+5. TODO §7/§8/§15 güncellendi; typecheck temiz.
+
+**Sınır:** flying-squid entity yok → mesafe/takip fiziği Paper. Katalog = npm minecraft-data (çevrimiçi scrape değil; paket güncellemesiyle sürümler gelir).

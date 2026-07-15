@@ -307,6 +307,20 @@ export class BotManager extends EventEmitter {
     });
     inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
     inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
+    inst.on("attacked", (p: { botId: string; attacker?: string; source: "mob" | "player" }) => {
+      this.rules.onAttacked(p.botId, p.attacker, p.source);
+    });
+    inst.on("nearby", (p: { botId: string; players: Array<{ username: string; distance: number | null }> }) => {
+      const withDist = p.players
+        .filter((x) => x.distance != null)
+        .map((x) => ({ username: x.username, distance: x.distance as number }));
+      if (withDist.length) this.rules.onNearby(p.botId, withDist);
+    });
+    inst.on("tabPlayers", (p: { botId: string; names: string[] }) => this.rules.onTabPlayers(p.botId, p.names));
+    inst.on("inventoryFull", (p: { botId: string }) => this.rules.onInventoryFull(p.botId));
+    inst.on("taskEvent", (p: { botId: string; kind: "done" | "failed"; taskType: string; label: string }) => {
+      this.rules.onTaskEvent(p.botId, p.kind, p.taskType, p.label);
+    });
     inst.on(
       "chestOpened",
       (info: {

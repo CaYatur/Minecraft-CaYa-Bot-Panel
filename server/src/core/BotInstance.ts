@@ -47,6 +47,8 @@ export class BotInstance extends EventEmitter {
   readonly gather: GatherService;
   readonly craft: CraftService;
   private foodWatchTimer: NodeJS.Timeout | null = null;
+  private nearbyTick = 0;
+  private lastNearbyKey = "";
   private wantsRunning = false;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -89,8 +91,66 @@ export class BotInstance extends EventEmitter {
         queue: this.tasks.queueSummaries
       });
     });
-    this.tasks.on("taskDone", (s: TaskSummary) => this.log.success(`Görev tamamlandı: ${s.label}`));
-    this.tasks.on("taskFailed", (s: TaskSummary, err: string) => this.log.error(`Görev başarısız: ${s.label}`, err));
+    this.tasks.on("taskDone", (s: TaskSummary) => {
+      this.log.success(`Görev tamamlandı: ${s.label}`);
+      this.emit("taskEvent", { botId: this.config.id, kind: "done" as const, taskType: s.type, label: s.label });
+    });
+    this.tasks.on("taskFailed", (s: TaskSummary, err: string) => {
+      this.log.error(`Görev başarısız: ${s.label}`, err);
+      this.emit("taskEvent", { botId: this.config.id, kind: "failed" as const, taskType: s.type, label: s.label });
+    });
+  }
+
+  /** Menzildeki oyuncular (entity varsa mesafe; yoksa tab-only). */
+  getNearbyPlayers(maxDist = 48): Array<{
+    username: string;
+    distance: number | null;
+    hasEntity: boolean;
+    x?: number;
+    y?: number;
+    z?: number;
+  }> {
+    const bot = this.bot;
+    if (!bot?.entity || this.status !== "online") return [];
+    const out: Array<{
+      username: string;
+      distance: number | null;
+      hasEntity: boolean;
+      x?: number;
+      y?: number;
+      z?: number;
+    }> = [];
+    for (const [name, p] of Object.entries(bot.players ?? {})) {
+      if (!name || name === bot.username) continue;
+      const ent = p?.entity;
+      if (ent?.position) {
+        const d = bot.entity.position.distanceTo(ent.position);
+        if (d <= maxDist) {
+          out.push({
+            username: name,
+            distance: Math.round(d * 10) / 10,
+            hasEntity: true,
+            x: Math.round(ent.position.x * 10) / 10,
+            y: Math.round(ent.position.y * 10) / 10,
+            z: Math.round(ent.position.z * 10) / 10
+          });
+        }
+      } else {
+        out.push({ username: name, distance: null, hasEntity: false });
+      }
+    }
+    out.sort((a, b) => (a.distance ?? 9999) - (b.distance ?? 9999));
+    return out;
+  }
+
+  private emitNearby(force = false) {
+    const list = this.getNearbyPlayers(64);
+    const key = list.map((p) => `${p.username}:${p.distance ?? "t"}`).join("|");
+    if (!force && key === this.lastNearbyKey) return;
+    this.lastNearbyKey = key;
+    this.emit("nearby", { botId: this.config.id, players: list });
+    // tab isimleri join/leave için
+    this.emit("tabPlayers", { botId: this.config.id, names: Object.keys(this.bot?.players ?? {}).filter((n) => n !== this.bot?.username) });
   }
 
   // ---- lifecycle ------------------------------------------------------------
@@ -619,6 +679,8 @@ export class BotInstance extends EventEmitter {
           dimension: this.runtime.dimension
         });
       }
+      // ~1 Hz nearby (4 × 250ms)
+      if (++this.nearbyTick % 4 === 0) this.emitNearby();
     }, POSITION_EMIT_MS);
   }
 
@@ -649,6 +711,7 @@ export class BotInstance extends EventEmitter {
       if (used >= 36 && !this.invWasFull) {
         this.invWasFull = true;
         this.log.warn("Envanter tamamen doldu (36/36) — toplama görevleri duraklayabilir");
+        this.emit("inventoryFull", { botId: this.config.id });
       } else if (used < 36 && this.invWasFull) {
         this.invWasFull = false;
       }

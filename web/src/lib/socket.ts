@@ -52,6 +52,7 @@ socket.on(EV.BOT_INVENTORY, (p: { botId: string; inventory: InventorySnapshot })
   store().patchBot(p.botId, { inventory: p.inventory })
 );
 socket.on(EV.BOT_COMBAT, (p: { botId: string; combat: CombatRuntime }) => store().patchBot(p.botId, { combat: p.combat }));
+// nearby: NearbyPlayers kendi dinleyicisi kullanır (store şişmesin)
 socket.on(EV.BOT_CHAT_QUEUE, (p: { botId: string; length: number }) => store().setChatQueue(p.botId, p.length));
 socket.on(EV.BOT_LOG, (e: LogEntry) => store().addLog(e));
 socket.on(EV.PANEL_NOTIFY, (p: { level?: "info" | "success" | "error"; message: string }) =>

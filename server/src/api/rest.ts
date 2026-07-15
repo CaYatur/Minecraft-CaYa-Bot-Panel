@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { BotManager, PanelError } from "../core/BotManager";
-import { RULE_TEMPLATES } from "../modules/automation/RuleEngine";
+import { ACTION_META, RULE_TEMPLATES, TRIGGER_META } from "../modules/automation/RuleEngine";
+import { getCatalog } from "../modules/catalog/minecraftCatalog";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
 
@@ -342,6 +343,37 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         chests: manager.worldMemory.chestsFor(serverId),
         ores: manager.worldMemory.oresFor(serverId)
       });
+    })
+  );
+
+  // ---- catalog (Faz 13) — sürüme göre item/ore listesi ---------------------------
+  r.get(
+    "/catalog",
+    h((req, res) => {
+      const version = String(req.query.version ?? "auto");
+      const cat = getCatalog(version);
+      res.json(cat);
+    })
+  );
+
+  r.get(
+    "/rules/meta",
+    h((_req, res) => {
+      res.json({
+        triggers: TRIGGER_META,
+        actions: ACTION_META,
+        templates: RULE_TEMPLATES.map((t) => t.name).filter(Boolean)
+      });
+    })
+  );
+
+  // ---- nearby players (Faz 13) ---------------------------------------------------
+  r.get(
+    "/bots/:id/nearby",
+    h((req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      const maxDist = Math.max(4, Math.min(128, Number(req.query.radius) || 48));
+      res.json({ players: inst.getNearbyPlayers(maxDist) });
     })
   );
 
