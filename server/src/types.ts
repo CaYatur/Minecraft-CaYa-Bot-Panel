@@ -341,7 +341,8 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         enabled: true,
         minDamageHp: 4,
         lethalHealthMargin: 2,
-        mlgTriggerBlocks: 3.2,
+        // taban; gerçek su yerleştirme reach içi dinamik (fallGuard.ts)
+        mlgTriggerBlocks: 5.5,
         onlyWhenDangerous: true
       },
       waterGuard: {
