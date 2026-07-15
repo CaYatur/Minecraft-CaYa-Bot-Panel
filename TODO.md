@@ -952,3 +952,13 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 2. `isBadWaterSurface` / `isWaterPlaceableBlock` — leaves, ot, çit, slab…; `findBestWaterPlaceTarget` 3×3.
 3. Kötü yüzeyde water → boat/hay alternatifi.
 4. Geri al: `findNearestWaterSource` ayak+job+geniş tarama; `unsafeStreak` ile tehditte iptal.
+
+### 2026-07-15 — Grok 4.5 — MLG envanter delta + bucketScoop
+
+**Saha:** `MLG kova boşaldı ama su görünmüyor` → fail + geri al yok; su aslında yerleşmiş olabilir.
+
+**Fix:**
+1. Yerleştirme öncesi/sonrası `water_bucket` + `bucket` sayısı; dolu↓ veya boş↑ = başarı + reclaim kuyruğu.
+2. Reclaim hedefi `wantFilledCount` (çoklu kova); başarı = envanter hedefe ulaştı.
+3. `bucketScoop` (varsayılan kapalı): boş kova ile su/lav doldur — MLG reclaim’den bağımsız.
+4. SurvivalPanel: Boş kova doldur kartı.
