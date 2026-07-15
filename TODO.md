@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 16 ✅* Litematic + transform + build anim + audit**
+> Son güncelleme: 2026-07-15 · Durum: **Faz 16 ✅* + yapı malzeme toplama/canlı UI (collectMissing, craft-first, activity)**
 
 ---
 
@@ -260,7 +260,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
 | 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
 | 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
-| 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (inşaat fiziği Paper) |
+| 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (+ eksik topla/craft, canlı malzeme UI) |
 | 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
 | 16 | Litematic + döndür/aynala + build anim + güvenlik audit | ✅ Bitti* |
 
@@ -480,6 +480,19 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Typecheck server+web temiz; örnek şema + REST list; UI rotaları.
 - [ ] Paper: küçük yapı + scaffold cleanup saha (flying-squid yetersiz).
 
+#### 14.E — Eksik malzeme + canlı UI (post-ship) ✅*
+> Kullanıcı: eksikleri topla/sıra; nearby-first; tam başarıda dur; malzeme listesi taşmasın;
+> anlık sayılar; ne topladığını / craft denediğini yaz.
+
+- [x] `collectMissing` + `allowPartial` + `placeOrder` (nearby-first | layer-first).
+- [x] Acquire kuyruğu: yere düşenler → eksik türler sırayla; `runCollectBlock` halka arama.
+- [x] Tam başarıda `done` + dur; hata varsa `failed`.
+- [x] `activity` / `activityMaterial` runtime + `bot:build` force emit.
+- [x] Acquire: önce **craft** (`runCraftInline` / `canCraft`), yetmezse **topla**.
+- [x] BuildPanel: malzeme tablosu butonların altında, `max-h-52` scroll; “Şu an” bandı; canlı satır highlight.
+- [x] Typecheck server+web temiz.
+- [ ] Paper: eksik malzeme toplama + craft + canlı sayılar saha.
+
 ### Faz 15 — Düşüş Kurtarma / MLG ✅*
 
 > Yüksekten düşerken hasar/ölüm engelleme: su kovası MLG, tekne, saman, slime, cobweb,
@@ -644,6 +657,8 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — Dövüş hedef çözümlemesi: mob adında **en yakın** entity + id takibi (ilk map girdisi değil) — aksi halde uzak zombie “menzilden çıktı” spam.
 - 2026-07-15 — MLG su: reach (~4.5) içinde katı bloğa bak + activateItem/activateBlock/use_item retry; erken activateItem havaya su koyamaz.
 - 2026-07-15 — MLG sonrası recover kuyruğu: su neredeyse kesin geri al; tekne/blok güvenliyse; zor durumda ertele.
+- 2026-07-15 — Yapı acquire: malzeme önce craft dene (`CraftService.runCraftInline`), yetmezse gather; UI `activity`/`activityMaterial` + malzeme listesi force emit (throttle bypass).
+- 2026-07-15 — BuildPanel malzemeler butonların altında scroll (`max-h-52`); taşmayı paneli şişirmeden çöz.
 
 ---
 
@@ -1029,3 +1044,19 @@ TÜM fazların incelemesi bitince smoke testleri sırayla koş (kullanıcının 
    sınır eklendi + etiket tam metreye yuvarlandı.
    ⚠ Saha doğrulaması (Paper, zigzag merdiven kulesi): kullanıcı senaryosu — 3. merdivende
    karşı yöndeki merdivene geçiş + takip sırasında yön değişimi.
+
+### 2026-07-15 — Grok 4.5 — Yapı: eksik malzeme + canlı malzeme UI
+
+**İstek (önceki oturum + devam):** Eksik malzemeleri topla; sırayla/yakın önce; tam başarıda dur;
+malzeme listesi anlık güncellensin; ne topladığını/craft ettiğini yazsın; liste taşmasın (alta al).
+
+**Yapılanlar (64582f8 + bu commit):**
+1. BuildService: `collectMissing`, `placeOrder` nearby-first, acquire kuyruğu, tam başarı `done`.
+2. `activity` / `activityMaterial` + `setActivity` / `refreshMaterials` (force emit).
+3. Acquire: craft-first (`canCraft` + `runCraftInline`) → gather; progress etiketleri TR.
+4. CraftService: `runCraftInline`, `canCraft`; craft adım label’ları `Craft:` / `Toplanıyor:`.
+5. BuildPanel: malzemeler butonların altında; max-h-52 scroll; “Şu an” bandı; aktif satır; canlı badge.
+6. Types: server+web `BuildRuntime` activity alanları.
+7. TODO §7/§8 14.E / §14 / §15 güncellendi.
+
+**Sınır:** Paper saha (toplama+craft+UI sayıları); craft planında maden/ingot nested gather hâlâ uyarı+fallback.
