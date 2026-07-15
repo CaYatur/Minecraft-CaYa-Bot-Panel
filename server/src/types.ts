@@ -127,6 +127,13 @@ export interface BotConfig {
       seekLand: boolean;
       landSearchRadius: number;
     };
+    /** ateş / lav / magma kaçış */
+    hazardGuard?: {
+      enabled: boolean;
+      escapeRadius: number;
+      seekWater: boolean;
+      useWaterBucket: boolean;
+    };
   };
   chat: {
     minMessageIntervalMs: number;
@@ -328,6 +335,12 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
         surfaceOxygenBelow: 14,
         seekLand: true,
         landSearchRadius: 16
+      },
+      hazardGuard: {
+        enabled: true,
+        escapeRadius: 12,
+        seekWater: true,
+        useWaterBucket: true
       }
     },
     chat: { minMessageIntervalMs: 1500 },

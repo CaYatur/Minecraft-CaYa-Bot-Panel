@@ -157,9 +157,10 @@ export class WaterGuardService {
       this.state.action = "yüzeyde (güvenli)";
     }
 
-    // 2) Karaya çık (spawn okyanus / derin su)
+    // 2) Karaya çık (spawn okyanus / derin su) — lav/ateş kaçışı yokken
     if (cfg.seekLand && !this.busyLand && Date.now() - this.lastLandSeek > 2500) {
-      // derin suda veya yeni spawn: kara ara
+      const hazardBusy = this.instance.survival?.hazardGuard?.getState?.()?.active;
+      if (hazardBusy) return;
       const depth = waterDepthBelow(bot);
       if (depth >= 2 || oxygen < cfg.surfaceOxygenBelow || submerged) {
         this.lastLandSeek = Date.now();

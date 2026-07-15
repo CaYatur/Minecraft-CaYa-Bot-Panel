@@ -46,6 +46,12 @@ export interface BotConfig {
       seekLand: boolean;
       landSearchRadius: number;
     };
+    hazardGuard?: {
+      enabled: boolean;
+      escapeRadius: number;
+      seekWater: boolean;
+      useWaterBucket: boolean;
+    };
   };
   chat: { minMessageIntervalMs: number };
   movement: {

@@ -32,6 +32,13 @@ const defaultWg = {
   landSearchRadius: 16
 };
 
+const defaultHg = {
+  enabled: true,
+  escapeRadius: 12,
+  seekWater: true,
+  useWaterBucket: true
+};
+
 /** Faz 7 — Hayatta kalma + düşüş kurtarma (MLG). */
 export function SurvivalPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
@@ -54,6 +61,7 @@ export function SurvivalPanel({ botId }: { botId: string }) {
   const s = bot.config.survival;
   const fg = { ...defaultFg, ...(s.fallGuard ?? {}) };
   const wg = { ...defaultWg, ...(s.waterGuard ?? {}) };
+  const hg = { ...defaultHg, ...(s.hazardGuard ?? {}) };
   const online = bot.status === "online";
 
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
@@ -353,6 +361,39 @@ export function SurvivalPanel({ botId }: { botId: string }) {
         <p className="text-[11px] leading-relaxed text-zinc-500">
           Kafa suda iken yukarı yüzer (space/jump). Yüzeyde nefes alır, boğulmaz. Derin suda veya düşük
           oksijende yakındaki karaya pathfinder ile çıkar. Okyanus spawn’da otomatik devreye girer.
+        </p>
+      </div>
+
+      {/* Ateş / lav */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Ateş / lav koruması</div>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={hg.enabled}
+            onChange={(e) => void patch({ hazardGuard: { ...hg, enabled: e.target.checked } })}
+          />
+          Otomatik ateş/lav kaçışı
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={hg.seekWater}
+            onChange={(e) => void patch({ hazardGuard: { ...hg, seekWater: e.target.checked } })}
+          />
+          Yanınca suya koş
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={hg.useWaterBucket}
+            onChange={(e) => void patch({ hazardGuard: { ...hg, useWaterBucket: e.target.checked } })}
+          />
+          Su kovası ile sön (varsa)
+        </label>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Lavdaysa zıplayıp çıkar; yanıyorsa suya veya güvenli bloğa pathfinder ile kaçar. Magma/ateş
+          bloğu üzerinde de devreye girer. Envanterde water_bucket varsa ayak altına döküp söndürmeyi dener.
         </p>
       </div>
     </div>

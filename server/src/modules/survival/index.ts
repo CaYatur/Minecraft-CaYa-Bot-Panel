@@ -5,13 +5,12 @@ import { ensureMovement, runGoto } from "../movement";
 import { tryRealisticAttack, inMeleeRange, distanceEyeToEntity } from "../combat/realism";
 import { FallGuardService, type FallGuardState } from "./fallGuard";
 import { foodScore, isFood, isRawMeat, HUNTABLE, RAW_TO_COOKED, FUEL_PRIORITY } from "./foods";
+import { HazardGuardService, type HazardGuardState } from "./hazardGuard";
 import { WaterGuardService, type WaterGuardState } from "./waterGuard";
 
 /**
  * Survival brain (Faz 7): auto-eat, hunt nearby animals, simple furnace cook.
- * FallGuard (Faz 15): yüksekten düşüş MLG / yumuşak iniş.
- * WaterGuard: suda boğulmama + karaya çıkma (spawn okyanus).
- * Uses RealismLayer for kills. Never writes to game chat (İ1).
+ * FallGuard: düşüş MLG · WaterGuard: boğulmama · HazardGuard: ateş/lav.
  */
 export class SurvivalService {
   private bot: Bot | null = null;
@@ -21,10 +20,12 @@ export class SurvivalService {
   private lastSwing = { t: 0 };
   readonly fallGuard: FallGuardService;
   readonly waterGuard: WaterGuardService;
+  readonly hazardGuard: HazardGuardService;
 
   constructor(private readonly instance: BotInstance) {
     this.fallGuard = new FallGuardService(instance);
     this.waterGuard = new WaterGuardService(instance);
+    this.hazardGuard = new HazardGuardService(instance);
   }
 
   attach(bot: Bot) {
@@ -34,9 +35,11 @@ export class SurvivalService {
     bot.on("health", this.healthHook);
     this.fallGuard.attach(bot);
     this.waterGuard.attach(bot);
+    this.hazardGuard.attach(bot);
   }
 
   detach() {
+    this.hazardGuard.detach();
     this.waterGuard.detach();
     this.fallGuard.detach();
     if (this.bot && this.healthHook) this.bot.removeListener("health", this.healthHook);
@@ -50,6 +53,10 @@ export class SurvivalService {
 
   getWaterGuardState(): WaterGuardState {
     return this.waterGuard.getState();
+  }
+
+  getHazardGuardState(): HazardGuardState {
+    return this.hazardGuard.getState();
   }
 
   private cfg() {
