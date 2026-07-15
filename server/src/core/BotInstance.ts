@@ -322,36 +322,27 @@ export class BotInstance extends EventEmitter {
         report({ done: 0, total: 3, label: "temin" });
         const bot = this.bot;
         if (!bot || this.status !== "online") throw new Error("Bot çevrimdışı");
+        // Nested enqueue beklemez — elde varsa devam; yoksa net hata (kullanıcı önce mine/craft/withdraw yapsın)
         const have = bot.inventory.items().filter((i) => i.name.includes(item)).reduce((s, i) => s + i.count, 0);
         if (have < count) {
-          try {
-            this.enqueueWithdraw(item, count - have);
-          } catch {
-            /* */
-          }
-          // try craft or mine
-          try {
-            await this.craft.enqueueCraft(item, count);
-          } catch {
-            try {
-              this.gather.enqueueMine(item.replace("_ingot", ""), count);
-            } catch {
-              /* */
-            }
-          }
+          throw new Error(
+            `Envanterde ${item} yetersiz (${have}/${count}). Önce depodan-al / maden / üret, sonra getir.`
+          );
         }
+        if (token.cancelled) throw new Error(token.reason ?? "iptal");
         report({ done: 1, total: 3, label: "oyuncuya git" });
         if (player) {
           await runGotoPlayer(this, player, 2, token, report);
+        } else {
+          throw new Error("Getir için hedef oyuncu adı gerekli");
         }
         report({ done: 2, total: 3, label: "bırak" });
         const stack = bot.inventory.items().find((i) => i.name.includes(item));
-        if (stack) {
-          try {
-            await bot.toss(stack.type, null, Math.min(count, stack.count));
-          } catch (e) {
-            throw new Error(`Toss başarısız: ${e instanceof Error ? e.message : e}`);
-          }
+        if (!stack) throw new Error(`Eşya kayboldu: ${item}`);
+        try {
+          await bot.toss(stack.type, null, Math.min(count, stack.count));
+        } catch (e) {
+          throw new Error(`Toss başarısız: ${e instanceof Error ? e.message : e}`);
         }
         report({ done: 3, total: 3, label: "getir bitti" });
       }

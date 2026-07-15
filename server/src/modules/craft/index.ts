@@ -126,10 +126,10 @@ export class CraftService {
       return;
     }
     if (item.includes("ore") || item === "cobblestone" || item === "stone" || item === "iron_ingot") {
-      const ore = item.replace("_ore", "").replace("deepslate_", "").replace("_ingot", "").replace("raw_", "");
-      // run mine as nested task via direct method
-      await this.instance.gather.enqueueMine(ore === "cobblestone" || ore === "stone" ? "coal" : ore, count);
-      this.log().info(`Maden görevi kuyruğa eklendi: ${ore}`);
+      // Nested enqueue tamamlanmayı beklemez — plan adımında kullanıcıya net uyarı
+      this.log().warn(
+        `Craft planı için ${item}×${count} envanterde yok; önce maden-topla / el ile temin et (iç içe kuyruk beklenmez)`
+      );
       return;
     }
     this.log().warn(`Toplama planı karşılanamadı: ${item}×${count}`);

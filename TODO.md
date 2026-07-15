@@ -607,3 +607,21 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 **Bilerek Backlog'da kalan:** prismarine-viewer, Discord, multi-user, EN i18n, 5 bot 1 saat sızıntı, drag-drop envanter, node kural editörü, armor-manager banned soft-filter.
 
 **Sıradaki devralan:** Paper saha listesi (Faz4–10 fizik ✅* maddeleri); Backlog ürün cilası.
+
+### 2026-07-15 — Grok 4.5 — Tam re-audit (kontrol turu)
+
+**Yeniden koşulan testler (hepsi exit 0):** combat-test, full-suite, smoke, movement-test, inventory-test + typecheck.
+
+**Bulunan ve düzeltilen gerçek buglar:**
+
+1. **RuleEngine rateOk sırası:** koşullar fail olsa bile cooldown yakılıyordu → artık `conditionsOk` sonra `rateOk`.
+2. **İ3 yetki kapsamı:** chat tetikte yetki “herhangi bot listesi”ydi → **sohbeti duyan botun** `authorizedPlayers` listesi.
+3. **getir/fetch:** iç içe `enqueueCraft/Mine/Withdraw` tamamlanmayı beklemiyordu (yanlış “başarılı” akış) → envanter yetersizse **net hata**; önce temin et.
+4. **craft gatherFallback mine enqueue:** aynı “beklemeden kuyruk” tuzağı → uyarı log, sahte tamam yok.
+
+**Hâlâ bilinen limitler (düzeltme değil, dürüst borç):**
+
+- flying-squid: entity/window → dövüş/takip/kuşan-at/fırın fizik testleri Paper
+- armor-manager bannedItems deliği
+- prismarine-viewer / Discord / multi-user Backlog
+- TaskQueue pause = cancel+requeue (tam bağlamlı pause değil)

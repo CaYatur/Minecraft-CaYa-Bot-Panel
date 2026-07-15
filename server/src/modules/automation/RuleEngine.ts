@@ -134,9 +134,10 @@ export class RuleEngine {
       if (!rule.enabled || rule.trigger.type !== "chat") continue;
       if (!this.appliesToBot(rule, botId)) continue;
       try {
-        if (!this.matchChat(rule, username, text)) continue;
-        if (!this.rateOk(rule)) continue;
+        if (!this.matchChat(rule, botId, username, text)) continue;
+        // önce koşullar — rate limit'i başarısız koşulda yakma
         if (!this.conditionsOk(rule, botId)) continue;
+        if (!this.rateOk(rule)) continue;
         void this.execute(rule, botId, { player: username ?? "", text, arg: extractArg(rule.trigger.pattern, text) });
       } catch (e) {
         log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
@@ -152,10 +153,10 @@ export class RuleEngine {
       if (!this.appliesToBot(rule, botId)) continue;
       try {
         if (rule.trigger.type === "health_below" && health <= (rule.trigger.threshold ?? 6)) {
-          if (this.rateOk(rule) && this.conditionsOk(rule, botId)) void this.execute(rule, botId, {});
+          if (this.conditionsOk(rule, botId) && this.rateOk(rule)) void this.execute(rule, botId, {});
         }
         if (rule.trigger.type === "food_below" && food <= (rule.trigger.threshold ?? 6)) {
-          if (this.rateOk(rule) && this.conditionsOk(rule, botId)) void this.execute(rule, botId, {});
+          if (this.conditionsOk(rule, botId) && this.rateOk(rule)) void this.execute(rule, botId, {});
         }
       } catch (e) {
         log.error(`Kural hata (${rule.name})`, e instanceof Error ? e.message : String(e));
@@ -201,17 +202,15 @@ export class RuleEngine {
     return rule.botIds === "all" || rule.botIds.includes(botId);
   }
 
-  private matchChat(rule: AutomationRule, username: string | undefined, text: string): boolean {
+  private matchChat(rule: AutomationRule, botId: string, username: string | undefined, text: string): boolean {
     const tr = rule.trigger;
     const from = tr.from ?? "authorized";
-    const inst = this.manager.get(rule.botIds === "all" ? "" : "");
-    void inst;
-    // authorization
+    // İ3: yetki — tetikleyen sohbeti duyan botun authorizedPlayers listesi
     if (from === "authorized") {
-      // check any bot in scope's authorized list
-      const bots =
-        rule.botIds === "all" ? [...this.manager.bots.values()] : rule.botIds.map((id) => this.manager.get(id)).filter(Boolean);
-      const allowed = bots.some((b) => b && username && b.config.authorizedPlayers.map((x) => x.toLowerCase()).includes(username.toLowerCase()));
+      const inst = this.manager.get(botId);
+      const allowed =
+        Boolean(username) &&
+        Boolean(inst?.config.authorizedPlayers.map((x) => x.toLowerCase()).includes(username!.toLowerCase()));
       if (!allowed) return false;
     } else if (Array.isArray(from)) {
       if (!username || !from.map((x) => x.toLowerCase()).includes(username.toLowerCase())) return false;
