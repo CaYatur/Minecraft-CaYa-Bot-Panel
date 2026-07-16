@@ -152,9 +152,138 @@ The project is designed around three principles:
 | **Recursive crafting** | Recipe dependency planning, raw-material acquisition, crafting-table use, furnace chains and storage withdrawal |
 | **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes |
 | **Schematic building** | `.schem`, `.schematic`, `.litematic` and `.caya.json`, rotation, mirroring, material planning, partial building and scaffold cleanup |
+| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 50+ tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
 | **Localization** | English, Turkish and automatic locale detection |
 | **Persistence** | Server profiles, bot profiles, rules, waypoints, schematic indexes and logs stored locally as JSON/files |
+
+---
+
+## MCP / AI agent system
+
+The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (50+ tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
+
+```text
+┌─────────────────────┐      tools       ┌──────────────────┐
+│ Ollama (local LLM)  │ ───────────────► │                  │
+│ in-game agent       │                  │  Agent tool      │      TaskQueue /
+└─────────────────────┘                  │  registry (50+)  │ ───► RealismLayer ───► Minecraft
+┌─────────────────────┐   /mcp endpoint  │                  │
+│ Claude Code, Cursor │ ───────────────► │                  │
+│ VS Code, any client │  (JSON-RPC/HTTP) └──────────────────┘
+└─────────────────────┘
+```
+
+Enable the master switch in **MCP / AI**, then use either or both modes.
+
+### Mode 1 — In-game AI with Ollama
+
+A local [Ollama](https://ollama.com) model drives the bot inside the game: it answers chat, accepts tasks, gathers, crafts, fights (if allowed) and designs/builds structures.
+
+1. Install Ollama and pull a **tool-capable** model:
+
+   ```bash
+   ollama pull qwen2.5        # or: llama3.1, qwen3, mistral-nemo, gpt-oss
+   ```
+
+2. In **MCP / AI → Ollama**, pick the model (the dropdown lists your installed models) and enable the agent.
+3. Under **Bot Agents**, toggle **Agent** on for at least one bot.
+4. Talk to it from the **Agent Chat** console — or in game chat by addressing the bot by name (`CaYa selam, 10 demir kaz`).
+
+In-game behavior is fully configurable: reply only when addressed, whisper handling, per-player cooldown, max reply length, persona text and reply language. Turning **in-game replies off** limits conversation to the panel's Agent Chat.
+
+> Small models (≤8B) can misuse tools or hallucinate. For serious use prefer stronger tool-calling models such as `qwen3.5:35b` or `gpt-oss:20b`.
+
+### Mode 2 — External MCP clients (Claude Code, Cursor, VS Code…)
+
+The panel exposes a **Model Context Protocol** server at `http://127.0.0.1:3001/mcp` (Streamable HTTP, JSON-RPC 2.0). Any MCP-capable tool can then control the bots.
+
+**Claude Code (CLI):**
+
+```bash
+claude mcp add --transport http caya-bot http://127.0.0.1:3001/mcp
+```
+
+**Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{ "mcpServers": { "caya-bot": { "url": "http://127.0.0.1:3001/mcp" } } }
+```
+
+**VS Code (Copilot agent mode)** — `.vscode/mcp.json`:
+
+```json
+{ "servers": { "caya-bot": { "type": "http", "url": "http://127.0.0.1:3001/mcp" } } }
+```
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{ "mcpServers": { "caya-bot": { "serverUrl": "http://127.0.0.1:3001/mcp" } } }
+```
+
+**Gemini CLI** — `~/.gemini/settings.json`:
+
+```json
+{ "mcpServers": { "caya-bot": { "httpUrl": "http://127.0.0.1:3001/mcp" } } }
+```
+
+**Claude Desktop and other stdio-only clients** — bridge with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) in the client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "caya-bot": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:3001/mcp"]
+    }
+  }
+}
+```
+
+> Config formats evolve — if a snippet doesn't match your client version, the only facts you need are: **transport = Streamable HTTP**, **URL = `http://127.0.0.1:3001/mcp`**. When *Require bearer token* is enabled in the panel, also send `Authorization: Bearer <token>` (Claude Code: `--header "Authorization: Bearer <token>"`; JSON configs usually accept a `headers` object).
+
+Most tools accept an optional `bot` argument; when exactly one bot has the agent enabled it is picked automatically. Typical session: `list_bots` → `get_status` → `mine_ore { ore: "iron", count: 10 }` → `get_tasks`.
+
+### Tool categories
+
+Every category can be toggled in **Tool Permissions**; info/perception tools are always on.
+
+| Category | Tools |
+|---|---|
+| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all` |
+| Chat | `send_chat`, `send_whisper` |
+| Movement | `goto`, `goto_player`, `follow_player`, `goto_waypoint`, `interact_block` |
+| Gathering | `collect_wood`, `mine_ore`, `collect_blocks`, `collect_drops`, `hunt_animals` |
+| Crafting & survival | `craft_item`, `preview_craft_plan`, `cook_food`, `eat_now`, `sleep_in_bed`, `wake_up` |
+| Inventory / storage | `deposit_items`, `withdraw_items`, `give_item_to_player`, `drop_items`, `equip_item` |
+| Building (creative) | `plan_structure`, `build_structure`, `build_schematic`, `stop_build` |
+| Defense | `set_self_defense`, `protect_player`, `flee`, `stop_combat` |
+| Attack *(off by default)* | `attack_player`, `clear_hostile_mobs` |
+| Trust | `trust_player`, `untrust_player` |
+| Memory | `remember`, `recall_memories`, `forget_memory` |
+| Waypoints | `save_waypoint_here` |
+| Utility mode *(off by default)* | `server_command`, `fly_to`, plus `mine_ore { utility: true }` |
+
+### Creative building without schematics
+
+The model designs structures itself by composing parametric shapes — `box`, `hollow_box`, `floor`, `wall`, `pillar`, `line`, `cylinder`, `ring`, `sphere`, `dome`, `pyramid`, `cone`, `stairs`, `roof_gable` and raw `blocks`. Placing `air` carves earlier cells, which gives it doors, windows and interiors. `plan_structure` dry-runs the design (size + material list vs. inventory), `build_structure` hands it to the real build engine (scaffolding, material collection, progress, repair) and `get_build_status` streams stage-by-stage progress back to the model. Designs are saved into the schematic library as `AI · <name>`, and existing library schematics can be built with `build_schematic`.
+
+### Trust system
+
+When the trust system is on, only players in the trusted list can give the agent commands from game chat. Untrusted players are either ignored or get chat-only replies (no tools) — configurable. The model itself may manage the list with `trust_player` only if you explicitly allow it.
+
+### Autopilot
+
+Give a bot a goal (*"collect 64 oak logs, then build a small cabin"*) and enable **Autopilot**: the model periodically decides the next concrete step on its own, wakes early on task completion/failure or when attacked, and stops when it reports the goal complete.
+
+### Utility mode (permitted servers only)
+
+Off by default. On your **own** server (or one that explicitly allows automation) you can unlock non-realistic paths for the model: server slash commands (`/tp`, `/give`, `/gamemode`… — requires OP), creative flight (`fly_to`) and fast utility mining. Combat realism (look-before-hit, reach, human timing) is **never** affected by this mode.
+
+### Memory
+
+`remember` / `recall_memories` give each bot a persistent long-term memory (`data/agent-memory/`) that survives restarts — base locations, owners, promises.
 
 ---
 
@@ -611,6 +740,7 @@ Minecraft-CaYa-Bot-Panel/
 │     ├─ constants/              Shared event names
 │     ├─ core/                   BotManager, BotInstance, TaskQueue
 │     ├─ modules/
+│     │  ├─ agent/               MCP endpoint, Ollama agent, tool registry, memory
 │     │  ├─ automation/          Rules, blueprints and advanced flow nodes
 │     │  ├─ build/               Schematic parsing and construction
 │     │  ├─ catalog/             Minecraft item/block catalog
@@ -631,7 +761,7 @@ Minecraft-CaYa-Bot-Panel/
 │     ├─ components/             Bot panels and advanced flow editor
 │     ├─ i18n/                   English and Turkish dictionaries
 │     ├─ lib/                    API, sockets and shared UI types
-│     ├─ pages/                  Dashboard, bots, rules, schematics, servers
+│     ├─ pages/                  Dashboard, bots, rules, schematics, MCP/AI, servers
 │     ├─ stores/                 Zustand state
 │     └─ App.tsx
 ├─ TODO.md                       Detailed roadmap and design decisions
@@ -756,6 +886,17 @@ Check:
 ### Bot repeats a failed task
 
 Use **Reset work** or the full-cancel action. Then inspect the active automation rules, especially interval, task-failed and error branches that may recreate work.
+
+### Bot stuck after cancelling a build
+
+**Stop** and **Reset work** free the bot within a couple of seconds even when a server request hangs mid-flight: cancelled runners that don't unwind are force-detached from the task queue (logged as *"Task force-detached"*), all placement/equip/window operations run under hard timeouts, and pathfinder is repeatedly released until the engine fully exits. If you still see movement after a reset on some server, capture the log panel output and open an issue.
+
+### AI agent doesn't respond
+
+- Master switch **and** Ollama must both be enabled, a model selected, and **Agent** toggled on for the bot.
+- The model must support tool calling (`llama3.1`, `qwen2.5/3`, `mistral-nemo`, `gpt-oss`…). Plain chat models fail with a clear error.
+- In-game replies additionally require *Reply to in-game messages* and (by default) addressing the bot by name; whispers always count.
+- For external MCP clients, the `/mcp` endpoint toggle must be on — a disabled endpoint returns HTTP 403.
 
 ### Building reports missing materials
 

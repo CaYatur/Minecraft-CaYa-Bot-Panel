@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-16 · Durum: **Faz 17 ✅* — yapı motoru yeniden yazımı (issue #3): stok defteri, 3D printer modu, watchdog, onarım, creative, resume**
+> Son güncelleme: 2026-07-17 · Durum: **Faz 18 ✅* — MCP / Yapay Zekâ ajan sistemi: Ollama oyun içi ajan + /mcp endpoint (Claude Code), 53 araç, güven sistemi, yaratıcı inşaat, otopilot + Utility modu (izinli sunucular, varsayılan kapalı)**
 
 ---
 
@@ -62,7 +62,7 @@ Panel varsayılan olarak sadece `localhost`'ta dinler.
 | # | İlke |
 |---|------|
 | İ1 | **Log disiplini:** Sistem hataları, bilgilendirmeler, görev durumları yalnızca panel log arayüzüne gider. Bot, oyun sohbetine **asla** kendiliğinden sistem mesajı yazmaz. Oyun sohbetine sadece kullanıcı komutu veya kullanıcı tanımlı otomasyon aksiyonu yazı yazdırabilir. |
-| İ2 | **Gerçekçilik:** Dövüş ve hareket §9'daki şartnameye uyar. Uçma, ışınlanma, duvar arkasına vurma, anlık kafa çevirme (aimbot snap) yok. Bot, bir oyuncunun yapabileceğini yapabilecek şekilde davranır. |
+| İ2 | **Gerçekçilik:** Dövüş ve hareket §9'daki şartnameye uyar. Uçma, ışınlanma, duvar arkasına vurma, anlık kafa çevirme (aimbot snap) yok. Bot, bir oyuncunun yapabileceğini yapabilecek şekilde davranır. *(İstisna — kullanıcı kararı 2026-07-17: Faz 18 **Utility Modu** — varsayılan KAPALI; yalnızca kendi/izinli sunucular için panelden açılır; sunucu komutları + creative uçuş + utility kazı açılır. **Dövüş şartnamesi §9 bu moddan muaftır, daima geçerlidir.**)* |
 | İ3 | **Güvenlik — komut yetkisi:** Sohbet tetikleyicili otomasyonlar varsayılan olarak yalnızca **yetkili oyuncu listesindeki** (owner whitelist) isimlerden tetiklenir. Rastgele bir oyuncu botlara komut veremez. |
 | İ4 | **Kesintiye dayanıklılık:** Bot düşerse otomatik yeniden bağlanır (üstel geri çekilme ile), görev durumu mümkün olduğunca korunur. Panel yeniden başlarsa `autostart` işaretli botlar kendiliğinden bağlanır. |
 | İ5 | **Sohbet nezaketi:** `bot.chat()` tek bir global hız sınırlayıcıdan geçer (varsayılan: mesaj başına ≥1.5 sn, patlama koruması) — spam kick yememek ve sunucuyu boğmamak için. |
@@ -264,6 +264,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
 | 16 | Litematic + döndür/aynala + build anim + güvenlik audit | ✅ Bitti* |
 | 17 | Yapı motoru yeniden yazımı (issue #3: stok defteri, printer modu, watchdog, onarım, creative, resume) | ✅ Bitti* (fizik detayları Paper) |
+| 18 | MCP / Yapay Zekâ ajan sistemi (Ollama oyun içi ajan + /mcp endpoint + panel MCP sekmesi) | ✅ Bitti* (Ollama e2e flying-squid'de doğrulandı; Paper + büyük model saha) |
 
 ---
 
@@ -531,6 +532,55 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Typecheck; örnek şema + UI; litematic kod yolu.
 - [ ] Paper: gerçek .litematic dosyası + rotate 90° saha.
 
+### Faz 18 — MCP / Yapay Zekâ Ajan Sistemi ✅*
+
+> Kullanıcı isteği (2026-07-16): Panele **MCP sekmesi** + kapsamlı Minecraft MCP sistemi.
+> İki mod: (a) **Ollama**'dan model seçip oyun içi yapay zekâ, (b) **Claude Code** gibi MCP
+> istemcilerinin botları araç olarak kullanması. Oyun içi hitap yanıtı (kapatılabilir; kapalıyken
+> yalnızca paneldeki Ajan Sohbeti "asıl yer"), kaynak hedefleri, şemasız yaratıcı inşaat +
+> aşama aktarımı, koruma/saldırı, güven sistemi (panelden aç/kapa + oyuncu ekleme; istenirse
+> modelin kendisi trust ekleyebilir), hafıza, otopilot vb.
+
+#### 18.A — Çekirdek (server/src/modules/agent/)
+- [x] `settings.ts` — `data/mcp.json`: ana şalter, ollama, mcpServer(token), chat, trust, tools izinleri, autopilot, bot başına {agentEnabled, goal, autopilot}; sanitize + migrasyon merge.
+- [x] `tools.ts` — **46 araçlık tek kayıt defteri** (Ollama + MCP aynı araçları kullanır): algı (get_status/get_inventory/look_around/find_blocks/get_recent_chat/get_tasks/get_build_status/list_waypoints/list_trusted/stop_all/list_bots), sohbet, hareket, toplama (odun/maden/blok/drop/av; hedef=envanterde N olacak şekilde), craft (+plan önizleme), envanter/depo, inşaat, dövüş (saldırı ayrı kategori, varsayılan KAPALI), güven, hafıza, waypoint. Hepsi mevcut TaskQueue/RealismLayer üzerinden — **İ2 korunur, hile yolu yok**.
+- [x] `builder.ts` — **şemasız yaratıcı inşaat**: shape compose (box/hollow_box/floor/wall/pillar/line/cylinder/ring/sphere/dome/pyramid/cone/stairs/roof_gable/blocks) → voxel harita; `air` bloklar oyar (kapı/pencere/iç mekân). 30k blok + 200 şekil + boyut sınırları. Sonuç `addCayaJsonSchematic` ("AI · ad") → mevcut BuildService (gerçekçi yerleştirme, scaffold, malzeme).
+- [x] `ollama.ts` — native fetch istemci: /api/version, /api/tags, /api/chat (stream:false, tools); dostane TR hatalar (model yok → `ollama pull`, tool desteklemiyor → model önerisi).
+- [x] `runtime.ts` — bot başına ajan döngüsü: promise-chain serileştirme, tool-calling iterasyonu (maks yineleme + araç bütçesi + son turda araçsız özet), kompakt model geçmişi (yalnız user+final; 24 mesaj), transcript ring (120), sistem promptu (persona, kurallar, güven listesi, **anlık dünya durumu**, halüsinasyon yasağı), oyun yanıtı tek satır + uzunluk kırpma + fısıltıya fısıltı.
+- [x] `index.ts` (AgentService) — ayar CRUD, güven/hafıza host op'ları (`data/agent-memory/<botId>.json`), oyun sohbeti köprüsü (hitap=isim geçiyor|fısıltı; oyuncu başına cooldown; **yönetilen botlardan gelen mesajlar yok sayılır** — bot-bot sonsuz döngü koruması), otopilot tik (görev/inşaat sürerken boş tik atmaz; taskEvent/attacked olayları inbox'la uyandırır; "GOAL COMPLETE" → otopilot kapanır).
+- [x] `mcpHttp.ts` — **MCP Streamable HTTP** endpoint `/mcp`: JSON-RPC 2.0 initialize (2024-11-05/2025-03-26/2025-06-18) + session header, tools/list (bot parametresi enjekte), tools/call (bot çözümleme: tek etkin bot otomatik), ping, 202 notification, opsiyonel Bearer token, kapalıyken 403. SDK bağımlılığı yok.
+
+#### 18.B — API / socket / kablolama
+- [x] REST: `GET/PATCH /api/mcp(/settings)` · `POST /api/mcp/token/regenerate` · `GET /api/mcp/ollama/models` · `POST /api/mcp/ollama/test` · `PATCH /api/mcp/bots/:id` · `POST /api/mcp/agent/:id/message|reset|stop` · `GET /api/mcp/agent/:id/history`.
+- [x] Socket: `mcp:status` (bağlanınca + her değişimde) · `mcp:activity` (tool-call/result/reply/error) · `mcp:chat` (transcript akışı); `constants/events.ts` + web aynası.
+- [x] index.ts: AgentService boot/shutdown; `/mcp` router static'ten önce; catch-all `/mcp` dışlaması.
+
+#### 18.C — Panel: MCP sekmesi (`web/src/pages/Mcp.tsx`)
+- [x] Sidebar **MCP / Yapay Zekâ** (BrainCircuit) + `/mcp` rotası; store `mcpStatus` (socket).
+- [x] Kartlar: ana şalter + hızlı kurulum; **Ollama** (host, model dropdown=canlı /api/tags, yenile, sına, sıcaklık, num_ctx); **MCP Endpoint** (URL + `claude mcp add` kopyala, token aç/yenile); **Oyun İçi Sohbet** (yanıt aç/kapa, hitap şartı, fısıltı, cooldown, maks uzunluk, persona, dil auto/tr/en); **Güven** (aç/kapa, oyuncu chip ekle/sil, model-trust izni, untrusted politikası ignore/chat-only); **Araç İzinleri** (11 kategori toggle + araç sayıları + otopilot ayarları); **Bot Ajanları** (bot başına Ajan/Otopilot toggle + hedef alanı); **Ajan Sohbeti** (bot seç, transcript balonları + araç satırları, gönder/durdur/sıfırla) + **Canlı Araç Aktivitesi** feed.
+- [x] i18n: `mcp.*` TR+EN (~110 anahtar), `nav.mcp`.
+
+#### 18.D — Kabul (2026-07-16 doğrulanan)
+- [x] typecheck server+web temiz; `npm run smoke` regresyonsuz.
+- [x] MCP endpoint el testi: kapalı→403, initialize→2025-03-26 + session, tools/list=44 (saldırı kategorisi kapalı: 46−2), notification→202, list_bots/get_status/plan_structure/remember/recall (UTF-8) ✓.
+- [x] **Uçtan uca Ollama (flying-squid + llama3.1:latest):** panel mesajı "x=24 y=5 z=28 yürü" → model `goto` aracını çağırdı → gerçek pathfinder → bot (18,22)→(24.3,28.3) ✓; oyun içi hitap "CaYaUI selam…" → oyun sohbetinde yanıt ✓; `respondInGame=false` → oyun içinde sessiz ✓; güvenilmeyen oyuncu görev istedi → kibar red + görev kuyruğu boş ✓; panel UI tüm kartlar + trust ekleme ✓.
+- [ ] Paper saha: gerçek sunucuda hitap/parse varyantları + build_structure fiziği + büyük model (qwen3.5:35b vb.) davranış testi.
+- [ ] Claude Code ile gerçek bağlantı (kullanıcı: `claude mcp add --transport http caya-bot http://127.0.0.1:3001/mcp`).
+
+#### 18.E — Utility modu + ek araçlar (kullanıcı isteği 2026-07-17) ✅*
+
+> Kullanıcı: gerçekçilik-dışı yollar **varsayılan kapalı** kalsın ama **açılabilir/kapatılabilir** olsun —
+> kendi sunucusu ve otomasyona izin veren (legal) sunucular için. Ayrıca eklenecek başka şey var mı bak.
+
+- [x] `settings.utility` — `enabled` (varsayılan **false**) + `serverCommands` + `creativeFly` + `utilityMining`; `AgentToolDef.gate` mekanizması (`isToolEnabled` = kategori izni **VE** gate); kapalıyken araçlar tools/list'te görünmez, çağrılırsa yönlendirici hata döner.
+- [x] Yeni gated araçlar: `server_command` (/tp /give /gamemode… — bot OP/izinliyse), `fly_to` (yalnız creative gamemode; 60s timeout + iptalde stopFlying). `mine_ore`'a `utility` argümanı (izin yoksa legit'e düşer + nota yazar).
+- [x] `send_chat` komut kapısı: `/msg|tell|w|r` hariç slash komutları utility moduna bağlı — sızıntı yolu kapandı.
+- [x] Sistem promptu koşullu: utility açıkken "UTILITY MODE ON… Combat always stays realistic", kapalıyken "no cheats/teleport/flying".
+- [x] **Ek araçlar (tespit):** `list_schematics` + `build_schematic` (ajan mevcut şema kütüphanesinden inşa edebilir — ör. "Kule"), `sleep_in_bed` (yatak bul→git→uyu) + `wake_up`, `interact_block` (kapı/düğme/kol, reach≤4.2). Toplam araç: **53**.
+- [x] Panel: **Utility / Hile Modu** kartı (amber uyarı; açıkken vurgulu) + "dövüş şartnamesi etkilenmez" notu; craft kategorisi etiketi "Üretim & Yaşam"; i18n TR+EN.
+- [x] TODO §2 İ2 hücresine istisna notu (kullanıcı kararı); dövüş D1-D8 muafiyeti hem kodda (utility dövüşe dokunmaz) hem belgede.
+- [x] **Kabul (2026-07-17, flying-squid canlı):** utility OFF → 49 araç, server_command/fly_to gizli, gated çağrı yönlendirici hata, send_chat "/gamemode" bloklu ✓; utility ON → 51 araç, `/time set day` kuyruklandı ✓; fly_to survival'da kibar red ✓; sleep_in_bed görevi "yatak yok" temiz hatası ✓; list_schematics gerçek kütüphaneyi listeledi (Kule 448 blok) ✓; typecheck server+web temiz.
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -660,6 +710,15 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-15 — MLG sonrası recover kuyruğu: su neredeyse kesin geri al; tekne/blok güvenliyse; zor durumda ertele.
 - 2026-07-15 — Yapı acquire: malzeme önce craft dene (`CraftService.runCraftInline`), yetmezse gather; UI `activity`/`activityMaterial` + malzeme listesi force emit (throttle bypass).
 - 2026-07-15 — BuildPanel malzemeler butonların altında scroll (`max-h-52`); taşmayı paneli şişirmeden çöz.
+- 2026-07-16 — Faz 18 MCP: protokol **SDK'sız** elle uygulandı (Streamable HTTP, JSON-RPC 2.0) — ESM/CJS çakışması riski yok, tools-only sunucu için ~200 satır yeterli.
+- 2026-07-16 — Ollama ajanı ile MCP endpoint **aynı araç kayıt defterini** kullanır (`agent/tools.ts`) — tek doğruluk kaynağı; kategori izinleri her iki yolda da geçerli.
+- 2026-07-16 — Ajan araçları YALNIZ mevcut enqueueAction/TaskQueue/RealismLayer üzerinden çalışır — İ2 (hile yok) ajan katmanında da yapısal olarak korunur; saldırı kategorisi varsayılan KAPALI.
+- 2026-07-16 — Model geçmişi kompakt tutulur: ara tool alışverişleri kalıcı geçmişe yazılmaz (yalnız user + final yanıt) — küçük yerel modellerin bağlam penceresi taşmasın.
+- 2026-07-16 — Yönetilen botlardan gelen oyun sohbeti ajanı TETİKLEMEZ (bot-bot sonsuz konuşma döngüsü koruması).
+- 2026-07-16 — Yaratıcı inşaat: shape-compose → geçici `.caya.json` şeması ("AI · ad") → mevcut BuildService. Yeni yerleştirme kodu YAZILMADI; şeffaflık için tasarım şema kütüphanesinde görünür/silinebilir.
+- 2026-07-16 — Otopilot boş tik atmaz: görev/inşaat sürerken bekler, taskEvent/attacked olayları inbox ile erken uyandırır; "GOAL COMPLETE" yanıtı otopilotu kapatır.
+- 2026-07-17 — **İ2 istisnası (kullanıcı kararı):** Utility modu — gerçekçilik-dışı yollar (sunucu komutları, creative uçuş, utility kazı) varsayılan KAPALI ama kendi/izinli sunucular için panelden açılabilir. Dövüş şartnamesi (§9 D1-D8) muaf: utility modu dövüş koduna hiç dokunmaz. Uygulama: `AgentToolDef.gate` + `send_chat` slash-komut kapısı (tek sızıntı yolu da kapatıldı).
+- 2026-07-17 — **Issue #4 kök neden + yapısal çözüm:** TaskQueue.pump runner'ı korumasız await ediyordu — iptali yutan asılı bir await (yanıtsız placeBlock/equip/pencere) `pumping=true` + `current` dolu bırakıp TÜM kuyruğu sonsuza dek zehirliyordu (restart şart olmasının asıl sebebi). Çözüm 3 katman: (1) pump = runner × detach yarışı; iptalden 2sn sonra asılı runner TERK edilir (`taskDetached` log + kuyruk akar, zombi arkada söner); (2) build'deki tüm ham mineflayer await'leri `boundedOp` ile sert zaman aşımına bağlandı (equip 6s, place 6.5s, pencere 8s, dig 10s); (3) re-freeze nabzı 4sn'de kesilmek yerine runner asılı kaldıkça 800ms periyotla sürer (60sn tavan).
 
 ---
 
@@ -1103,3 +1162,56 @@ malzeme listesi anlık güncellensin; ne topladığını/craft ettiğini yazsın
 **Paper 1.21.6 saha (kullanıcı, 2026-07-16):**
 - ✅ **Creative mode** — düzgün ilerliyor; zamanla yanlış/eksik hücreler toparlanıyor (verify/repair). Survival / büyük survival şema / chest stock / reconnect henüz bu notta yok.
 - 🔧 **Stop/reset stuck fix (aynı gün):** Yarıda kes / hata sonrası bot pathfinder’da kalıyordu; Stop + “İşleri sıfırla” etkisizdi. Neden: `stopBuild` / hata catch `cleanupScaffolds(..., { cancelled: false })` ile iptal edilemeyen scaffold dig başlatıyordu. Düzeltme: cancelGate + freezeBot, abort’ta scaffold dig yok (ledger abandon), `hardReset` önce, re-freeze darbeleri, Stop butonu failed/cancelled/stuck’ta da açık.
+
+### 2026-07-16 — Claude Fable 5 — Faz 18: MCP / Yapay Zekâ ajan sistemi
+
+**İstek:** Panele MCP sekmesi + kapsamlı MCP sistemi: Ollama’dan model seçip oyun içi yapay zekâ VEYA Claude Code gibi MCP istemcisiyle kullanım; oyun içi hitap yanıtı (kapatılabilir — kapalıyken yalnızca paneldeki “asıl yer”), kaynak hedefleri (topla/envanterde N olsun/maden/odun/drop), **şemasız yaratıcı inşaat** + aşama aktarımı, koruma/saldırı, güven sistemi (panelden yönetilir; istenirse model kendisi ekleyebilir), ve önerilen tüm gelişmiş özellikler (Claude’un takdirine bırakıldı).
+
+**Yapılanlar:** §8 Faz 18’e bkz. Özet: `server/src/modules/agent/` (settings, tools×46, builder, ollama, runtime, AgentService, mcpHttp) + REST/socket + `web/src/pages/Mcp.tsx` + i18n TR/EN. Eklenen “yaratıcılık” özellikleri: kalıcı hafıza (remember/recall/forget), otopilot (hedef + olay-uyanmalı tik + GOAL COMPLETE), canlı araç aktivite feed’i, persona/dil ayarı, fısıltıya fısıltı, bot-bot döngü koruması, araç bütçesi/iterasyon sınırı, token’lı endpoint.
+
+**Doğrulama (bu oturum, flying-squid 1.16.1 + Ollama 0.32 / llama3.1:latest):**
+
+| Test | Sonuç |
+|---|---|
+| typecheck server+web | ✅ temiz |
+| `npm run smoke` | ✅ hepsi geçti |
+| MCP: 403/initialize/tools-list(44)/call/202 | ✅ |
+| plan_structure 7×5×7 ev+kapı oyma+çatı | ✅ 250 blok, malzeme dökümü doğru |
+| Panel ajan: “x=24 y=5 z=28 yürü” | ✅ goto aracı → bot gerçekten yürüdü (24.3, 28.3) |
+| Oyun içi hitap (“CaYaUI selam…”) | ✅ oyun sohbetinde yanıtladı |
+| respondInGame=false | ✅ oyunda sessiz (panel çalışır) |
+| Güvenilmeyen oyuncu görev istedi | ✅ kibar red + kuyruk boş |
+| Hafıza UTF-8 kalıcılık | ✅ |
+
+**Sorun/çözüm:** llama3.1-8B offline botta envanter uydurdu → sistem promptuna “NEVER invent game state” kuralı eklendi. Browser screenshot timeout (bilinen ortam sorunu) → read_page/get_page_text ile doğrulandı.
+
+**Bilinçli sınırlar / saha borcu:** Paper’da hitap/parse varyantları + build_structure fiziği; Claude Code ile gerçek bağlantı denemesi kullanıcıda; küçük modeller (≤8B) araç seçiminde hata yapabilir — kullanıcıya qwen3.5:35b / gpt-oss:20b gibi daha güçlü tool-calling modelleri önerilir. `data/mcp.json` şu an enabled=true + llama3.1 + trusted=[CaYatur] (demo hâli; panelden değiştirilebilir).
+
+**Commit:** *(bu oturumda yapılmadı — working tree’de Faz 17’nin commit’lenmemiş değişiklikleri de duruyor; devralan: önce Faz 17 commit’i, sonra Faz 18)*
+
+### 2026-07-17 — Claude Fable 5 — Faz 18.E: Utility modu + ek araçlar
+
+**İstek:** (1) "Hile yolu yapısal kapalı" yerine → **varsayılan kapalı ama açılıp kapatılabilir** (kendi sunucusu / otomasyona izin veren legal sunucular). (2) Eklenecek başka şey var mı bak.
+
+**Yapılanlar:** §8 18.E’ye bkz. Özet: `settings.utility` (master default OFF + serverCommands/creativeFly/utilityMining), `AgentToolDef.gate` + `isToolEnabled`, `server_command` + `fly_to` araçları, `mine_ore` utility argümanı, `send_chat` slash-komut kapısı, koşullu sistem promptu, panel amber **Utility** kartı, i18n. Tespit edilen ek araçlar: `list_schematics`/`build_schematic` (kütüphaneden inşaat), `sleep_in_bed`/`wake_up`, `interact_block`. Toplam 53 araç. **Dövüş D1-D8 bilinçli muaf — utility dövüşe dokunmaz.**
+
+**Doğrulama:** typecheck ✓; canlı (flying-squid): OFF→49 araç/gizli/bloklu, ON→51 araç/komut kuyruklandı, fly_to survival red, sleep "yatak yok" temiz hata, list_schematics gerçek kütüphane (Kule 448) ✓. Utility ayarı testten sonra **varsayılana (kapalı) geri alındı**.
+
+**Devralan not:** commit hâlâ yok (Faz 17+18 birlikte bekliyor).
+
+### 2026-07-17 — Claude Fable 5 — Issue #4 fix + README + commit/push
+
+**İstek:** (1) Build'de ulaşılamaz-blok sorununda Stop/Reset işe yaramıyor, sunucu restart gerekiyor — [issue #4](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/4) düzelt. (2) Her şeyi commit + push. (3) README'ye özellikler + MCP kullanımı (farklı araçlar için).
+
+**Kök neden (yeni bulgu):** Önceki oturumların cancelGate/freezeBot katmanları BEDENİ serbest bırakıyordu ama **TaskQueue.pump** asılı runner'ı sonsuza dek `await` ediyordu → `pumping=true` kilidi + `current` dolu → sonraki HİÇBİR görev çalışmıyor. "Bot müdahaleye yanıt vermiyor" algısının gerçek sebebi kuyruk zehirlenmesiydi; §14 karar satırına bkz.
+
+**Yapılanlar:**
+1. `TaskQueue`: runner × detach yarışı; `cancel/cancelAll/pause/preempt` → 2sn grace sonrası `taskDetached` (BotInstance WARN loglar); zombi promise yutulur; kuyruk akmaya devam eder.
+2. `build/place.ts`: `boundedOp` (promise × token × sert timeout) + `equipSafe`/`placeSafe`; bucket/genel place/jumpPlace/ensureSupport/climb yolları sarıldı; iptal artık `failed`e yutulmayıp yukarı fırlatılıyor.
+3. `build/storage.ts` + `stock.ts`: openContainer/withdraw/deposit/dig 8-10sn sınırlı.
+4. `build/index.ts`: scheduleReFreeze tek zincir 50→…→800ms, runner asılıyken 60sn'ye dek.
+5. README: MCP/AI bölümü (Ollama kurulumu, Claude Code/Cursor/VS Code/Windsurf/Gemini/mcp-remote konfigleri, araç tablosu, yaratıcı inşaat, güven, otopilot, utility, hafıza), özellik tablosu satırı, proje yapısı, troubleshooting (stuck-build + AI yanıt vermiyor).
+
+**Doğrulama:** typecheck ✓ · birim probe: asılı (hiç bitmeyen) runner iptalden 2.6sn sonra detached, sonraki görev ÇALIŞTI ✓ · canlı (flying-squid): build başlat → stop+reset → kuyruk temiz (current null, phase idle) → yeni goto koştu ve bitti, bot fiziksel serbest ✓ · smoke regresyonsuz (önceki oturum).
+
+**Commit:** bu oturumda — fix(#4) + feat(mcp) + docs; origin/master'a push.
