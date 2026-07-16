@@ -211,7 +211,7 @@ export interface BuildPlacedBlock {
   x: number;
   y: number;
   z: number;
-  status: "placed" | "skipped" | "failed";
+  status: "placed" | "skipped" | "failed" | "repaired" | "fixed";
   t: number;
 }
 
@@ -221,7 +221,9 @@ export interface BuildRuntime {
     | "preparing"
     | "acquiring"
     | "building"
+    | "verifying"
     | "cleanup"
+    | "paused"
     | "done"
     | "failed"
     | "cancelled";
@@ -232,9 +234,15 @@ export interface BuildRuntime {
   total: number;
   skipped: number;
   failed?: number;
+  /** hasar sonrası yeniden konan bloklar */
+  repaired?: number;
+  /** yanlış blok kırılıp düzeltilenler */
+  fixedWrong?: number;
   scaffoldsPlaced: number;
   scaffoldsCleared: number;
-  materials: Array<{ name: string; need: number; have: number; missing: number }>;
+  /** temizlenemeyen scaffold (dürüst rapor) */
+  scaffoldsLeft?: number;
+  materials: Array<{ name: string; need: number; have: number; stored?: number; missing: number }>;
   label: string;
   error?: string;
   startedAt: number | null;
@@ -245,8 +253,15 @@ export interface BuildRuntime {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
-  placeOrder?: "nearby-first" | "layer-first";
+  placeOrder?: "printer" | "nearby-first";
   collectMissing?: boolean;
+  /** creative mod: malzeme ihtiyacı yok */
+  creative?: boolean;
+  /** watchdog takılma notu */
+  stuck?: string | null;
+  /** kopunca spawn'da otomatik devam */
+  resumePending?: boolean;
+  storage?: { containers: number; lastScanAt: number | null };
   /** anlık: Toplanıyor / Kondu / Craft… */
   activity?: string | null;
   activityMaterial?: string | null;

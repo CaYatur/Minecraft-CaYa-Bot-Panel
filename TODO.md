@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-15 · Durum: **Faz 16 ✅* + yapı malzeme toplama/canlı UI (collectMissing, craft-first, activity)**
+> Son güncelleme: 2026-07-16 · Durum: **Faz 17 ✅* — yapı motoru yeniden yazımı (issue #3): stok defteri, 3D printer modu, watchdog, onarım, creative, resume**
 
 ---
 
@@ -263,6 +263,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (+ eksik topla/craft, canlı malzeme UI) |
 | 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
 | 16 | Litematic + döndür/aynala + build anim + güvenlik audit | ✅ Bitti* |
+| 17 | Yapı motoru yeniden yazımı (issue #3: stok defteri, printer modu, watchdog, onarım, creative, resume) | ✅ Bitti* (fizik detayları Paper) |
 
 ---
 
@@ -1060,3 +1061,45 @@ malzeme listesi anlık güncellensin; ne topladığını/craft ettiğini yazsın
 7. TODO §7/§8 14.E / §14 / §15 güncellendi.
 
 **Sınır:** Paper saha (toplama+craft+UI sayıları); craft planında maden/ingot nested gather hâlâ uyarı+fallback.
+
+### 2026-07-16 — Claude Fable 5 — Faz 17: yapı motoru yeniden yazımı (issue #3)
+
+**İstek:** [GitHub issue #3](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/3) — büyük/karmaşık şemalarda yapı sistemi kararsız; bot + server tarafı kökten incelenip yeniden yazılsın.
+
+**Durum:** Kod büyük ölçüde yazıldı; `TODO` §7 Faz 17 ✅* işaretlendi; oturum **session limit** ile kesildi. **Commit / PR / issue kapatma yok** (working tree kirli). Büyük şema (ör. Kule 448) uçtan uca doğrulanmadı — sadece 9 blok dirt-pad e2e.
+
+**Yapılanlar (düzeltilen / eklenen):**
+
+1. **`ChestStockIndex` (`modules/build/stock.ts`):** Yakın sandık/barrel/shulker işaretlenir; içerik canlı defterde; malzemeler “depoda var” sayılır; bot yalnızca ihtiyaç anında withdraw eder; world memory ile seed.
+2. **Job board + 3D printer sırası (`jobs.ts`):** O(n²) tarama yerine `JobBoard`; varsayılan yerleştirme **printer** (katman katman, serpentine); `nearby-first` korunur; legacy `layer-first` → printer.
+3. **Stall watchdog (`index.ts`):** İlerleme durunca kör round cap yerine kurtarma merdiveni (yeniden path / repair tick / yeniden tara / stuck raporu); `runtime.stuck` UI’ya.
+4. **Mid-build + final onarım:** Yerleştirilmiş hücrelerde hasar → job reopen (`repaired`); yanlış blok → kır+düzelt (`fixedWrong`); bitişte verify pass.
+5. **Creative (`creative.ts`):** `gameMode === creative` → malzeme ihtiyacı 0; `bot.creative.setInventorySlot` ile item temini.
+6. **Reconnect resume:** Disconnect’te oturum dondurulur (`resumePending`); spawn’da otomatik devam; panel `resumeOnReconnect` toggle.
+7. **Scaffold cleanup (`scaffold.ts`):** Yola yaklaş, ayak altındaysa kenara çek, drop topla; temizlenemeyenler `scaffoldsLeft` ile dürüst rapor.
+8. **Placement sertleştirme (`place.ts` + `maneuver.ts` + `tools.ts`):** Onay poll, gravity destek, oryantasyon yardımcıları, alet seçimi.
+9. **Malzeme acquire v2:** Stok defteri + mid-build fetch; creative yolu; craft-first zinciri korunur.
+10. **Panel / i18n:** `BuildPanel` — printer vs nearby, depo kolonu (`stored`), creative / resume / stuck / repaired / scaffoldsLeft badge’leri; TR+EN sözlük.
+11. **BotInstance:** `build.onDisconnect` / `onSpawn`; `placeOrder` + `resumeOnReconnect` action alanları; snapshot tipleri (`types.ts` server+web).
+12. **Test (oturum içi):** flying-squid arka plan; demo bot + 9 blok dirt schematic e2e; demo bot/profil/şema temizliği. Browser pane doğrulama kısmen timeout.
+
+**Yeni dosyalar:** `stock.ts`, `jobs.ts`, `creative.ts`, `maneuver.ts`, `tools.ts`  
+**Büyük rewrite:** `index.ts`, `place.ts`, `scaffold.ts`, `storage.ts`, `types.ts` + web BuildPanel/BuildAnim/i18n.
+
+**Sorunlar / sınırlar:**
+
+| Konu | Not |
+|---|---|
+| Session limit | Temiz kapanış, commit, karar günlüğü satırları oturumda yarım kaldı |
+| Issue #3 kabulü | “Large/complex schematic” repro (Kule 448) **yapılmadı** — issue OPEN |
+| Commit | Yok; untracked yeni build dosyaları + büyük unstaged diff |
+| Paper fizik | Scaffold/path/placement/repair saha doğrulaması borç (✅*) |
+| Browser UI | Claude Browser tool timeout; panel elle doğrulanmalı |
+
+**Sıradaki devralan (öneri):** typecheck zaten temiz → commit (issue #3 ref) → Kule/büyük şema + reconnect + chest stock saha testi → issue #3 yorum/kapatma; §14’e printer/stok/resume karar satırları.
+
+**Commit:** *(yok — uncommitted)*
+
+**Paper 1.21.6 saha (kullanıcı, 2026-07-16):**
+- ✅ **Creative mode** — düzgün ilerliyor; zamanla yanlış/eksik hücreler toparlanıyor (verify/repair). Survival / büyük survival şema / chest stock / reconnect henüz bu notta yok.
+- 🔧 **Stop/reset stuck fix (aynı gün):** Yarıda kes / hata sonrası bot pathfinder’da kalıyordu; Stop + “İşleri sıfırla” etkisizdi. Neden: `stopBuild` / hata catch `cleanupScaffolds(..., { cancelled: false })` ile iptal edilemeyen scaffold dig başlatıyordu. Düzeltme: cancelGate + freezeBot, abort’ta scaffold dig yok (ledger abandon), `hardReset` önce, re-freeze darbeleri, Stop butonu failed/cancelled/stuck’ta da açık.

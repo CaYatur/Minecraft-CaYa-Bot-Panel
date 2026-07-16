@@ -1,10 +1,15 @@
 import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken } from "../../core/TaskQueue";
-import { pathNear } from "./place";
+import { sleep } from "./maneuver";
+import { fetchFromStorage, scanNearbyStorage } from "./stock";
 
-const STORAGE_DISTANCE = 24;
-const STORAGE_BLOCKS = new Set(["chest", "trapped_chest", "barrel"]);
+/**
+ * Storage acquisition (compat surface for craft/build):
+ * quick nearby scan → ledger-driven withdraw → carried-shulker fallback.
+ * Containers are only opened, never broken; contents are marked in the
+ * live stock index (and the persistent world memory) instead of hoarded.
+ */
 
 interface ContainerItem {
   name: string;
@@ -20,18 +25,10 @@ interface OpenContainer {
   close(): void;
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
   if (!bot || instance.status !== "online") throw new Error("Bot offline");
   return bot;
-}
-
-function isStorageBlock(name: string): boolean {
-  return STORAGE_BLOCKS.has(name) || name.endsWith("_shulker_box") || name === "shulker_box";
 }
 
 function inventoryCount(bot: Bot, names: Set<string>): number {
@@ -43,7 +40,7 @@ function containerItems(container: OpenContainer): ContainerItem[] {
     if (typeof container.containerItems === "function") return container.containerItems();
     if (typeof container.items === "function") return container.items();
   } catch {
-    // window kapandı / sunucu reddetti
+    /* window closed / server refused */
   }
   return [];
 }
@@ -55,9 +52,9 @@ async function openContainer(bot: Bot, block: unknown): Promise<OpenContainer> {
 }
 
 /**
- * Yakındaki oyuncu depolarından malzeme alır.
- * Sandık/barrel ve worldya placeilmiş shulker kutuları yalnızca açılır; kırılmaz.
- * Inventory has insufficient taşınan shulker ise safe noktaya geçici konur ve işlem sonunda geri alınır.
+ * Withdraw `count` of any of `itemNames` from player storage nearby.
+ * World chests/barrels/shulkers are only opened; a carried shulker box is
+ * temporarily placed on a safe spot and reclaimed afterwards.
  */
 export async function withdrawBuildMaterials(
   instance: BotInstance,
@@ -72,58 +69,34 @@ export async function withdrawBuildMaterials(
   if (!wanted || !names.size) return 0;
 
   const before = inventoryCount(bot, names);
-  const positions = bot.findBlocks({
-    matching: (block) => isStorageBlock(block.name),
-    maxDistance: STORAGE_DISTANCE,
-    count: 96
-  });
-  positions.sort(
-    (a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b)
-  );
+  const index = instance.build.stock;
 
-  const visited = new Set<string>();
-  for (const position of positions) {
-    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-    if (inventoryCount(bot, names) - before >= wanted) break;
-    const key = `${position.x},${position.y},${position.z}`;
-    if (visited.has(key)) continue;
-    visited.add(key);
-
-    const block = bot.blockAt(position);
-    if (!block || !isStorageBlock(block.name)) continue;
-    onActivity(`Depo kontrol ediliyor: ${block.name} @${position.x},${position.y},${position.z}`);
+  // ledger empty for these names → refresh the neighborhood first
+  if (index.stockOf(names) <= 0) {
     try {
-      await pathNear(instance, position.x + 0.5, position.y, position.z + 0.5, 3.2, token, {
-        clearGoal: true,
-        timeoutMs: 7_000
-      });
-      bot.pathfinder?.setGoal(null);
-      bot.clearControlStates();
-      await sleep(90);
-      await withdrawFromContainer(bot, block, names, wanted - (inventoryCount(bot, names) - before));
-    } catch (error) {
-      instance
-        .getLogger()
-        .warn("Storage read failed", `${block.name}: ${error instanceof Error ? error.message : String(error)}`);
+      await scanNearbyStorage(instance, index, { radius: 24, maxContainers: 16, budgetMs: 45_000 }, token, onActivity);
+    } catch (e) {
+      if (token.cancelled) throw e;
+      /* scan is best-effort */
     }
   }
 
-  // Dünyadaki depolar yetmediyse, botun taşıdığı shulker kutularına bak.
+  if (index.stockOf(names) > 0) {
+    await fetchFromStorage(instance, index, [...names], wanted, token, onActivity);
+  }
+
+  // world storage was not enough → look inside carried shulker boxes
   if (inventoryCount(bot, names) - before < wanted) {
-    const shulkers = bot.inventory.items().filter(
-      (item) => item.name === "shulker_box" || item.name.endsWith("_shulker_box")
-    );
+    const shulkers = bot.inventory
+      .items()
+      .filter((item) => item.name === "shulker_box" || item.name.endsWith("_shulker_box"));
     for (const shulker of shulkers) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       if (inventoryCount(bot, names) - before >= wanted) break;
       try {
         onActivity(`Opening carried shulker: ${shulker.name}`);
         await withPortableShulker(instance, shulker.name, token, async (container) => {
-          await withdrawMatching(
-            container,
-            names,
-            wanted - (inventoryCount(bot, names) - before)
-          );
+          await withdrawMatching(container, names, wanted - (inventoryCount(bot, names) - before));
         });
       } catch (error) {
         instance
@@ -134,26 +107,8 @@ export async function withdrawBuildMaterials(
   }
 
   const taken = Math.max(0, inventoryCount(bot, names) - before);
-  if (taken > 0) onActivity(`Depodan withdrawn: ${[...names].join("/")} ×${taken}`);
+  if (taken > 0) onActivity(`Withdrawn from storage: ${[...names].join("/")} ×${taken}`);
   return taken;
-}
-
-async function withdrawFromContainer(
-  bot: Bot,
-  block: unknown,
-  names: Set<string>,
-  count: number
-): Promise<number> {
-  const container = await openContainer(bot, block);
-  try {
-    return await withdrawMatching(container, names, count);
-  } finally {
-    try {
-      container.close();
-    } catch {
-      // no-op
-    }
-  }
 }
 
 async function withdrawMatching(
@@ -183,15 +138,14 @@ async function withPortableShulker(
   action: (container: OpenContainer) => Promise<void>
 ): Promise<void> {
   const bot = requireBot(instance);
-  const beforeShulkers = bot.inventory.items().reduce(
-    (sum, item) => sum + (item.name === shulkerName ? item.count : 0),
-    0
-  );
+  const beforeShulkers = bot.inventory
+    .items()
+    .reduce((sum, item) => sum + (item.name === shulkerName ? item.count : 0), 0);
   const location = findSafePortablePosition(bot);
   if (!location) throw new Error("No safe temporary spot for shulker");
 
   const item = bot.inventory.items().find((entry) => entry.name === shulkerName);
-  if (!item) throw new Error(`${shulkerName} inventoryde yok`);
+  if (!item) throw new Error(`${shulkerName} not in inventory`);
 
   bot.pathfinder?.setGoal(null);
   bot.clearControlStates();
@@ -214,17 +168,17 @@ async function withPortableShulker(
     try {
       container?.close();
     } catch {
-      // no-op
+      /* no-op */
     }
 
-    // Yalnızca bu fonksiyonun placediği kesin koordinattaki shulker geri alınır.
+    // only the shulker at the exact coordinate this function placed is reclaimed
     const live = bot.blockAt(location.target);
     if (live?.name === shulkerName && bot.canDigBlock(live)) {
       try {
         const toolBot = bot as unknown as { tool?: { equipForBlock(block: unknown): Promise<void> } };
         await toolBot.tool?.equipForBlock(live);
       } catch {
-        // elle kırma denenir
+        /* hand dig fallback */
       }
       bot.pathfinder?.setGoal(null);
       bot.clearControlStates();
@@ -237,10 +191,9 @@ async function withPortableShulker(
 
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
-    const now = bot.inventory.items().reduce(
-      (sum, entry) => sum + (entry.name === shulkerName ? entry.count : 0),
-      0
-    );
+    const now = bot.inventory
+      .items()
+      .reduce((sum, entry) => sum + (entry.name === shulkerName ? entry.count : 0), 0);
     if (now >= beforeShulkers) return;
     await sleep(100);
   }

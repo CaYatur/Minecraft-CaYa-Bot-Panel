@@ -59,6 +59,8 @@ export class CombatService {
   private deathHook: (() => void) | null = null;
   private entityGoneHook: ((e: Entity) => void) | null = null;
   private companion: CompanionState = defaultCompanion();
+  /** After Stop build / soft free-bot: don't re-enqueue follow for a few seconds */
+  private companionPathPausedUntil = 0;
   private protectTimer: NodeJS.Timeout | null = null;
   private selfGuardTimer: NodeJS.Timeout | null = null;
   private followTaskId: string | null = null;
@@ -311,6 +313,7 @@ getRuntime(): CombatRuntime {
 
   /** Tüm companion (takip/saldırı/koruma) kapat — panel stop */
   clearCompanion(reason = "companion temizlendi") {
+    this.companionPathPausedUntil = 0;
     this.stopProtectLoop();
     this.companion = defaultCompanion();
     this.followTaskId = null;
@@ -322,6 +325,21 @@ getRuntime(): CombatRuntime {
     this.clearPathfinder();
     this.setMode("idle", null);
     this.log().info("Follow/attack/protect turned off", reason);
+    this.emitCombat();
+  }
+
+  /**
+   * Temporarily stop companion pathing (follow/attack tasks) without wiping
+   * companion settings. Used when Stop-build must free the bot — otherwise
+   * a queued `follow` task re-grabs pathfinder the moment build cancels.
+   */
+  pauseCompanionPathing(ms = 8_000, reason = "pathing paused") {
+    this.companionPathPausedUntil = Date.now() + Math.max(500, ms);
+    this.cancelTasksOfType("follow");
+    this.cancelTasksOfType("attack");
+    this.cancelTasksOfType("defend");
+    this.clearPathfinder();
+    this.log().info("Companion pathing paused", `${reason} (${Math.round(ms / 1000)}s)`);
     this.emitCombat();
   }
 
@@ -563,6 +581,9 @@ getRuntime(): CombatRuntime {
 
   private ensureFollowTask(player: string, distance: number, force = false) {
     if (this.deadPaused) return;
+    // force=true = explicit user toggle — clear pathing pause so follow works immediately
+    if (force) this.companionPathPausedUntil = 0;
+    else if (Date.now() < this.companionPathPausedUntil) return;
     const wantLabel = `follow: ${player} (≤${distance})`;
     const cur = this.instance.tasks.currentSummary;
     const q = this.instance.tasks.queueSummaries;
@@ -586,6 +607,7 @@ getRuntime(): CombatRuntime {
   }
 
   private ensureAttackTask(player: string) {
+    if (Date.now() < this.companionPathPausedUntil) return;
     const cur = this.instance.tasks.currentSummary;
     const q = this.instance.tasks.queueSummaries;
     if (

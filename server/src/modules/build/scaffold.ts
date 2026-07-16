@@ -1,4 +1,7 @@
-import type { Bot } from "mineflayer";
+import type { BotInstance } from "../../core/BotInstance";
+import { dist3, isAirLike, sleep } from "./maneuver";
+import { digCancelable, pathNear, PLACE_REACH, stepAside } from "./place";
+import { equipBestToolForBlock, isScaffoldFamily, pickScaffoldItem } from "./tools";
 import { v3 } from "./vec3util";
 
 export interface ScaffoldRecord {
@@ -9,13 +12,14 @@ export interface ScaffoldRecord {
 }
 
 /**
- * Scaffold defteri: inşaat sırasında koyulan geçici bloklar.
- * Yapı bloğu konan hücreler korunur — yanlışlıkla yapı dirt'i kırılmaz.
+ * Scaffold ledger: temporary blocks placed during a build.
+ * Cells that received a real structure block are protected — the cleanup
+ * pass will never dig them.
  */
 export class ScaffoldTracker {
   private stack: ScaffoldRecord[] = [];
-  /** yapı başarıyla kondu → bu hücreler asla kazılmaz */
-  private protected = new Set<string>();
+  /** structure landed here → never dig */
+  private protectedCells = new Set<string>();
 
   get count(): number {
     return this.stack.length;
@@ -31,174 +35,152 @@ export class ScaffoldTracker {
 
   record(x: number, y: number, z: number, name: string) {
     const k = this.key(x, y, z);
-    if (this.protected.has(k)) return; // structure cell is not scaffold
+    if (this.protectedCells.has(k)) return; // structure cell is not scaffold
+    if (this.stack.some((r) => this.key(r.x, r.y, r.z) === k)) return;
     this.stack.push({ x: Math.floor(x), y: Math.floor(y), z: Math.floor(z), name });
   }
 
-  /** Kalıcı yapı bloğu kondu — scaffold kaydını düşür ve koru */
+  isProtected(x: number, y: number, z: number): boolean {
+    return this.protectedCells.has(this.key(x, y, z));
+  }
+
+  /** A permanent structure block landed here — drop the scaffold record and protect. */
   protectStructure(x: number, y: number, z: number) {
     const k = this.key(x, y, z);
-    this.protected.add(k);
+    this.protectedCells.add(k);
     this.stack = this.stack.filter((r) => this.key(r.x, r.y, r.z) !== k);
+  }
+
+  /** Take the current records out (cleanup consumes them). */
+  drain(): ScaffoldRecord[] {
+    const out = this.stack;
+    this.stack = [];
+    return out;
   }
 
   clear() {
     this.stack = [];
-    this.protected.clear();
-  }
-
-  async cleanup(
-    bot: Bot,
-    token: { cancelled: boolean },
-    onProgress?: (cleared: number, total: number) => void
-  ): Promise<number> {
-    let cleared = 0;
-    const total = this.stack.length;
-    const ordered = [...this.stack].sort((a, b) => b.y - a.y || b.x - a.x || b.z - a.z);
-
-    for (const rec of ordered) {
-      if (token.cancelled) break;
-      const k = this.key(rec.x, rec.y, rec.z);
-      if (this.protected.has(k)) {
-        cleared++;
-        onProgress?.(cleared, total);
-        continue;
-      }
-      const pos = v3(rec.x, rec.y, rec.z);
-      const b = bot.blockAt(pos);
-      if (!b || b.name === "air" || b.name === "cave_air") {
-        cleared++;
-        onProgress?.(cleared, total);
-        continue;
-      }
-      // sadece scaffold tipi ve hâlâ aynı aile — yapı bloğu değil
-      const ok = b.name === rec.name || isScaffoldFamily(b.name);
-      if (!ok) {
-        cleared++;
-        onProgress?.(cleared, total);
-        continue;
-      }
-      try {
-        // bot ayak altındaysa biraz kay
-        const feet = bot.entity.position;
-        if (Math.floor(feet.x) === rec.x && Math.floor(feet.y) === rec.y && Math.floor(feet.z) === rec.z) {
-          cleared++;
-          onProgress?.(cleared, total);
-          continue;
-        }
-        if (bot.canDigBlock(b)) {
-          await equipBestToolForBlock(bot, b);
-          await bot.dig(b, true);
-        }
-      } catch {
-        /* dig fail — skip */
-      }
-      cleared++;
-      onProgress?.(cleared, total);
-      await sleep(30);
-    }
-
-    this.stack = [];
-    return cleared;
+    this.protectedCells.clear();
   }
 }
 
-export function isScaffoldFamily(name: string): boolean {
-  const n = name.replace(/^minecraft:/, "");
-  return (
-    n === "dirt" ||
-    n === "cobblestone" ||
-    n === "netherrack" ||
-    n === "scaffolding" ||
-    n === "oak_planks" ||
-    n === "dirt_path" ||
-    n === "grass_block" ||
-    n === "sand" ||
-    n === "gravel"
-  );
-}
-
-export function pickScaffoldItem(bot: Bot, preferred: string[]): string | null {
-  const items = bot.inventory.items();
-  for (const name of preferred) {
-    if (items.some((i) => i.name === name)) return name;
-  }
-  for (const i of items) {
-    if (isScaffoldFamily(i.name)) return i.name;
-  }
-  return null;
+export interface ScaffoldCleanupResult {
+  /** actually removed (or already gone) */
+  cleared: number;
+  /** could not be removed — reported honestly, not silently counted */
+  left: number;
 }
 
 /**
- * Kırma öncesi doğru alet: mineflayer-tool varsa o; yoksa kazma/kürek skoru.
- * (Elle taş kırma yavaşlığı / yanlış alet)
+ * Remove temporary blocks top-down. Unlike the old version this
+ * - walks to scaffolds that are out of reach instead of skipping them,
+ * - steps aside when standing inside the target cell,
+ * - reports blocks it could NOT remove instead of counting them as cleared.
+ * Drop pickup is the caller's job (onDigged hook) to avoid module cycles.
  */
-export async function equipBestToolForBlock(bot: Bot, block: { name: string }): Promise<void> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const toolPlugin = require("mineflayer-tool").plugin as (bot: Bot) => void;
-    const anyBot = bot as unknown as { tool?: { equipForBlock(b: unknown): Promise<void> } };
-    if (!anyBot.tool) bot.loadPlugin(toolPlugin);
-    if (anyBot.tool) {
-      await anyBot.tool.equipForBlock(block);
-      return;
+export async function cleanupScaffolds(
+  instance: BotInstance,
+  tracker: ScaffoldTracker,
+  token: { cancelled: boolean; reason?: string },
+  opts?: {
+    onProgress?: (cleared: number, left: number, total: number) => void;
+    /** called after every few digs so the caller can vacuum drops */
+    onDigged?: (count: number) => Promise<void> | void;
+  }
+): Promise<ScaffoldCleanupResult> {
+  const bot = instance.bot;
+  const records = tracker.drain();
+  const total = records.length;
+  let cleared = 0;
+  let left = 0;
+  if (!bot || instance.status !== "online") {
+    return { cleared: 0, left: total };
+  }
+
+  // top-down, then near-first inside the same layer
+  const ordered = records.sort(
+    (a, b) => b.y - a.y || dist3(bot, a.x + 0.5, a.y + 0.5, a.z + 0.5) - dist3(bot, b.x + 0.5, b.y + 0.5, b.z + 0.5)
+  );
+
+  let digsSinceSweep = 0;
+  for (const rec of ordered) {
+    if (token.cancelled) break;
+    if (tracker.isProtected(rec.x, rec.y, rec.z)) {
+      cleared++; // structure claimed the cell — nothing to remove
+      opts?.onProgress?.(cleared, left, total);
+      continue;
     }
-  } catch {
-    /* plugin yok / fail → yedek */
+    const pos = v3(rec.x, rec.y, rec.z);
+    let b = bot.blockAt(pos);
+    if (!b || isAirLike(b.name)) {
+      cleared++;
+      opts?.onProgress?.(cleared, left, total);
+      continue;
+    }
+    // only dig scaffold-family blocks still in the cell — never structure blocks
+    if (b.name !== rec.name && !isScaffoldFamily(b.name)) {
+      cleared++; // someone replaced it — not ours anymore
+      opts?.onProgress?.(cleared, left, total);
+      continue;
+    }
+
+    try {
+      // standing inside the cell → move off first
+      const feet = bot.entity.position;
+      if (Math.floor(feet.x) === rec.x && Math.floor(feet.y) === rec.y && Math.floor(feet.z) === rec.z) {
+        await stepAside(instance, token, pos);
+      }
+      // out of reach → walk over (old version silently skipped these)
+      if (dist3(bot, rec.x + 0.5, rec.y + 0.5, rec.z + 0.5) > PLACE_REACH) {
+        await pathNear(instance, rec.x + 0.5, rec.y, rec.z + 0.5, 2.8, token, {
+          clearGoal: true,
+          timeoutMs: 9_000
+        });
+      }
+      b = bot.blockAt(pos);
+      if (!b || isAirLike(b.name)) {
+        cleared++;
+        opts?.onProgress?.(cleared, left, total);
+        continue;
+      }
+      if (!bot.canDigBlock(b)) {
+        left++;
+        opts?.onProgress?.(cleared, left, total);
+        continue;
+      }
+      await equipBestToolForBlock(bot, b);
+      await digCancelable(bot, b, token);
+      await sleep(40);
+      const after = bot.blockAt(pos);
+      if (!after || isAirLike(after.name)) {
+        cleared++;
+        digsSinceSweep++;
+        if (digsSinceSweep >= 5 && opts?.onDigged) {
+          digsSinceSweep = 0;
+          try {
+            await opts.onDigged(cleared);
+          } catch {
+            /* drop sweep is best-effort */
+          }
+        }
+      } else {
+        left++;
+      }
+    } catch {
+      left++;
+    }
+    opts?.onProgress?.(cleared, left, total);
   }
 
-  const n = block.name.replace(/^minecraft:/, "");
-  const wantPick =
-    n.includes("stone") ||
-    n.includes("cobble") ||
-    n.includes("ore") ||
-    n.includes("deepslate") ||
-    n === "netherrack" ||
-    n.includes("brick") ||
-    n.includes("concrete") ||
-    n === "obsidian" ||
-    n.includes("basalt") ||
-    n.includes("blackstone");
-  const wantShovel =
-    n === "dirt" ||
-    n === "grass_block" ||
-    n === "sand" ||
-    n === "gravel" ||
-    n === "dirt_path" ||
-    n.includes("snow") ||
-    n === "clay" ||
-    n === "soul_sand";
-
-  const items = bot.inventory.items();
-  const score = (name: string): number => {
-    const tier =
-      name.startsWith("netherite_") ? 50 : name.startsWith("diamond_") ? 40 : name.startsWith("iron_") ? 30 : name.startsWith("stone_") ? 20 : name.startsWith("golden_") ? 15 : name.startsWith("wooden_") ? 10 : 0;
-    if (wantPick && name.endsWith("_pickaxe")) return 100 + tier;
-    if (wantShovel && name.endsWith("_shovel")) return 100 + tier;
-    if (name.endsWith("_pickaxe")) return 40 + tier;
-    if (name.endsWith("_axe") && (n.includes("log") || n.includes("plank") || n.includes("wood"))) return 90 + tier;
-    if (name.endsWith("_shovel")) return 20 + tier;
-    return 0;
-  };
-
-  let best: (typeof items)[0] | null = null;
-  let bestS = 0;
-  for (const it of items) {
-    const s = score(it.name);
-    if (s > bestS) {
-      bestS = s;
-      best = it;
+  if (opts?.onDigged && digsSinceSweep > 0 && !token.cancelled) {
+    try {
+      await opts.onDigged(cleared);
+    } catch {
+      /* */
     }
   }
-  if (!best || bestS <= 0) return;
-  if (bot.heldItem?.name === best.name) return;
-  try {
-    await bot.equip(best, "hand");
-  } catch {
-    /* */
-  }
+  return { cleared, left };
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+// re-exports for compatibility (helpers moved to ./tools)
+export { equipBestToolForBlock, isScaffoldFamily, pickScaffoldItem };

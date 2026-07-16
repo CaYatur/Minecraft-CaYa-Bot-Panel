@@ -12,6 +12,7 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
     build.phase === "building" ||
     build.phase === "preparing" ||
     build.phase === "acquiring" ||
+    build.phase === "verifying" ||
     build.phase === "cleanup";
 
   return (
@@ -25,9 +26,11 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
               className={`rounded px-1.5 py-0.5 text-[10px] mono ${
                 b.status === "placed"
                   ? "bg-emerald-950/70 text-emerald-300"
-                  : b.status === "failed"
-                    ? "bg-red-950/60 text-red-300"
-                    : "bg-zinc-800 text-zinc-500"
+                  : b.status === "repaired" || b.status === "fixed"
+                    ? "bg-sky-950/70 text-sky-300"
+                    : b.status === "failed"
+                      ? "bg-red-950/60 text-red-300"
+                      : "bg-zinc-800 text-zinc-500"
               }`}
               title={`${b.name} @ ${b.x},${b.y},${b.z}`}
             >
@@ -42,7 +45,13 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
             {last ? (
               <>
                 <span className={statusColor(last.status)}>
-                  {last.status === "placed" ? "●" : last.status === "skipped" ? "○" : "×"}
+                  {last.status === "placed"
+                    ? "●"
+                    : last.status === "repaired" || last.status === "fixed"
+                      ? "◆"
+                      : last.status === "skipped"
+                        ? "○"
+                        : "×"}
                 </span>{" "}
                 <b className="text-zinc-200">{last.name}</b>{" "}
                 <span className="text-zinc-600">
@@ -58,6 +67,7 @@ export function BuildAnim({ build }: { build: BuildRuntime }) {
             {build.placed ? ` ${t("build.placedCount", { n: build.placed })}` : ""}
             {build.skipped ? ` ${t("build.skippedCount", { n: build.skipped })}` : ""}
             {build.failed ? ` ${t("build.failedCount", { n: build.failed })}` : ""}
+            {build.repaired ? ` ${t("build.repairedCount", { n: build.repaired })}` : ""}
           </span>
         </div>
       </div>
@@ -93,6 +103,7 @@ function shortName(n: string) {
 
 function statusColor(s: BuildPlacedBlock["status"]) {
   if (s === "placed") return "text-emerald-400";
+  if (s === "repaired" || s === "fixed") return "text-sky-400";
   if (s === "failed") return "text-red-400";
   return "text-zinc-500";
 }

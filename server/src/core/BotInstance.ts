@@ -15,7 +15,7 @@ import {
   resolveUsernameFromSender,
   stripColorCodes
 } from "../modules/chat/parse";
-import { BuildService } from "../modules/build";
+import { BuildService, normalizePlaceOrder } from "../modules/build";
 import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
 import { GatherService } from "../modules/gather";
@@ -80,7 +80,10 @@ export class BotInstance extends EventEmitter {
 
   constructor(
     public config: BotConfig,
-    private readonly getServer: (id: string) => ServerProfile | undefined
+    private readonly getServer: (id: string) => ServerProfile | undefined,
+    private readonly getWorldChests?: (
+      serverId: string
+    ) => Array<{ x: number; y: number; z: number; dimension: string; items: { name: string; count: number }[] }>
   ) {
     super();
     this.log = createLogger("bot", config.id);
@@ -134,6 +137,17 @@ export class BotInstance extends EventEmitter {
         progress: s.progress
       });
     });
+  }
+
+  /** Persistent world-memory chests for this bot's server (stock ledger seed). */
+  getKnownChests(): Array<{
+    x: number;
+    y: number;
+    z: number;
+    dimension: string;
+    items: { name: string; count: number }[];
+  }> {
+    return this.getWorldChests?.(this.config.serverId) ?? [];
   }
 
   /** Menzildeki oyuncular (entity varsa distance; yoksa tab-only). */
@@ -257,15 +271,44 @@ export class BotInstance extends EventEmitter {
    * Takılma / bug sonrası sunucu kapat-aç yerine panelden kurtarma.
    */
   resetAllWork(reason = "all work reset from panel") {
-    // cancelAll zaten held durumunu temizler. Önce resume() çağırmak kuyruğun
-    // bir tick çalışmasına yol açıp cancelled edilen görevi yeniden başlatabiliyordu.
+    // 1) Trip build abort gate FIRST so pathNear/place/cleanup exit even while
+    //    the runner is mid-await (was ignoring TaskQueue cancel alone).
+    try {
+      this.build.hardReset(reason);
+    } catch {
+      try {
+        this.build.stopBuild(reason);
+      } catch {
+        /* */
+      }
+    }
+
+    // 2) cancelAll clears held + cancels current token (hardReset already cancelled
+    //    build task types; this clears movement/gather/etc. too).
     try {
       this.tasks.cancelAll(reason);
     } catch {
       /* */
     }
+
+    // stopMovement also cancelAll + pathfinder clear — keep for movement side effects
     try {
-      stopMovement(this);
+      // Avoid nested cancelAll reason thrash: only freeze pathfinder here
+      const bot0 = this.bot;
+      if (bot0) {
+        try {
+          const pf = bot0.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+          pf.stop?.();
+          pf.setGoal?.(null);
+        } catch {
+          /* */
+        }
+        try {
+          bot0.clearControlStates();
+        } catch {
+          /* */
+        }
+      }
     } catch {
       /* */
     }
@@ -278,15 +321,6 @@ export class BotInstance extends EventEmitter {
       this.combat.clearCompanion(reason);
     } catch {
       /* */
-    }
-    try {
-      this.build.hardReset(reason);
-    } catch {
-      try {
-        this.build.stopBuild(reason);
-      } catch {
-        /* */
-      }
     }
 
     const bot = this.bot;
@@ -315,9 +349,15 @@ export class BotInstance extends EventEmitter {
       } catch {
         /* */
       }
-      // pathfinder / kontrol bazen 1 tick sonra kilit kalır — tekrar temizle
+      // Short re-clear while in-flight place may reassert a goal — keep brief so a
+      // follow/goto right after reset is not killed for seconds (regression guard).
       const reClear = () => {
         if (!this.bot || this.bot !== bot) return;
+        // If user already queued a new non-idle task, do not stomp its pathfinder.
+        const cur = this.tasks.currentSummary;
+        if (cur && cur.state === "running" && cur.type !== "build" && !String(cur.type).startsWith("build-")) {
+          return;
+        }
         try {
           const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
           pf.stop?.();
@@ -337,8 +377,8 @@ export class BotInstance extends EventEmitter {
           /* */
         }
       };
-      setTimeout(reClear, 120);
-      setTimeout(reClear, 450);
+      setTimeout(reClear, 100);
+      setTimeout(reClear, 350);
     }
 
     this.log.info("All work reset (soft-reset)", reason);
@@ -348,6 +388,12 @@ export class BotInstance extends EventEmitter {
       current: this.tasks.currentSummary,
       queue: this.tasks.queueSummaries
     });
+    // force build snapshot to idle so panel stuck badge clears immediately
+    try {
+      this.emit("build", { botId: this.config.id, build: this.build.getRuntime() });
+    } catch {
+      /* */
+    }
   }
 
   /**
@@ -600,7 +646,8 @@ export class BotInstance extends EventEmitter {
           },
           allowPartial: action.allowPartial === true || action.allowPartial === "true",
           collectMissing: action.collectMissing === true || action.collectMissing === "true",
-          placeOrder: action.placeOrder === "layer-first" ? "layer-first" : "nearby-first",
+          placeOrder: normalizePlaceOrder(action.placeOrder),
+          resumeOnReconnect: action.resumeOnReconnect !== false && action.resumeOnReconnect !== "false",
           versionHint,
           rotateY: action.rotateY != null ? Number(action.rotateY) : 0,
           mirrorX: action.mirrorX === true || action.mirrorX === "true",
@@ -631,6 +678,11 @@ export class BotInstance extends EventEmitter {
       case "stop-build":
         this.build.stopBuild("panel");
         return null;
+      case "scan-storage":
+      case "mark-storage":
+        return this.build.enqueueScanStorage(
+          Math.max(4, Math.min(64, Number(action.radius ?? 32) || 32))
+        );
       default:
         throw new Error(`Unknown action type: ${type || "(empty)"}`);
     }
@@ -906,6 +958,7 @@ export class BotInstance extends EventEmitter {
         this.combat.onRespawnOrSpawn();
       }
       this.scheduleInventorySync(); // full resync after respawn (TODO §12)
+      this.build.onSpawn(); // resume a build interrupted by a disconnect
       this.emit("spawned", { botId: this.config.id });
       // yakındaki oyuncular paneli hemen dolsun
       setTimeout(() => this.emitNearby(true), 500);
@@ -1222,6 +1275,7 @@ export class BotInstance extends EventEmitter {
     }
     this.combat.detach();
     this.survival.detach();
+    this.build.onDisconnect(); // freeze build state; auto-resume arms if enabled
     if (this.foodWatchTimer) {
       clearInterval(this.foodWatchTimer);
       this.foodWatchTimer = null;

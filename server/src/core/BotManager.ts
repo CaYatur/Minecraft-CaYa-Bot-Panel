@@ -276,7 +276,11 @@ export class BotManager extends EventEmitter {
     merged.id = cfg.id || merged.id;
     merged.username = cfg.username || merged.username;
     merged.serverId = cfg.serverId || merged.serverId;
-    const inst = new BotInstance(merged, (sid) => this.getServer(sid));
+    const inst = new BotInstance(
+      merged,
+      (sid) => this.getServer(sid),
+      (sid) => this.worldMemory.chestsFor(sid)
+    );
     // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)
     inst.on(
       "deathAt",

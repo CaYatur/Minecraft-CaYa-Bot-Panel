@@ -279,14 +279,16 @@ export interface InventorySnapshot {
   ts: number;
 }
 
-/** Faz 14–16 — inşaat runtime (BuildService) */
+/** Faz 14–17 — inşaat runtime (BuildService) */
 export interface BuildRuntimeSnapshot {
   phase:
     | "idle"
     | "preparing"
     | "acquiring"
     | "building"
+    | "verifying"
     | "cleanup"
+    | "paused"
     | "done"
     | "failed"
     | "cancelled";
@@ -297,9 +299,15 @@ export interface BuildRuntimeSnapshot {
   total: number;
   skipped: number;
   failed?: number;
+  /** hasar sonrası yeniden konan bloklar */
+  repaired?: number;
+  /** yanlış mevcut blok kırılıp düzeltilenler */
+  fixedWrong?: number;
   scaffoldsPlaced: number;
   scaffoldsCleared: number;
-  materials: Array<{ name: string; need: number; have: number; missing: number }>;
+  /** temizlenemeyen scaffold sayısı (dürüst rapor) */
+  scaffoldsLeft?: number;
+  materials: Array<{ name: string; need: number; have: number; stored?: number; missing: number }>;
   label: string;
   error?: string;
   startedAt: number | null;
@@ -308,7 +316,7 @@ export interface BuildRuntimeSnapshot {
     x: number;
     y: number;
     z: number;
-    status: "placed" | "skipped" | "failed";
+    status: "placed" | "skipped" | "failed" | "repaired" | "fixed";
     t: number;
   } | null;
   recentBlocks?: Array<{
@@ -316,7 +324,7 @@ export interface BuildRuntimeSnapshot {
     x: number;
     y: number;
     z: number;
-    status: "placed" | "skipped" | "failed";
+    status: "placed" | "skipped" | "failed" | "repaired" | "fixed";
     t: number;
   }>;
   transform?: {
@@ -324,8 +332,15 @@ export interface BuildRuntimeSnapshot {
     mirrorX: boolean;
     mirrorZ: boolean;
   };
-  placeOrder?: "nearby-first" | "layer-first";
+  placeOrder?: "printer" | "nearby-first";
   collectMissing?: boolean;
+  /** creative mod: malzeme ihtiyacı otomatik iptal */
+  creative?: boolean;
+  /** watchdog takılma notu (null = sağlıklı) */
+  stuck?: string | null;
+  /** kopan inşaat spawn sonrası otomatik devam edecek */
+  resumePending?: boolean;
+  storage?: { containers: number; lastScanAt: number | null };
   /** anlık iş metni: Collecting / Craft / Kondu… */
   activity?: string | null;
   /** şu an işlenen malzeme adı (UI highlight) */
