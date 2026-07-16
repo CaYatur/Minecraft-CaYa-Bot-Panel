@@ -124,6 +124,10 @@ export class BotInstance extends EventEmitter {
         progress: s.progress
       });
     });
+    this.tasks.on("taskDetached", (s: TaskSummary) => {
+      // issue #4: iptali yutan asılı runner terk edildi — kuyruk akmaya devam eder
+      this.log.warn(`Task force-detached (hung runner abandoned): ${s.label}`, s.error);
+    });
     this.tasks.on("taskFailed", (s: TaskSummary, err: string) => {
       this.log.error(`Task failed: ${s.label}`, err);
       this.emit("taskEvent", {

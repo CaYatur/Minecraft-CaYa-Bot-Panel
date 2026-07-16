@@ -101,6 +101,43 @@ export function forceStopPath(bot: Bot) {
 }
 
 /**
+ * Race a mineflayer promise against the cancel token and a hard timeout.
+ * Paper 1.21.x'te yanıtsız kalan placeBlock/equip await'leri runner'ı sonsuza
+ * dek asıyordu (issue #4) — hiçbir sunucu işlemi sınırsız beklenemez.
+ */
+export async function boundedOp<T>(p: Promise<T>, token: TaskToken | null, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  let poll: NodeJS.Timeout | null = null;
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      p.then(resolve, reject);
+      timer = setTimeout(() => reject(new Error(`${what} timed out (${ms}ms)`)), ms);
+      if (token) {
+        poll = setInterval(() => {
+          if (token.cancelled) reject(new Error(token.reason ?? "cancelled"));
+        }, 100);
+      }
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (poll) clearInterval(poll);
+    // asılı promise geç reject ederse proses düşmesin
+    void p.catch(() => {});
+  }
+}
+
+const EQUIP_TIMEOUT_MS = 6_000;
+const PLACE_TIMEOUT_MS = 6_500;
+
+function equipSafe(bot: Bot, item: Parameters<Bot["equip"]>[0], token: TaskToken | null): Promise<void> {
+  return boundedOp(bot.equip(item, "hand"), token, EQUIP_TIMEOUT_MS, "equip");
+}
+
+function placeSafe(bot: Bot, refBlock: Block, face: Vec3, token: TaskToken | null): Promise<void> {
+  return boundedOp(bot.placeBlock(refBlock, face), token, PLACE_TIMEOUT_MS, "placeBlock");
+}
+
+/**
  * Dig that honors cancel: polls token and calls stopDigging so Stop/Reset
  * cannot hang forever inside `await bot.dig()` (Paper 1.21.x hang report).
  */
@@ -327,7 +364,7 @@ async function placeBlockAtOnce(
     const moved = await stepAside(instance, token, target);
     if (!moved) {
       if (occ === "feet") {
-        const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds);
+        const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds, token);
         if (jumped) return "placed";
       }
       return "failed";
@@ -339,7 +376,7 @@ async function placeBlockAtOnce(
     if (moved) {
       d = dist3(bot, tx, ty, tz);
     } else {
-      const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds);
+      const jumped = await jumpPlaceOnBelow(instance, target, item, name, scaffolds, token);
       if (jumped) return "placed";
       return "failed";
     }
@@ -355,7 +392,7 @@ async function placeBlockAtOnce(
     }
     try {
       await bot.lookAt(target.offset(0.5, 0.25, 0.5), false);
-      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
+      if (bot.heldItem?.name !== item.name) await equipSafe(bot, item as never, token);
       bot.activateItem(false);
       await sleep(40);
       try {
@@ -422,8 +459,9 @@ async function placeBlockAtOnce(
   }
 
   try {
-    if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
-  } catch {
+    if (bot.heldItem?.name !== item.name) await equipSafe(bot, item as never, token);
+  } catch (e) {
+    if (token.cancelled) throw e instanceof Error ? e : new Error(token.reason ?? "cancelled");
     return "failed";
   }
 
@@ -432,7 +470,7 @@ async function placeBlockAtOnce(
     // --- best-effort orientation: face the right way before clicking ---
     await orientForPlacement(bot, name, opts?.props);
     await bot.lookAt(ref.block.position.offset(0.5, 0.5, 0.5), false);
-    await genericPlace(bot, ref.block, ref.face, opts?.props);
+    await boundedOp(genericPlace(bot, ref.block, ref.face, opts?.props), token, PLACE_TIMEOUT_MS, "placeBlock");
     const okName = (n: string) => n === name || n === item.name || namesMatch(n, name) || namesMatch(n, item.name);
     const matched = await waitForBlockMatch(bot, target, okName, 500);
     if (matched) {
@@ -440,7 +478,8 @@ async function placeBlockAtOnce(
       return "placed";
     }
     return "failed";
-  } catch {
+  } catch (e) {
+    if (token.cancelled) throw e instanceof Error ? e : new Error(token.reason ?? "cancelled");
     return "failed";
   }
 }
@@ -595,7 +634,8 @@ async function jumpPlaceOnBelow(
   target: Vec3,
   item: { name: string },
   wantName: string,
-  scaffolds: ScaffoldTracker
+  scaffolds: ScaffoldTracker,
+  token: TaskToken | null = null
 ): Promise<boolean> {
   const bot = instance.bot;
   if (!bot?.entity) return false;
@@ -639,7 +679,7 @@ async function jumpPlaceOnBelow(
     if (bot.heldItem?.name !== item.name) {
       const inv = bot.inventory.items().find((i) => i.name === item.name);
       if (!inv) return false;
-      await bot.equip(inv, "hand");
+      await equipSafe(bot, inv, token);
     }
 
     // one controlled jump-place (no spam)
@@ -647,14 +687,14 @@ async function jumpPlaceOnBelow(
     bot.setControlState("jump", true);
     await sleep(90);
     try {
-      await bot.placeBlock(support, v3(0, 1, 0));
+      await placeSafe(bot, support, v3(0, 1, 0), token);
       scaffolds.record(target.x, target.y, target.z, item.name);
     } catch {
       const ref = findReference(bot, target, null);
       if (ref) {
         try {
           await bot.lookAt(ref.block.position.offset(0.5, 0.5, 0.5), false);
-          await bot.placeBlock(ref.block, ref.face);
+          await placeSafe(bot, ref.block, ref.face, token);
         } catch {
           /* */
         }
@@ -804,12 +844,12 @@ async function ensureSupport(
   }
   if (!ref) return;
   try {
-    if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
-    await bot.placeBlock(ref.block, ref.face);
+    if (bot.heldItem?.name !== item.name) await equipSafe(bot, item, token);
+    await placeSafe(bot, ref.block, ref.face, token);
     scaffolds.record(under.x, under.y, under.z, scaffoldName);
     await sleep(40);
-  } catch {
-    /* */
+  } catch (e) {
+    if (token.cancelled) throw e instanceof Error ? e : new Error(token.reason ?? "cancelled");
   }
 }
 
@@ -834,13 +874,13 @@ export async function climbWithScaffold(
     const fy = Math.floor(bot.entity.position.y);
     const fz = Math.floor(bot.entity.position.z);
     try {
-      if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
+      if (bot.heldItem?.name !== item.name) await equipSafe(bot, item, token);
       const below = bot.blockAt(v3(fx, fy - 1, fz));
       if (below && below.name !== "air") {
         bot.setControlState("jump", true);
         await sleep(120);
         try {
-          await bot.placeBlock(below, v3(0, 1, 0));
+          await placeSafe(bot, below, v3(0, 1, 0), token);
           scaffolds.record(fx, fy, fz, scaffoldName);
         } catch {
           /* */

@@ -2,7 +2,11 @@ import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken } from "../../core/TaskQueue";
 import { sleep } from "./maneuver";
+import { boundedOp } from "./place";
 import { fetchFromStorage, scanNearbyStorage } from "./stock";
+
+/** pencere işlemleri Paper'da yanıtsız kalabiliyor — sınırsız await yok (issue #4) */
+const WINDOW_TIMEOUT_MS = 8_000;
 
 /**
  * Storage acquisition (compat surface for craft/build):
@@ -123,7 +127,7 @@ async function withdrawMatching(
     if (!names.has(item.name)) continue;
     const amount = Math.min(remaining, item.count);
     if (amount <= 0) continue;
-    await container.withdraw(item.type, item.metadata ?? null, amount);
+    await boundedOp(container.withdraw(item.type, item.metadata ?? null, amount), null, WINDOW_TIMEOUT_MS, "withdraw");
     remaining -= amount;
     taken += amount;
     await sleep(50);
@@ -150,9 +154,9 @@ async function withPortableShulker(
   bot.pathfinder?.setGoal(null);
   bot.clearControlStates();
   await sleep(100);
-  await bot.equip(item, "hand");
+  await boundedOp(bot.equip(item, "hand"), token, WINDOW_TIMEOUT_MS, "equip");
   await bot.lookAt(location.support.position.offset(0.5, 0.8, 0.5), false);
-  await bot.placeBlock(location.support, location.face);
+  await boundedOp(bot.placeBlock(location.support, location.face), token, WINDOW_TIMEOUT_MS, "placeBlock");
   await sleep(160);
 
   const placed = bot.blockAt(location.target);
@@ -162,7 +166,7 @@ async function withPortableShulker(
 
   let container: OpenContainer | null = null;
   try {
-    container = await openContainer(bot, placed);
+    container = await boundedOp(openContainer(bot, placed), token, WINDOW_TIMEOUT_MS, "openContainer");
     await action(container);
   } finally {
     try {
@@ -183,7 +187,7 @@ async function withPortableShulker(
       bot.pathfinder?.setGoal(null);
       bot.clearControlStates();
       await sleep(80);
-      await bot.dig(live);
+      await boundedOp(bot.dig(live), token, 10_000, "dig");
       await sleep(140);
       await instance.gather.runCollectDrops("shulker_box", 8, { cancelled: false }, () => {});
     }

@@ -2,7 +2,7 @@ import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { TaskToken } from "../../core/TaskQueue";
 import { sleep } from "./maneuver";
-import { pathNear } from "./place";
+import { boundedOp, pathNear } from "./place";
 import type { BuildStorageInfo } from "./types";
 import { v3 } from "./vec3util";
 
@@ -188,7 +188,8 @@ function invCount(bot: Bot, names: Set<string>): number {
 async function openContainerAt(bot: Bot, block: unknown): Promise<OpenContainer> {
   const api = bot as unknown as { openContainer(block: unknown): Promise<OpenContainer> };
   if (typeof api.openContainer !== "function") throw new Error("openContainer not supported");
-  return api.openContainer(block);
+  // yanıtsız pencere isteği runner'ı asmasın (issue #4)
+  return boundedOp(api.openContainer(block), null, 8_000, "openContainer");
 }
 
 function containerItems(container: OpenContainer): ContainerItem[] {
@@ -367,7 +368,7 @@ export async function fetchFromStorage(
           if (!names.has(n)) continue;
           const amount = Math.min(need, it.count, inventorySpaceFor(bot, n));
           if (amount <= 0) continue;
-          await container.withdraw(it.type, it.metadata ?? null, amount);
+          await boundedOp(container.withdraw(it.type, it.metadata ?? null, amount), token, 8_000, "withdraw");
           index.applyWithdraw(target.x, target.y, target.z, dimension, n, amount);
           need -= amount;
           onActivity(`Withdrawn: ${n} ×${amount}`);
@@ -448,7 +449,7 @@ export async function makeInventoryRoom(
           if (isProtected(it.name)) continue;
           if (!container.deposit) break;
           try {
-            await container.deposit(it.type, null, it.count);
+            await boundedOp(container.deposit(it.type, null, it.count), null, 8_000, "deposit");
             index.applyDeposit(target.x, target.y, target.z, dimension, it.name, it.count);
             onActivity(`Deposited: ${it.name} ×${it.count}`);
             await sleep(60);

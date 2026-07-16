@@ -44,7 +44,18 @@ interface InternalTask {
   progress?: { done: number; total: number; label?: string };
   error?: string;
   makeRunner: () => TaskRunner;
+  /** pump() sets this while running — resolving it abandons a hung runner */
+  detach?: () => void;
+  /** armed by cancel/pause/preempt: force-detach if the runner ignores the token */
+  forceTimer?: NodeJS.Timeout;
 }
+
+/**
+ * İyi huylu runner iptalden sonra bu süre içinde kendi kendine biter; bitmezse
+ * pump onu TERK EDER (issue #4: asılı await — ör. yanıtsız placeBlock/equip —
+ * kuyruğu sonsuza dek kilitliyor, tüm sonraki görevler çalışmıyordu).
+ */
+const DETACH_GRACE_MS = 2_000;
 
 export class TaskQueue extends EventEmitter {
   private queue: InternalTask[] = [];
@@ -87,6 +98,7 @@ export class TaskQueue extends EventEmitter {
     if (cur && cur.id === id) {
       cur.token.cancelled = true;
       cur.token.reason = reason;
+      this.armForceDetach(cur);
       return true;
     }
     const idx = this.queue.findIndex((t) => t.id === id);
@@ -110,10 +122,23 @@ export class TaskQueue extends EventEmitter {
     if (cur) {
       cur.token.cancelled = true;
       cur.token.reason = reason;
+      this.armForceDetach(cur);
     }
     // pause ile kilitlenmiş kuyruk bug'ı: reset/stop sonrası held açık kalsın
     this.held = false;
     this.emitUpdate();
+  }
+
+  /**
+   * İptal edilen runner DETACH_GRACE_MS içinde bitmezse terk et: kuyruk akmaya
+   * devam eder, zombi promise arkada sessizce söner (issue #4).
+   */
+  private armForceDetach(task: InternalTask, graceMs = DETACH_GRACE_MS) {
+    if (task.forceTimer) return;
+    task.forceTimer = setTimeout(() => {
+      task.forceTimer = undefined;
+      if (this.current === task) task.detach?.();
+    }, Math.max(300, graceMs));
   }
 
   /**
@@ -129,6 +154,7 @@ export class TaskQueue extends EventEmitter {
     if (cur) {
       cur.token.cancelled = true;
       cur.token.reason = reason;
+      this.armForceDetach(cur);
       if (cur.def.requeueOnPreempt !== false) {
         const clone: InternalTask = {
           id: newId(),
@@ -173,6 +199,7 @@ export class TaskQueue extends EventEmitter {
   private preempt(cur: InternalTask, reason: string) {
     cur.token.cancelled = true;
     cur.token.reason = reason;
+    this.armForceDetach(cur);
     if (cur.def.requeueOnPreempt !== false) {
       // aynı def yeni görev olarak kuyruğa geri girer (öncelik sırasına göre yerleşir)
       const clone: InternalTask = {
@@ -202,19 +229,47 @@ export class TaskQueue extends EventEmitter {
         this.current = task;
         task.state = "running";
         this.emitUpdate();
-        try {
+
+        // Runner, iptali yutan bir await'te ASILI kalabilir (issue #4) —
+        // detach yarışıyla kuyruk asla rehin kalmaz; zombi arkada söner.
+        const runPromise = (async () => {
           const runner = task.makeRunner();
           await runner(task.token, (p) => {
             task.progress = p;
             this.emitUpdate();
           });
-          task.state = task.token.cancelled ? "cancelled" : "done";
-        } catch (err) {
+        })();
+        const outcome = await Promise.race([
+          runPromise.then(
+            () => "done" as const,
+            (err) => {
+              task.error = err instanceof Error ? err.message : String(err);
+              return "error" as const;
+            }
+          ),
+          new Promise<"detached">((res) => {
+            task.detach = () => res("detached");
+          })
+        ]);
+        task.detach = undefined;
+        if (task.forceTimer) {
+          clearTimeout(task.forceTimer);
+          task.forceTimer = undefined;
+        }
+
+        if (outcome === "detached") {
+          task.state = "cancelled";
+          task.error = task.token.reason ?? "force-detached (runner hung)";
+          // geç de olsa biterse sonucu yok say — görev çoktan tarihe yazıldı
+          void runPromise.catch(() => {});
+          this.emit("taskDetached", this.summarize(task));
+        } else if (outcome === "error") {
           task.state = task.token.cancelled ? "cancelled" : "failed";
-          task.error = err instanceof Error ? err.message : String(err);
+        } else {
+          task.state = task.token.cancelled ? "cancelled" : "done";
         }
         this.pushHistory(task);
-        this.current = null;
+        if (this.current === task) this.current = null;
         this.emitUpdate();
       }
     } finally {
