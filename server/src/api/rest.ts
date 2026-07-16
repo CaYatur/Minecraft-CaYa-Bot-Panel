@@ -19,6 +19,7 @@ import {
   loadParsedSchematic
 } from "../modules/build";
 import { getCatalog } from "../modules/catalog/minecraftCatalog";
+import type { AgentService } from "../modules/agent";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
 
@@ -35,7 +36,7 @@ const h =
     }
   };
 
-export function createRestRouter(manager: BotManager, supportedVersions: string[]): Router {
+export function createRestRouter(manager: BotManager, supportedVersions: string[], agents?: AgentService): Router {
   const r = Router();
 
   // ---- state ----------------------------------------------------------------
@@ -499,6 +500,94 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       res.json(manager.mustGet(req.params.id!).build.getRuntime());
     })
   );
+
+  // ---- MCP / AI agent (Faz 18) -----------------------------------------------------
+  if (agents) {
+    r.get(
+      "/mcp",
+      h((_req, res) => {
+        res.json(agents.getStatus());
+      })
+    );
+
+    r.patch(
+      "/mcp/settings",
+      h((req, res) => {
+        agents.updateSettings(req.body ?? {});
+        res.json(agents.getStatus());
+      })
+    );
+
+    r.post(
+      "/mcp/token/regenerate",
+      h((_req, res) => {
+        res.json({ token: agents.regenerateToken() });
+      })
+    );
+
+    r.get(
+      "/mcp/ollama/models",
+      h(async (req, res) => {
+        try {
+          const models = await agents.listModels(req.query.host ? String(req.query.host) : undefined);
+          res.json({ models });
+        } catch (err) {
+          throw new PanelError(err instanceof Error ? err.message : String(err), 502);
+        }
+      })
+    );
+
+    r.post(
+      "/mcp/ollama/test",
+      h(async (req, res) => {
+        try {
+          res.json(await agents.testOllama(req.body?.host ? String(req.body.host) : undefined));
+        } catch (err) {
+          throw new PanelError(err instanceof Error ? err.message : String(err), 502);
+        }
+      })
+    );
+
+    r.patch(
+      "/mcp/bots/:id",
+      h((req, res) => {
+        res.json(agents.setBotAgent(req.params.id!, req.body ?? {}));
+      })
+    );
+
+    r.post(
+      "/mcp/agent/:id/message",
+      h(async (req, res) => {
+        const text = String(req.body?.text ?? "").trim();
+        if (!text) throw new PanelError("Message cannot be empty.");
+        const reply = await agents.panelMessage(req.params.id!, text.slice(0, 4000));
+        res.json({ reply });
+      })
+    );
+
+    r.get(
+      "/mcp/agent/:id/history",
+      h((req, res) => {
+        res.json({ messages: agents.getTranscript(req.params.id!) });
+      })
+    );
+
+    r.post(
+      "/mcp/agent/:id/reset",
+      h((req, res) => {
+        agents.resetConversation(req.params.id!);
+        res.json({ ok: true });
+      })
+    );
+
+    r.post(
+      "/mcp/agent/:id/stop",
+      h((req, res) => {
+        agents.stopRun(req.params.id!);
+        res.json({ ok: true });
+      })
+    );
+  }
 
   r.get(
     "/bots/:id/build/preview",

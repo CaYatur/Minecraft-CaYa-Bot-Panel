@@ -8,6 +8,7 @@ import type {
   CombatRuntime,
   InventorySnapshot,
   LogEntry,
+  McpStatusPayload,
   StateSnapshot,
   TaskSummary
 } from "./types";
@@ -60,6 +61,8 @@ socket.on(EV.BOT_LOG, (e: LogEntry) => store().addLog(e));
 socket.on(EV.PANEL_NOTIFY, (p: { level?: "info" | "success" | "error"; message: string }) =>
   store().toast(p.level ?? "info", p.message)
 );
+// Faz 18 — MCP durum (transcript/aktivite akışını Mcp sayfası kendi dinler)
+socket.on(EV.MCP_STATUS, (p: McpStatusPayload) => store().setMcpStatus(p));
 
 export function sendChat(botId: string, text: string) {
   socket.emit(EV.SEND_CHAT, { botId, text });

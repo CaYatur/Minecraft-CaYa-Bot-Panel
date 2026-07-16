@@ -6,7 +6,7 @@ import {
   type AppLocale,
   type LocalePreference
 } from "../i18n";
-import type { BotSnapshot, ChatEntry, LogEntry, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
+import type { BotSnapshot, ChatEntry, LogEntry, McpStatusPayload, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
 
 const CHAT_CAP = 500;
 const LOG_CAP = 1000;
@@ -32,12 +32,15 @@ interface AppState {
   chatQueue: Record<string, number>;
   logs: LogEntry[];
   toasts: Toast[];
+  /** Faz 18 — MCP / agent durumu (socket mcp:status ile canlı) */
+  mcpStatus: McpStatusPayload | null;
   /** auto | en | tr */
   localePreference: LocalePreference;
   /** resolved en | tr */
   locale: AppLocale;
 
   setConnected(v: boolean): void;
+  setMcpStatus(p: McpStatusPayload): void;
   applySnapshot(s: StateSnapshot): void;
   patchBot(botId: string, patch: Partial<BotSnapshot>): void;
   patchRuntime(botId: string, patch: Partial<BotSnapshot["runtime"]>): void;
@@ -63,10 +66,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatQueue: {},
   logs: [],
   toasts: [],
+  mcpStatus: null,
   localePreference: initialLocalePref,
   locale: initialLocale,
 
   setConnected: (v) => set({ connected: v }),
+
+  setMcpStatus: (p) => set({ mcpStatus: p }),
 
   applySnapshot: (s) =>
     set((st) => {

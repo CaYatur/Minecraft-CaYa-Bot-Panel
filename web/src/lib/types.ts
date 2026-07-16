@@ -286,3 +286,117 @@ export interface StateSnapshot {
   rules?: unknown[];
   worldMemory?: { chests: unknown[]; ores: unknown[] };
 }
+
+// ---- Faz 18 — MCP / AI agent (server modules/agent aynası) --------------------
+
+export interface McpToolPermissions {
+  chat: boolean;
+  movement: boolean;
+  gather: boolean;
+  craft: boolean;
+  build: boolean;
+  combatAttack: boolean;
+  combatDefense: boolean;
+  inventory: boolean;
+  trust: boolean;
+  memory: boolean;
+  waypoints: boolean;
+}
+
+export interface McpBotSettings {
+  agentEnabled: boolean;
+  goal: string;
+  autopilot: boolean;
+}
+
+export interface McpSettings {
+  enabled: boolean;
+  ollama: {
+    enabled: boolean;
+    host: string;
+    model: string;
+    temperature: number;
+    numCtx: number;
+    keepAlive: string;
+  };
+  mcpServer: {
+    enabled: boolean;
+    requireToken: boolean;
+    token: string;
+  };
+  chat: {
+    respondInGame: boolean;
+    onlyWhenAddressed: boolean;
+    respondToWhisper: boolean;
+    perPlayerCooldownSec: number;
+    maxReplyChars: number;
+    personality: string;
+    language: "auto" | "tr" | "en";
+  };
+  trust: {
+    enabled: boolean;
+    trustedPlayers: string[];
+    allowModelToTrust: boolean;
+    untrustedPolicy: "ignore" | "chat-only";
+  };
+  tools: McpToolPermissions;
+  /** izinli/kendi sunucular için gerçekçilik-dışı yollar (varsayılan kapalı) */
+  utility: {
+    enabled: boolean;
+    serverCommands: boolean;
+    creativeFly: boolean;
+    utilityMining: boolean;
+  };
+  autopilot: {
+    intervalSec: number;
+    maxToolCallsPerRun: number;
+    maxIterationsPerRun: number;
+  };
+  bots: Record<string, McpBotSettings>;
+}
+
+export interface McpBotStatus {
+  botId: string;
+  username: string;
+  status: string;
+  agentEnabled: boolean;
+  autopilot: boolean;
+  goal: string;
+  busy: boolean;
+  lastRunAt: number;
+}
+
+export interface McpStatusPayload {
+  settings: McpSettings;
+  endpoint: string;
+  claudeCommand: string;
+  bots: McpBotStatus[];
+  tools: Array<{ name: string; category: string; description: string; enabled: boolean }>;
+}
+
+export interface McpTranscriptMsg {
+  id: number;
+  ts: number;
+  role: "user" | "assistant" | "tool" | "event";
+  text: string;
+  source?: "panel" | "game" | "autopilot";
+  from?: string;
+  toolName?: string;
+  isError?: boolean;
+}
+
+export interface McpActivity {
+  botId: string;
+  ts: number;
+  kind: "run-start" | "tool-call" | "tool-result" | "reply" | "error" | "run-end";
+  text: string;
+  toolName?: string;
+  source?: string;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  sizeBytes: number;
+  family?: string;
+  parameterSize?: string;
+}

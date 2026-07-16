@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { Globe, LayoutGrid, Settings2, SlidersHorizontal, Wrench } from "lucide-react";
+import { BrainCircuit, Globe, LayoutGrid, Settings2, SlidersHorizontal, Wrench } from "lucide-react";
 import { BotLogo } from "./BotLogo";
 import { useI18n } from "../i18n/useI18n";
 import { useAppStore } from "../stores/useAppStore";
@@ -15,6 +15,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { to: "/", label: t("nav.panel"), icon: SlidersHorizontal },
     { to: "/automations", label: t("nav.automations"), icon: Settings2 },
     { to: "/schematics", label: t("nav.schematics"), icon: LayoutGrid },
+    { to: "/mcp", label: t("nav.mcp"), icon: BrainCircuit },
     { to: "/servers", label: t("nav.servers"), icon: Globe },
     { to: "/settings", label: t("nav.settings"), icon: Wrench }
   ];

@@ -2,11 +2,12 @@ import type { Server } from "socket.io";
 import { EV } from "../constants/events";
 import type { BotInstance } from "../core/BotInstance";
 import type { BotManager } from "../core/BotManager";
+import type { AgentService } from "../modules/agent";
 import { createLogger, logHub } from "../utils/logger";
 
 const log = createLogger("socket");
 
-export function setupSocket(io: Server, manager: BotManager, supportedVersions: string[]) {
+export function setupSocket(io: Server, manager: BotManager, supportedVersions: string[], agents?: AgentService) {
   const broadcastSnapshot = () => io.emit(EV.STATE_SNAPSHOT, manager.snapshot(supportedVersions));
 
   const wireInstance = (inst: BotInstance) => {
@@ -35,9 +36,17 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
   // İ1: tüm loglar canlı olarak panele akar
   logHub.addSink((entry) => io.emit(EV.BOT_LOG, entry));
 
+  // Faz 18 — MCP/agent canlı olayları
+  if (agents) {
+    agents.on("status", (p) => io.emit(EV.MCP_STATUS, p));
+    agents.on("activity", (p) => io.emit(EV.MCP_ACTIVITY, p));
+    agents.on("chat", (p) => io.emit(EV.MCP_CHAT, p));
+  }
+
   io.on("connection", (socket) => {
     log.debug(`Panel connected (${socket.id})`);
     socket.emit(EV.STATE_SNAPSHOT, manager.snapshot(supportedVersions));
+    if (agents) socket.emit(EV.MCP_STATUS, agents.getStatus());
 
     socket.on(EV.SEND_CHAT, (payload: { botId?: string; text?: string }) => {
       const inst = payload?.botId ? manager.get(payload.botId) : undefined;

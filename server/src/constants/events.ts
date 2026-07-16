@@ -18,6 +18,10 @@ export const EV = {
   BOT_BUILD: "bot:build",
   BOT_FALL_GUARD: "bot:fallGuard",
   PANEL_NOTIFY: "panel:notify",
+  // Faz 18 — MCP / AI agent
+  MCP_STATUS: "mcp:status",
+  MCP_ACTIVITY: "mcp:activity",
+  MCP_CHAT: "mcp:chat",
 
   // panel -> server
   SEND_CHAT: "bot:sendChat",

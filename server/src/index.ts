@@ -7,6 +7,8 @@ import { createRestRouter, restErrorHandler } from "./api/rest";
 import { setupSocket } from "./api/socket";
 import { WEB_DIST_DIR } from "./config/paths";
 import { BotManager } from "./core/BotManager";
+import { AgentService } from "./modules/agent";
+import { createMcpRouter } from "./modules/agent/mcpHttp";
 import { createLogger } from "./utils/logger";
 
 const PORT = Number(process.env.CAYA_PORT || 3001);
@@ -42,17 +44,23 @@ function main() {
   const manager = new BotManager();
   manager.boot();
 
+  // Faz 18 — MCP / AI agent sistemi (Ollama oyun içi ajan + /mcp endpoint)
+  const agents = new AgentService(manager, { host: HOST, port: PORT });
+  agents.boot();
+
   const app = express();
   // şema yükleme base64 for büyük body; diğer rotalar da aynı limit (localhost panel)
   app.use(express.json({ limit: "32mb" }));
-  app.use("/api", createRestRouter(manager, supportedVersions));
+  app.use("/api", createRestRouter(manager, supportedVersions, agents));
   app.use("/api", restErrorHandler);
+  // Model Context Protocol endpoint — Claude Code vb. dış istemciler for
+  app.use("/mcp", createMcpRouter(manager, agents));
 
   // üretimde derlenmiş paneli de bu port servis eder (dev'de vite 3000'de)
   if (fs.existsSync(path.join(WEB_DIST_DIR, "index.html"))) {
     app.use(express.static(WEB_DIST_DIR));
     app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io")) return next();
+      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io") || req.path.startsWith("/mcp")) return next();
       res.sendFile(path.join(WEB_DIST_DIR, "index.html"));
     });
     log.info("Compiled panel found — serving statically");
@@ -60,7 +68,7 @@ function main() {
 
   const httpServer = http.createServer(app);
   const io = new SocketServer(httpServer);
-  setupSocket(io, manager, supportedVersions);
+  setupSocket(io, manager, supportedVersions, agents);
 
   httpServer.listen(PORT, HOST, () => {
     log.success(`Minecraft CaYa Bot Panel API ready: http://${HOST}:${PORT} (mineflayer versions: ${supportedVersions.length})`);
@@ -68,6 +76,7 @@ function main() {
 
   const shutdown = () => {
     log.info("Shutting down — stopping all bots…");
+    agents.shutdown();
     manager.shutdown();
     setTimeout(() => process.exit(0), 500);
   };
