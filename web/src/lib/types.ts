@@ -293,6 +293,7 @@ export interface McpToolPermissions {
   chat: boolean;
   movement: boolean;
   gather: boolean;
+  farm: boolean;
   craft: boolean;
   build: boolean;
   combatAttack: boolean;

@@ -662,6 +662,102 @@ const huntAnimals: AgentToolDef = {
   }
 };
 
+// ---- farm (issue #5, Faz 19) ----------------------------------------------------------
+
+const farmAreaProps = {
+  x: S.num("area center x (default: bot position)"),
+  y: S.num("area center y (default: bot position)"),
+  z: S.num("area center z (default: bot position)"),
+  radius: S.num("area radius 1-16 (default 6)")
+};
+
+function farmAreaArgs(args: Record<string, unknown>) {
+  return {
+    x: args.x != null && args.x !== "" ? Number(args.x) : undefined,
+    y: args.y != null && args.y !== "" ? Number(args.y) : undefined,
+    z: args.z != null && args.z !== "" ? Number(args.z) : undefined,
+    radius: args.radius != null && args.radius !== "" ? aNum(args, "radius", 6, 1, 16) : undefined
+  };
+}
+
+const tillSoil: AgentToolDef = {
+  name: "till_soil",
+  description:
+    "Till dirt/grass/dirt_path into farmland with a hoe (equips one; crafts a wooden/stone hoe if missing, conjures in creative). Works on an area around the bot or given center. Warns when no water is near (dry farmland reverts). Async task.",
+  category: "farm",
+  inputSchema: S.obj({ ...farmAreaProps, max_blocks: S.num("cap on tilled blocks (default 128)") }),
+  async execute(ctx, args) {
+    requireOnline(ctx);
+    const task = ctx.inst.enqueueAction({ type: "till", ...farmAreaArgs(args), maxBlocks: args.max_blocks });
+    return taskReply(task);
+  }
+};
+
+const plantCrops: AgentToolDef = {
+  name: "plant_crops",
+  description:
+    "Plant seeds on empty farmland in an area: wheat_seeds, carrot, potato, beetroot_seeds, melon_seeds, pumpkin_seeds. Needs seeds in inventory (conjured in creative). Till first with till_soil. Async task.",
+  category: "farm",
+  inputSchema: S.obj({
+    crop: S.str("what to plant (default wheat_seeds)", ["wheat_seeds", "carrot", "potato", "beetroot_seeds", "melon_seeds", "pumpkin_seeds"]),
+    ...farmAreaProps
+  }),
+  async execute(ctx, args) {
+    requireOnline(ctx);
+    const task = ctx.inst.enqueueAction({
+      type: "plant",
+      crop: args.crop ? normName(String(args.crop)) : undefined,
+      ...farmAreaArgs(args)
+    });
+    return taskReply(task);
+  }
+};
+
+const harvestCrops: AgentToolDef = {
+  name: "harvest_crops",
+  description:
+    "Harvest all MATURE crops in an area (wheat, carrots, potatoes, beetroots, melon, pumpkin), pick up the drops and replant by default. Async task.",
+  category: "farm",
+  inputSchema: S.obj({ ...farmAreaProps, replant: S.bool("replant harvested cells (default true)") }),
+  async execute(ctx, args) {
+    requireOnline(ctx);
+    const task = ctx.inst.enqueueAction({ type: "harvest", ...farmAreaArgs(args), replant: aBool(args, "replant", true) });
+    return taskReply(task);
+  }
+};
+
+const farmCycle: AgentToolDef = {
+  name: "farm_cycle",
+  description:
+    "Run a CONTINUOUS farm loop on an area: till → harvest mature → replant → deposit produce to a chest → wait → repeat. Give deposit_x/y/z for a specific produce chest (or deposit_nearest=true). Runs until stopped (stop_all / panel Stop) unless max_cycles is set. Async task.",
+  category: "farm",
+  inputSchema: S.obj({
+    crop: S.str("crop to keep planted (default wheat_seeds)", ["wheat_seeds", "carrot", "potato", "beetroot_seeds", "melon_seeds", "pumpkin_seeds"]),
+    ...farmAreaProps,
+    interval_sec: S.num("wait between cycles in seconds (default 45)"),
+    max_cycles: S.num("stop after N cycles (empty = run forever)"),
+    deposit_x: S.num("produce chest x (optional)"),
+    deposit_y: S.num("produce chest y (optional)"),
+    deposit_z: S.num("produce chest z (optional)"),
+    deposit_nearest: S.bool("deposit to the nearest chest instead of coordinates")
+  }),
+  async execute(ctx, args) {
+    requireOnline(ctx);
+    const task = ctx.inst.enqueueAction({
+      type: "farm-cycle",
+      crop: args.crop ? normName(String(args.crop)) : undefined,
+      ...farmAreaArgs(args),
+      intervalSec: args.interval_sec,
+      maxCycles: args.max_cycles,
+      depositX: args.deposit_x,
+      depositY: args.deposit_y,
+      depositZ: args.deposit_z,
+      depositNearest: aBool(args, "deposit_nearest", false)
+    });
+    return taskReply(task, "The loop runs until cancelled (stop_all) unless max_cycles was given.");
+  }
+};
+
 // ---- craft / survival ------------------------------------------------------------------
 
 const craftItem: AgentToolDef = {
@@ -755,23 +851,55 @@ const wakeUp: AgentToolDef = {
 
 const depositItems: AgentToolDef = {
   name: "deposit_items",
-  description: "Walk to the nearest chest and deposit inventory items (optionally only names containing filter). Async task.",
+  description:
+    "Deposit inventory items into a chest — nearest one, or a SPECIFIC chest when x/y/z are given. Transfer is verified: the reply/task reports what was stored and what did not fit (chest full fails honestly). Async task.",
   category: "inventory",
-  inputSchema: S.obj({ filter: S.str("optional name filter, e.g. cobblestone") }),
+  inputSchema: S.obj({
+    filter: S.str("optional name filter, e.g. cobblestone"),
+    x: S.num("chest x (optional — omit for nearest)"),
+    y: S.num("chest y (optional)"),
+    z: S.num("chest z (optional)")
+  }),
   async execute(ctx, args) {
     requireOnline(ctx);
-    return taskReply(ctx.inst.enqueueAction({ type: "deposit", filter: args.filter ? normName(String(args.filter)) : "" }));
+    return taskReply(
+      ctx.inst.enqueueAction({
+        type: "deposit",
+        filter: args.filter ? normName(String(args.filter)) : "",
+        x: args.x,
+        y: args.y,
+        z: args.z
+      })
+    );
   }
 };
 
 const withdrawItems: AgentToolDef = {
   name: "withdraw_items",
-  description: "Take an item from the nearest chest. Async task.",
+  description: "Take an item from a chest — nearest one, or a SPECIFIC chest when x/y/z are given. Verified transfer. Async task.",
   category: "inventory",
-  inputSchema: S.obj({ item: S.str("item name"), count: S.num("how many (default 1)") }, ["item"]),
+  inputSchema: S.obj(
+    {
+      item: S.str("item name"),
+      count: S.num("how many (default 1)"),
+      x: S.num("chest x (optional — omit for nearest)"),
+      y: S.num("chest y (optional)"),
+      z: S.num("chest z (optional)")
+    },
+    ["item"]
+  ),
   async execute(ctx, args) {
     requireOnline(ctx);
-    return taskReply(ctx.inst.enqueueAction({ type: "withdraw", item: normName(aStr(args, "item")), count: aNum(args, "count", 1, 1, 2304) }));
+    return taskReply(
+      ctx.inst.enqueueAction({
+        type: "withdraw",
+        item: normName(aStr(args, "item")),
+        count: aNum(args, "count", 1, 1, 2304),
+        x: args.x,
+        y: args.y,
+        z: args.z
+      })
+    );
   }
 };
 
@@ -1202,6 +1330,11 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   collectBlocks,
   collectDrops,
   huntAnimals,
+  // farm (issue #5)
+  tillSoil,
+  plantCrops,
+  harvestCrops,
+  farmCycle,
   // craft / survival
   craftItem,
   previewCraftPlan,
