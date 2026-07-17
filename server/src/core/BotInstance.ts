@@ -18,8 +18,10 @@ import {
 import { BuildService, normalizePlaceOrder } from "../modules/build";
 import { CombatService } from "../modules/combat";
 import { CraftService } from "../modules/craft";
+import { FarmService } from "../modules/farm";
 import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
+import { depositToChest, withdrawFromChest } from "../modules/inventory/chestOps";
 import { runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
 import { SurvivalService } from "../modules/survival";
 import type {
@@ -59,6 +61,7 @@ export class BotInstance extends EventEmitter {
   readonly gather: GatherService;
   readonly craft: CraftService;
   readonly build: BuildService;
+  readonly farm: FarmService;
   private foodWatchTimer: NodeJS.Timeout | null = null;
   private nearbyTick = 0;
   private lastNearbyKey = "";
@@ -92,6 +95,7 @@ export class BotInstance extends EventEmitter {
     this.gather = new GatherService(this);
     this.craft = new CraftService(this);
     this.build = new BuildService(this);
+    this.farm = new FarmService(this);
     this.limiter = new ChatRateLimiter(
       (text) => {
         if (this.bot && this.status === "online") {
@@ -603,10 +607,24 @@ export class BotInstance extends EventEmitter {
       case "deposit":
       case "depoya-bırak":
       case "depoya-drop":
-        return this.enqueueDeposit(String(action.filter ?? ""));
+        return this.enqueueDeposit({
+          filter: String(action.filter ?? ""),
+          items: Array.isArray(action.items)
+            ? (action.items as unknown[]).map(String)
+            : typeof action.items === "string" && action.items.trim()
+              ? String(action.items).split(/[,;\s]+/).filter(Boolean)
+              : undefined,
+          x: action.x != null && action.x !== "" ? Number(action.x) : undefined,
+          y: action.y != null && action.y !== "" ? Number(action.y) : undefined,
+          z: action.z != null && action.z !== "" ? Number(action.z) : undefined
+        });
       case "withdraw":
       case "depodan-al":
-        return this.enqueueWithdraw(String(action.item ?? ""), Number(action.count ?? 1));
+        return this.enqueueWithdraw(String(action.item ?? ""), Number(action.count ?? 1), {
+          x: action.x != null && action.x !== "" ? Number(action.x) : undefined,
+          y: action.y != null && action.y !== "" ? Number(action.y) : undefined,
+          z: action.z != null && action.z !== "" ? Number(action.z) : undefined
+        });
       case "drop-items":
       case "drop_items":
       case "discard-item":
@@ -687,71 +705,83 @@ export class BotInstance extends EventEmitter {
         return this.build.enqueueScanStorage(
           Math.max(4, Math.min(64, Number(action.radius ?? 32) || 32))
         );
+      // ---- Faz 19 tarım (issue #5) ---------------------------------------------
+      case "till":
+      case "till-soil":
+      case "till_soil":
+      case "çapala":
+        return this.farm.enqueueTill(farmAreaFrom(action));
+      case "plant":
+      case "plant-crops":
+      case "plant_crops":
+      case "ekim":
+        return this.farm.enqueuePlant({
+          ...farmAreaFrom(action),
+          crop: action.crop != null && action.crop !== "" ? String(action.crop) : undefined
+        });
+      case "harvest":
+      case "harvest-crops":
+      case "harvest_crops":
+      case "hasat":
+        return this.farm.enqueueHarvest({
+          ...farmAreaFrom(action),
+          replant: action.replant !== false && action.replant !== "false"
+        });
+      case "farm-cycle":
+      case "farm_cycle":
+      case "farm":
+      case "tarla":
+        return this.farm.enqueueFarmCycle({
+          ...farmAreaFrom(action),
+          crop: action.crop != null && action.crop !== "" ? String(action.crop) : undefined,
+          replant: action.replant !== false && action.replant !== "false",
+          till: action.till !== false && action.till !== "false",
+          depositX: numOpt(action.depositX),
+          depositY: numOpt(action.depositY),
+          depositZ: numOpt(action.depositZ),
+          depositNearest: action.depositNearest === true || action.depositNearest === "true",
+          intervalSec: numOpt(action.intervalSec),
+          maxCycles: numOpt(action.maxCycles)
+        });
       default:
         throw new Error(`Unknown action type: ${type || "(empty)"}`);
     }
   }
 
-  private enqueueDeposit(filter: string) {
+  /**
+   * Issue #5 storage fix: verified deposit (chestOps). Eski sürüm hataları
+   * yutup "bitti" diyordu — artık taşınan/taşınamayan raporlanır, hiçbir şey
+   * sığmadıysa görev dürüstçe FAIL olur. Koordinat verilirse belirli sandık.
+   */
+  private enqueueDeposit(opts: { filter?: string; items?: string[]; x?: number; y?: number; z?: number; keepCounts?: Record<string, number> }) {
+    const where = opts.x != null && opts.y != null && opts.z != null ? ` @${Math.floor(opts.x)},${Math.floor(opts.y)},${Math.floor(opts.z)}` : "";
+    const what = opts.items?.length ? opts.items.join(",").slice(0, 24) : opts.filter || "all";
     return this.tasks.enqueue(
-      { type: "deposit", label: `deposit${filter ? `: ${filter}` : ""}`, priority: PRIORITY.USER, params: { filter }, requeueOnPreempt: true },
+      {
+        type: "deposit",
+        label: `deposit: ${what}${where}`,
+        priority: PRIORITY.USER,
+        params: { ...opts },
+        requeueOnPreempt: true
+      },
       () => async (token, report) => {
-        const bot = this.bot;
-        if (!bot || this.status !== "online") throw new Error("Bot offline");
-        report({ done: 0, total: 1, label: "looking for chest" });
-        const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "trapped_chest" || b.name === "barrel", maxDistance: 32 });
-        if (!chest) throw new Error("No nearby chest — open a chest first so world-memory can store it");
-        await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
-        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-        const win = await bot.openContainer(chest);
-        const keep = this.config.inventory.keepItems;
-        const items = bot.inventory.items().filter((i) => !keep.includes(i.name) && (!filter || i.name.includes(filter)));
-        for (const it of items) {
-          if (token.cancelled) break;
-          try {
-            // chest window deposit API varies — best-effort
-            const w = win as unknown as { deposit?: (t: number, m: null, c: number) => Promise<void>; close: () => void; containerItems?: () => Array<{ name: string; count: number }> };
-            if (w.deposit) await w.deposit(it.type, null, it.count);
-          } catch {
-            /* full */
-          }
+        const res = await depositToChest(this, opts, token, report);
+        if (res.chestFull) {
+          this.log.warn(
+            "Deposit partial — chest full",
+            res.left.map((l) => `${l.name}×${l.count}`).join(", ")
+          );
         }
-        const w2 = win as unknown as { containerItems?: () => Array<{ name: string; count: number }>; close: () => void };
-        this.emit("chestOpened", {
-          serverId: this.config.serverId,
-          x: chest.position.x,
-          y: chest.position.y,
-          z: chest.position.z,
-          dimension: this.runtime.dimension,
-          items: w2.containerItems?.().map((i) => ({ name: i.name, count: i.count })) ?? []
-        });
-        win.close();
-        report({ done: 1, total: 1, label: "depozito bitti" });
       }
     );
   }
 
-  private enqueueWithdraw(item: string, count: number) {
+  private enqueueWithdraw(item: string, count: number, at?: { x?: number; y?: number; z?: number }) {
+    const where = at && at.x != null && at.y != null && at.z != null ? ` @${Math.floor(at.x)},${Math.floor(at.y)},${Math.floor(at.z)}` : "";
     return this.tasks.enqueue(
-      { type: "withdraw", label: `depodan al: ${item}×${count}`, priority: PRIORITY.USER, params: { item, count }, requeueOnPreempt: true },
+      { type: "withdraw", label: `depodan al: ${item}×${count}${where}`, priority: PRIORITY.USER, params: { item, count, ...at }, requeueOnPreempt: true },
       () => async (token, report) => {
-        const bot = this.bot;
-        if (!bot || this.status !== "online") throw new Error("Bot offline");
-        report({ done: 0, total: 1, label: "chest" });
-        const chest = bot.findBlock({ matching: (b) => b.name === "chest" || b.name === "barrel", maxDistance: 32 });
-        if (!chest) throw new Error("No nearby chest");
-        await runGoto(this, chest.position.x, chest.position.y, chest.position.z, 2, token, report);
-        const win = await bot.openContainer(chest);
-        try {
-          const id = bot.registry.itemsByName[item]?.id;
-          if (id == null) throw new Error(`Item missing: ${item}`);
-          const w = win as unknown as { withdraw?: (t: number, m: null, c: number) => Promise<void> };
-          if (w.withdraw) await w.withdraw(id, null, count);
-          else throw new Error("Chest withdraw API unavailable");
-        } finally {
-          win.close();
-        }
-        report({ done: 1, total: 1, label: "withdrawn" });
+        await withdrawFromChest(this, { item, count, ...at }, token, report);
       }
     );
   }
@@ -1465,4 +1495,25 @@ function clampRange(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(16, Math.floor(n)));
+}
+function numOpt(v: unknown): number | undefined {
+  if (v == null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+/** tarım aksiyonlarının ortak alan paramları (x/y/z boşsa bot konumu) */
+function farmAreaFrom(action: Record<string, unknown>): {
+  x?: number;
+  y?: number;
+  z?: number;
+  radius?: number;
+  maxBlocks?: number;
+} {
+  return {
+    x: numOpt(action.x),
+    y: numOpt(action.y),
+    z: numOpt(action.z),
+    radius: numOpt(action.radius),
+    maxBlocks: numOpt(action.maxBlocks ?? action.max_blocks)
+  };
 }

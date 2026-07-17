@@ -399,7 +399,11 @@ export const tr: MessageTree = {
       collect_drops: "Yerde duran itemleri al",
       drop_items: "Belirli eşyaları yere at",
       deposit: "Depoya bırak",
-      withdraw: "Depodan al"
+      withdraw: "Depodan al",
+      till: "Toprağı çapala (farmland)",
+      plant: "Ekin ek",
+      harvest: "Olgun ekinleri hasat et (+yeniden ekim)",
+      "farm-cycle": "Tarım döngüsü (çapala→hasat→ek→depola)"
     },
     actionCategories: {
       Sohbet: "Sohbet",
@@ -411,7 +415,8 @@ export const tr: MessageTree = {
       Movement: "Hareket",
       Combat: "Dövüş",
       Survival: "Yaşam",
-      Work: "İş"
+      Work: "İş",
+      Farm: "Tarım"
     },
     varsTitle: "Context değişkenleri — sonraki aksiyonda {isim} olarak kullan",
     varsForTrigger: "Bu tetikleyicide",
@@ -1073,7 +1078,24 @@ export const tr: MessageTree = {
     fetchItemPrompt: "Getirilecek eşya?",
     fetchPlayerPrompt: "Kime (oyuncu)?",
     keepItemsHint:
-      "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır."
+      "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır.",
+    farm: "Tarım",
+    farmCrop: "Ekin",
+    farmRadius: "Yarıçap",
+    farmChest: "Ürün sandığı (x y z)",
+    farmDepositNearest: "en yakın sandığa",
+    till: "Çapala",
+    tillToast: "Çapalama kuyruğa alındı",
+    plant: "Ek",
+    plantToast: "Ekim kuyruğa alındı",
+    harvest: "Hasat Et",
+    harvestToast: "Hasat kuyruğa alındı (olgunlar + yeniden ekim)",
+    farmLoop: "Tarım Döngüsü Başlat",
+    farmLoopToast: "Sürekli tarım döngüsü başladı — Durdur ile biter",
+    farmStop: "Durdur",
+    farmStopToast: "Tüm işler durduruldu",
+    farmHint:
+      "Döngü: çapala → olgunları hasat et → yeniden ek → ürünleri sandığa bırak → bekle. Sandık koordinatı boşsa depolama atlanır (veya en yakın sandık seçeneği). Su 4 blok içinde olmalı, yoksa tarla kurur."
   },
   itemPicker: {
     placeholder: "Ara / seç…",
@@ -1168,6 +1190,7 @@ export const tr: MessageTree = {
     cat_chat: "Sohbet",
     cat_movement: "Hareket",
     cat_gather: "Kaynak toplama",
+    cat_farm: "Tarım",
     cat_craft: "Üretim & Yaşam",
     cat_build: "İnşaat (yaratıcı)",
     cat_combatAttack: "Saldırı",

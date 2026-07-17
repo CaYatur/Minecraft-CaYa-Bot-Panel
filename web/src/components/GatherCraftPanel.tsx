@@ -17,6 +17,11 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
   const [craftItem, setCraftItem] = useState("stick");
   const [craftN, setCraftN] = useState("1");
   const [plan, setPlan] = useState<Array<{ kind: string; item: string; count: number; note?: string }>>([]);
+  // Faz 19 tarım (issue #5)
+  const [farmCrop, setFarmCrop] = useState("wheat_seeds");
+  const [farmR, setFarmR] = useState("6");
+  const [farmChest, setFarmChest] = useState("");
+  const [farmNearest, setFarmNearest] = useState(false);
 
   if (!bot) return null;
   const online = bot.status === "online";
@@ -212,6 +217,86 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           </button>
         </div>
         <p className="mt-2 text-[11px] text-zinc-500">{t("gatherCraft.keepItemsHint")}</p>
+      </div>
+
+      {/* Faz 19 tarım (issue #5): çapala → ek → hasat → sandığa depola döngüsü */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+          {t("gatherCraft.farm")}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-[11px] text-zinc-500">
+            {t("gatherCraft.farmCrop")}
+            <select value={farmCrop} onChange={(e) => setFarmCrop(e.target.value)} className={`ml-1 ${inputCls} text-zinc-300`}>
+              <option value="wheat_seeds">wheat</option>
+              <option value="carrot">carrot</option>
+              <option value="potato">potato</option>
+              <option value="beetroot_seeds">beetroot</option>
+              <option value="melon_seeds">melon</option>
+              <option value="pumpkin_seeds">pumpkin</option>
+            </select>
+          </label>
+          <label className="text-[11px] text-zinc-500">
+            {t("gatherCraft.farmRadius")}
+            <input value={farmR} onChange={(e) => setFarmR(e.target.value)} className={`mono ml-1 w-12 ${inputCls}`} />
+          </label>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            disabled={!online}
+            onClick={() => act({ type: "till", radius: Number(farmR) || 6 }, t("gatherCraft.tillToast"))}
+            className={btnAccent}
+          >
+            {t("gatherCraft.till")}
+          </button>
+          <button
+            disabled={!online}
+            onClick={() => act({ type: "plant", crop: farmCrop, radius: Number(farmR) || 6 }, t("gatherCraft.plantToast"))}
+            className={btnAccent}
+          >
+            {t("gatherCraft.plant")}
+          </button>
+          <button
+            disabled={!online}
+            onClick={() => act({ type: "harvest", radius: Number(farmR) || 6 }, t("gatherCraft.harvestToast"))}
+            className={btnAccent}
+          >
+            {t("gatherCraft.harvest")}
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-[11px] text-zinc-500">
+            {t("gatherCraft.farmChest")}
+            <input
+              value={farmChest}
+              onChange={(e) => setFarmChest(e.target.value)}
+              placeholder="120 64 -35"
+              className={`mono ml-1 w-32 ${inputCls}`}
+            />
+          </label>
+          <label className="flex items-center gap-1 text-[11px] text-zinc-500">
+            <input type="checkbox" checked={farmNearest} onChange={(e) => setFarmNearest(e.target.checked)} />
+            {t("gatherCraft.farmDepositNearest")}
+          </label>
+          <button
+            disabled={!online}
+            onClick={() => {
+              const parts = farmChest.trim().split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n));
+              const chest = parts.length === 3 ? { depositX: parts[0], depositY: parts[1], depositZ: parts[2] } : {};
+              void act(
+                { type: "farm-cycle", crop: farmCrop, radius: Number(farmR) || 6, depositNearest: farmNearest, ...chest },
+                t("gatherCraft.farmLoopToast")
+              );
+            }}
+            className={btnPrimary}
+          >
+            {t("gatherCraft.farmLoop")}
+          </button>
+          <button disabled={!online} onClick={() => act({ type: "reset-work" }, t("gatherCraft.farmStopToast"))} className={btnSecondary}>
+            {t("gatherCraft.farmStop")}
+          </button>
+        </div>
+        <p className="mt-2 text-[11px] text-zinc-500">{t("gatherCraft.farmHint")}</p>
       </div>
     </div>
   );

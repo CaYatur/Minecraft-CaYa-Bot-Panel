@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-17 · Durum: **Faz 18 ✅* — MCP / Yapay Zekâ ajan sistemi: Ollama oyun içi ajan + /mcp endpoint (Claude Code), 53 araç, güven sistemi, yaratıcı inşaat, otopilot + Utility modu (izinli sunucular, varsayılan kapalı)**
+> Son güncelleme: 2026-07-17 · Durum: **Faz 19 ✅* — Tarım sistemi (çapala/ek/hasat/sürekli döngü + ürün sandığı) MCP + otomasyon + panel; watchdog hızlandırma (issue #6) ve doğrulanmış depo transferi (issue #5)**
 
 ---
 
@@ -265,6 +265,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 16 | Litematic + döndür/aynala + build anim + güvenlik audit | ✅ Bitti* |
 | 17 | Yapı motoru yeniden yazımı (issue #3: stok defteri, printer modu, watchdog, onarım, creative, resume) | ✅ Bitti* (fizik detayları Paper) |
 | 18 | MCP / Yapay Zekâ ajan sistemi (Ollama oyun içi ajan + /mcp endpoint + panel MCP sekmesi) | ✅ Bitti* (Ollama e2e flying-squid'de doğrulandı; Paper + büyük model saha) |
+| 19 | Tarım sistemi (till/plant/harvest/farm-cycle + ürün sandığı) + watchdog hızlandırma (issue #6) + doğrulanmış depo (issue #5) | ✅ Bitti* (fizik doğrulaması Paper sahada) |
 
 ---
 
@@ -581,6 +582,40 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] TODO §2 İ2 hücresine istisna notu (kullanıcı kararı); dövüş D1-D8 muafiyeti hem kodda (utility dövüşe dokunmaz) hem belgede.
 - [x] **Kabul (2026-07-17, flying-squid canlı):** utility OFF → 49 araç, server_command/fly_to gizli, gated çağrı yönlendirici hata, send_chat "/gamemode" bloklu ✓; utility ON → 51 araç, `/time set day` kuyruklandı ✓; fly_to survival'da kibar red ✓; sleep_in_bed görevi "yatak yok" temiz hatası ✓; list_schematics gerçek kütüphaneyi listeledi (Kule 448 blok) ✓; typecheck server+web temiz.
 
+### Faz 19 — Tarım Sistemi + Watchdog/Depo Düzeltmeleri (issue #5, #6) ✅*
+
+> Kullanıcı isteği (2026-07-17): (1) issue #6 — watchdog kurtarması çok yavaş, Stop/Reset
+> kurtarma ortasında etkisiz kalıyor; (2) issue #5 — tarım: MCP **ve** otomasyonlarla belirli
+> alanlarda sürekli ekim-biçim + belirli sandığa depolama; mevcut depo "kaldıramıyor" (deposit
+> hatası sessizce yutuluyordu) → düzelt; tarım için ayrı ürün-sandığı akışı.
+
+#### 19.A — Watchdog hızlandırma + iptal-öncelik (issue #6, `build/index.ts`)
+- [x] Adaptif stall penceresi: ilk stall **18s** (STALL_MS), kurtarma modunda **10s** (STALL_RECOVERY_MS) — poison hücre ≤ ~40s'de çözülür/düşürülür (eski: 25s×3=75s+).
+- [x] Merdiven yeniden sıralandı: (1) retry reset + origin jiggle (pathNear 4s); (2) **tekrarlayan suçluyu HEMEN düşür** (attempts≥2 | unreachable≥2) + repairTick + yalnız survival'da 5s drop süpürme (creative'de anlamsızdı); (3) en yakın açık hedefi düşür; (4) `doneSinceStall` sayacına göre merdiven reset / sert hata. Sayaç monotonik — repair-reopen çırpınmasından etkilenmez.
+- [x] **Cancel-first:** watchdogTick giriş/çıkışında + her await catch'inde `token.cancelled` kontrolü — Stop/Reset/stop_all kurtarma ortasında ≤ ~0.5s'de zinciri koparır (TaskQueue 2s force-detach son emniyet olarak durur).
+- [x] Panel/status görünürlüğü: `runtime.stuck` artık `stall N/4 · adım-açıklaması` taşır (get_build_status "STUCK: …" satırı + panel rozeti).
+
+#### 19.B — Doğrulanmış depo transferi (issue #5 "kaldıramıyoruz", `inventory/chestOps.ts`)
+- [x] `depositToChest` / `withdrawFromChest`: yürü→aç (boundedOp 8s)→**item item taşı ve envanter sayımıyla doğrula**; kısmi transfer hatada bile sayılır; hiçbir şey taşınamadıysa görev dürüstçe FAIL ("chest full…"), taşınamayanlar raporlanır; chestOpened world-memory olayı korunur.
+- [x] `deposit`/`withdraw` aksiyonları: opsiyonel **x/y/z ile belirli sandık**, `items` listesi, `keepCounts` (ekim tohumu sakla); panel/kural/MCP üçü de aynı çekirdeği kullanır. ACTION_META alanları + araç şemaları güncellendi.
+
+#### 19.C — Tarım çekirdeği (`server/src/modules/farm/`)
+- [x] `crops.ts` — TILLABLE (dirt/grass_block/dirt_path/coarse/rooted), HOE_ORDER, CROPS (wheat/carrots/potatoes/beetroots/melon_stem/pumpkin_stem: seed + matureAge + produce), FARM_PRODUCE, seedForCrop/cropForSeed/isMatureCrop.
+- [x] `index.ts` FarmService — İ2 gerçekçi: `ensureHoe` (envanter → creative conjure → wooden/stone craft zinciri → dürüst hata), `tillCell` (üstteki otu kaz, lookAt + activateBlock ×3 deneme, farmland doğrulaması; coarse→dirt→farmland), `plantCell` (tohum equip + placeBlock(üst yüz) + blok doğrulaması), hidrasyon uyarısı (4 blokta su yoksa "tarla kurur").
+- [x] Koşular: `runTill` / `runPlant` / `runHarvest` (olgunları digCancelable ile kır, periyodik + final drop süpürme, default yeniden ekim) / **`runFarmCycle`** (till→harvest→plant→**ürünleri sandığa depola** (keepCounts ile tohum payı)→tarlaya dön→cancellable bekleme→tekrar; maxCycles yoksa Stop'a dek sürekli).
+- [x] TaskQueue işleri: `till` | `plant` | `harvest` | `farm-cycle` — hepsi USER önceliği, requeueOnPreempt, iptal ≤ ~2s (İ6 + issue #4 detach uyumlu); task_done/task_failed tetikleyicileri taskType ile filtrelenebilir.
+
+#### 19.D — Kablolama (MCP + otomasyon + panel parite — issue #5 yorumundaki karar)
+- [x] `BotInstance.enqueueAction`: `till|till-soil|çapala`, `plant|plant-crops|ekim`, `harvest|harvest-crops|hasat`, `farm-cycle|farm|tarla` (+ deposit/withdraw koordinat alanları).
+- [x] RuleEngine: **Farm kategorisi** ACTION_META (till/plant/harvest/farm-cycle alan+hint) + `FARM_ACTION_KINDS` alias haritası + `{var}` interpolasyonlu explicit handler (ör. chat kuralı `!tarla {arg0}` → radius) — kural VE advanced flow aynı yoldan çalışır.
+- [x] MCP/Ollama: yeni **farm** kategori izni (`settings.tools.farm`, default açık; eski mcp.json mergeConfig ile migre) + 4 araç: `till_soil`, `plant_crops`, `harvest_crops`, `farm_cycle` (alan + interval + max_cycles + deposit_x/y/z|deposit_nearest). Toplam araç: **57**.
+- [x] Panel: GatherCraftPanel **Tarım** kartı (ekin seçici, yarıçap, Çapala/Ek/Hasat, ürün sandığı "x y z" + en-yakın seçeneği, Tarım Döngüsü Başlat/Durdur) + Mcp.tsx kategori listesi + i18n TR/EN (gatherCraft.farm*, mcp.cat_farm, automations actions/Farm).
+
+#### 19.E — Kabul
+- [x] typecheck server+web temiz.
+- [x] Kod denetimi: iptal yolları (pathNear/digCancelable/boundedOp/sleepCancellable 250ms poll) uçtan uca token'lı; watchdog senaryo analizi (poison tek blok ≤40s, tüm-alan-ulaşılamaz → her merdiven turunda ≥1 düşürme → biter).
+- [ ] Paper saha: gerçek sunucuda till/plant/harvest fiziği + farm-cycle uzun koşu + sandık depolama; issue #6 Kule-448 mid-stall cancel saha teyidi.
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -657,7 +692,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Premium (Microsoft) hesap girişi (device-code akışı) — online-mode sunucular için.
 - Discord webhook bildirimleri; Discord'dan bot komutu köprüsü.
 - ~~Şematik inşaat~~ → **Faz 14** (kendi build modülümüz; prismarine-schematic).
-- Tarım modülü: ekin ek/biç/yeniden ek, hayvan üretme, otomatik fırınlanmış yemek stoğu; balıkçılık.
+- ~~Tarım modülü: ekin ek/biç/yeniden ek~~ → **Faz 19** (till/plant/harvest/farm-cycle). Kalan backlog: hayvan üretme, otomatik fırınlanmış yemek stoğu, balıkçılık, su kanalı otomatik yerleştirme, nether wart.
 - Yay/ok ve kalkan kullanımı (gerçekçilik kurallarıyla); trident/riptide yok.
 - Bot başına worker_threads/child_process izolasyonu (10+ bot ölçeği).
 - SQLite'a geçiş (sohbet geçmişi + istatistik sorguları büyüyünce).
@@ -1215,3 +1250,13 @@ malzeme listesi anlık güncellensin; ne topladığını/craft ettiğini yazsın
 **Doğrulama:** typecheck ✓ · birim probe: asılı (hiç bitmeyen) runner iptalden 2.6sn sonra detached, sonraki görev ÇALIŞTI ✓ · canlı (flying-squid): build başlat → stop+reset → kuyruk temiz (current null, phase idle) → yeni goto koştu ve bitti, bot fiziksel serbest ✓ · smoke regresyonsuz (önceki oturum).
 
 **Commit:** bu oturumda — fix(#4) + feat(mcp) + docs; origin/master'a push.
+
+### 2026-07-17 — Claude Fable 5 — Faz 19: Tarım + issue #5/#6 düzeltmeleri
+
+**İstek:** (1) [issue #6](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/6) — watchdog kurtarması yavaş; Stop/Reset/stop_all kurtarma ortasında etkisiz. (2) [issue #5](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/5) — tarım: MCP **ve** otomasyonlarla belirli alanlarda sürekli ekim-biçim + belirli sandığa depolama; mevcut depoya "kaldıramıyoruz" sorunu; işler bitince issue kapat + PR merge.
+
+**Yapılanlar:** §8 Faz 19'a bkz. Özet: watchdog 18s/10s adaptif + erken poison-drop + cancel-first (`build/index.ts`); doğrulanmış sandık transferi `inventory/chestOps.ts` (deposit sessiz-yutma bitti, koordinatlı sandık + items + keepCounts); yeni `modules/farm/` (crops.ts + FarmService: ensureHoe/till/plant/harvest/farm-cycle, hidrasyon uyarısı, ürün-sandığı depolama); parite kablolaması (BotInstance 4 aksiyon ailesi, RuleEngine Farm ACTION_META + interpolasyon, MCP farm kategorisi + 4 araç = 57, panel Tarım kartı, i18n TR/EN).
+
+**Doğrulama:** typecheck server+web ✓; kod-yolu analizi (iptal zinciri + watchdog senaryoları) ✓. Paper saha fiziği (till/plant/harvest + Kule-448 mid-stall cancel) devralana saha borcu.
+
+**Devralan not:** Tarım aksiyonları TaskQueue tipleri `till|plant|harvest|farm-cycle` — task_done/task_failed tetikleyicileri bunlarla filtrelenebilir. farm-cycle maxCycles verilmezse sonsuzdur; Stop/Reset/stop_all ile biter (sleepCancellable 250ms poll). Depo hatası artık görevde FAIL görünür — eski "depozito bitti" yalanı yok.

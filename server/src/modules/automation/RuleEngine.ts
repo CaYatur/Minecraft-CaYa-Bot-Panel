@@ -1456,11 +1456,51 @@ export class RuleEngine {
       return;
     }
     if (type === "deposit" || type === "depoya-bırak" || type === "depoya-drop") {
-      inst.enqueueAction({ type: "deposit", filter: action.filter ?? "" });
+      inst.enqueueAction({
+        type: "deposit",
+        filter: action.filter != null ? interpolate(String(action.filter), ctx) : "",
+        items: action.items,
+        x: action.x,
+        y: action.y,
+        z: action.z
+      });
       return;
     }
     if (type === "withdraw" || type === "depodan-al") {
-      inst.enqueueAction({ type: "withdraw", item: action.item ?? ctx.item, count: action.count ?? 1 });
+      inst.enqueueAction({
+        type: "withdraw",
+        item: action.item ?? ctx.item,
+        count: action.count ?? 1,
+        x: action.x,
+        y: action.y,
+        z: action.z
+      });
+      return;
+    }
+    // ---- Faz 19 tarım (issue #5) — {var} interpolasyonlu alanlarla paylaşılan farm çekirdeği
+    if (FARM_ACTION_KINDS[type]) {
+      const numF = (v: unknown) => {
+        if (v == null || v === "") return undefined;
+        const n = Number(interpolate(String(v), ctx));
+        return Number.isFinite(n) ? n : undefined;
+      };
+      inst.enqueueAction({
+        type: FARM_ACTION_KINDS[type],
+        x: numF(action.x),
+        y: numF(action.y),
+        z: numF(action.z),
+        radius: numF(action.radius),
+        maxBlocks: numF(action.maxBlocks),
+        crop: action.crop != null && action.crop !== "" ? interpolate(String(action.crop), ctx) : undefined,
+        replant: action.replant,
+        till: action.till,
+        depositX: numF(action.depositX),
+        depositY: numF(action.depositY),
+        depositZ: numF(action.depositZ),
+        depositNearest: action.depositNearest,
+        intervalSec: numF(action.intervalSec),
+        maxCycles: numF(action.maxCycles)
+      });
       return;
     }
     if (
@@ -2058,9 +2098,82 @@ export const ACTION_META: Array<{ type: string; label: string; fields: string[];
     hint: "count: drop N · all: drop all matches · keep: keep N, drop excess",
     category: "Work"
   },
-  { type: "deposit", label: "Deposit to chest", fields: ["filter"], category: "Work" },
-  { type: "withdraw", label: "Withdraw from chest", fields: ["item", "count"], category: "Work" }
+  {
+    type: "deposit",
+    label: "Deposit to chest",
+    fields: ["filter", "x", "y", "z"],
+    hint: "x/y/z empty = nearest chest · filter: name-contains",
+    category: "Work"
+  },
+  {
+    type: "withdraw",
+    label: "Withdraw from chest",
+    fields: ["item", "count", "x", "y", "z"],
+    hint: "x/y/z empty = nearest chest",
+    category: "Work"
+  },
+  // ---- Faz 19 tarım (issue #5) ---------------------------------------------------------
+  {
+    type: "till",
+    label: "Till soil (hoe → farmland)",
+    fields: ["x", "y", "z", "radius"],
+    hint: "x/y/z empty = around bot · radius 1-16 (default 6)",
+    category: "Farm"
+  },
+  {
+    type: "plant",
+    label: "Plant crops",
+    fields: ["crop", "x", "y", "z", "radius"],
+    hint: "crop: wheat_seeds | carrot | potato | beetroot_seeds | melon_seeds | pumpkin_seeds",
+    category: "Farm"
+  },
+  {
+    type: "harvest",
+    label: "Harvest mature crops (+replant)",
+    fields: ["x", "y", "z", "radius", "replant"],
+    hint: "replant=false to skip replanting",
+    category: "Farm"
+  },
+  {
+    type: "farm-cycle",
+    label: "Farm loop (till→harvest→plant→deposit)",
+    fields: [
+      "crop",
+      "x",
+      "y",
+      "z",
+      "radius",
+      "intervalSec",
+      "maxCycles",
+      "depositX",
+      "depositY",
+      "depositZ",
+      "depositNearest"
+    ],
+    hint: "maxCycles empty = run until stopped · deposit coords = produce chest (or depositNearest=true)",
+    category: "Farm"
+  }
 ];
+
+/** tarım aksiyon takma adları → BotInstance aksiyon tipi (rule + flow ortak) */
+export const FARM_ACTION_KINDS: Record<string, string> = {
+  till: "till",
+  "till-soil": "till",
+  till_soil: "till",
+  çapala: "till",
+  plant: "plant",
+  "plant-crops": "plant",
+  plant_crops: "plant",
+  ekim: "plant",
+  harvest: "harvest",
+  "harvest-crops": "harvest",
+  harvest_crops: "harvest",
+  hasat: "harvest",
+  "farm-cycle": "farm-cycle",
+  farm_cycle: "farm-cycle",
+  farm: "farm-cycle",
+  tarla: "farm-cycle"
+};
 
 /** Aksiyon metinlerinde {var} — tetikleyiciye göre hangi veriler gelir */
 export type ContextVarDoc = { name: string; desc: string };

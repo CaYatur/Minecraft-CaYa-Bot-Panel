@@ -399,7 +399,11 @@ export const en: MessageTree = {
       collect_drops: "Pick up dropped items",
       drop_items: "Drop specific items",
       deposit: "Deposit to chest",
-      withdraw: "Withdraw from chest"
+      withdraw: "Withdraw from chest",
+      till: "Till soil (farmland)",
+      plant: "Plant crops",
+      harvest: "Harvest mature crops (+replant)",
+      "farm-cycle": "Farm loop (till→harvest→plant→deposit)"
     },
     actionCategories: {
       Sohbet: "Chat",
@@ -411,7 +415,8 @@ export const en: MessageTree = {
       Movement: "Movement",
       Combat: "Combat",
       Survival: "Survival",
-      Work: "Work"
+      Work: "Work",
+      Farm: "Farm"
     },
     varsTitle: "Context variables — use in next action as {name}",
     varsForTrigger: "For this trigger",
@@ -1073,7 +1078,24 @@ export const en: MessageTree = {
     fetchItemPrompt: "Item to fetch?",
     fetchPlayerPrompt: "To whom (player)?",
     keepItemsHint:
-      "Items on the keepItems list are not deposited. Chest physics are verified on Paper."
+      "Items on the keepItems list are not deposited. Chest physics are verified on Paper.",
+    farm: "Farming",
+    farmCrop: "Crop",
+    farmRadius: "Radius",
+    farmChest: "Produce chest (x y z)",
+    farmDepositNearest: "nearest chest",
+    till: "Till soil",
+    tillToast: "Till queued",
+    plant: "Plant",
+    plantToast: "Planting queued",
+    harvest: "Harvest",
+    harvestToast: "Harvest queued (mature crops + replant)",
+    farmLoop: "Start farm loop",
+    farmLoopToast: "Continuous farm loop started — ends with Stop",
+    farmStop: "Stop",
+    farmStopToast: "All work stopped",
+    farmHint:
+      "Loop: till → harvest mature → replant → deposit produce to the chest → wait. Empty chest coords skip depositing (or tick nearest chest). Keep water within 4 blocks or farmland dries out."
   },
   itemPicker: {
     placeholder: "Search / select…",
@@ -1168,6 +1190,7 @@ export const en: MessageTree = {
     cat_chat: "Chat",
     cat_movement: "Movement",
     cat_gather: "Gathering",
+    cat_farm: "Farming",
     cat_craft: "Crafting & Survival",
     cat_build: "Building (creative)",
     cat_combatAttack: "Attack",

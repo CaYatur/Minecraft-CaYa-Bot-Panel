@@ -9,6 +9,7 @@ export interface McpToolPermissions {
   chat: boolean;
   movement: boolean;
   gather: boolean;
+  farm: boolean;
   craft: boolean;
   build: boolean;
   combatAttack: boolean;
@@ -129,6 +130,7 @@ export function defaultMcpSettings(): McpSettings {
       chat: true,
       movement: true,
       gather: true,
+      farm: true,
       craft: true,
       build: true,
       combatAttack: false,

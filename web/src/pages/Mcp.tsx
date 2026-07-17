@@ -561,6 +561,7 @@ const CATEGORY_ORDER: Array<keyof McpToolPermissions> = [
   "chat",
   "movement",
   "gather",
+  "farm",
   "craft",
   "build",
   "inventory",
