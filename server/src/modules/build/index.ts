@@ -67,7 +67,17 @@ interface LoopCtx {
 }
 
 const ACTIVE_PHASES = new Set(["preparing", "acquiring", "building", "verifying", "cleanup"]);
-const STALL_MS = 25_000;
+/**
+ * Issue #6 — watchdog latency: the old fixed 25s window meant 75s+ before a
+ * poison block was dropped. First stall waits STALL_MS; once in recovery mode
+ * every next step only waits STALL_RECOVERY_MS, so a stuck cell is recovered
+ * or failed in ≤ ~40s wall time (18 + 10 + 10).
+ */
+const STALL_MS = 18_000;
+const STALL_RECOVERY_MS = 10_000;
+/** Recovery-step sub-op budgets (issue #6: 6–8s awaits made cancel feel dead). */
+const RECOVERY_PATH_MS = 4_000;
+const RECOVERY_COLLECT_MS = 5_000;
 const REPAIR_TICK_MS = 12_000;
 /** World-search budget per material — an unfindable block must not eat the whole build (issue #3 "loop" feel). */
 const MATERIAL_GATHER_BUDGET_MS = 120_000;
@@ -1056,7 +1066,9 @@ export class BuildService {
     const watchdog = {
       lastProgressAt: Date.now(),
       stalls: 0,
-      openAtFirstStall: -1
+      /** completions (placed/skipped/failed) since the first stall — monotonic,
+       *  immune to repair-reopen flapping (issue #6 ladder-reset metric) */
+      doneSinceStall: 0
     };
     let lastRepairAt = Date.now();
     let lastWalkTick = 0;
@@ -1064,7 +1076,7 @@ export class BuildService {
     const noteProgress = () => {
       watchdog.lastProgressAt = Date.now();
       watchdog.stalls = 0;
-      watchdog.openAtFirstStall = -1;
+      watchdog.doneSinceStall = 0;
       if (this.runtime.stuck) {
         this.runtime.stuck = null;
         this.emit();
@@ -1075,6 +1087,7 @@ export class BuildService {
 
     const markDone = (job: BuildJob, res: "placed" | "skipped" | "failed") => {
       if (job.done) return;
+      if (watchdog.stalls > 0) watchdog.doneSinceStall++;
       board.complete(job, res);
       needLedger.set(job.name, Math.max(0, (needLedger.get(job.name) ?? 1) - 1));
       let evStatus: BuildPlacedBlock["status"] = res;
@@ -1270,16 +1283,46 @@ export class BuildService {
       return reopened;
     };
 
-    /** Stall watchdog: recovery ladder instead of a blind round cap. */
+    /**
+     * Stall watchdog: recovery ladder instead of a blind round cap.
+     * Issue #6 rules: cancel-first (Stop/Reset abort mid-step), adaptive short
+     * windows once recovering, and aggressive poison-target drop so a stuck
+     * cell resolves in ≤ ~40s instead of 75s+.
+     */
+    const cancelCheck = () => {
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+    };
+    const dropPoisonTarget = (onlyRepeatOffenders: boolean): boolean => {
+      const bot2 = instance.bot;
+      if (!bot2?.entity) return false;
+      const p = bot2.entity.position;
+      const stuckJob = onlyRepeatOffenders
+        ? board.nearestOpen(p.x, p.y, p.z, (j) => j.attempts >= 2 || j.unreachable >= 2)
+        : (board.nearestOpen(p.x, p.y, p.z, (j) => j.attempts >= 2 || j.unreachable >= 2) ??
+          board.nearestOpen(p.x, p.y, p.z, () => true));
+      if (!stuckJob) return false;
+      this.log().warn("Watchdog dropped a stuck target", `${stuckJob.name} @${stuckJob.wx},${stuckJob.wy},${stuckJob.wz}`);
+      markDone(stuckJob, "failed");
+      return true;
+    };
     const watchdogTick = async () => {
+      cancelCheck();
       const now = Date.now();
-      if (now - watchdog.lastProgressAt < STALL_MS) return;
+      const window = watchdog.stalls > 0 ? STALL_RECOVERY_MS : STALL_MS;
+      if (now - watchdog.lastProgressAt < window) return;
       watchdog.lastProgressAt = now; // new window per recovery step
       watchdog.stalls++;
-      if (watchdog.openAtFirstStall < 0) watchdog.openAtFirstStall = board.openCount;
-      this.runtime.stuck = `stall ${watchdog.stalls}: recovery running`;
-      this.setActivity(`No progress — recovery attempt ${watchdog.stalls}`, null);
-      this.log().warn("Build watchdog", `no progress for ${STALL_MS / 1000}s (recovery ${watchdog.stalls})`);
+      const stepLabel =
+        watchdog.stalls === 1
+          ? "retry + reposition"
+          : watchdog.stalls === 2
+            ? "repair + drop stuck target"
+            : watchdog.stalls === 3
+              ? "drop nearest open target"
+              : "final check";
+      this.runtime.stuck = `stall ${Math.min(watchdog.stalls, 4)}/4 · ${stepLabel}`;
+      this.setActivity(`No progress — recovery ${watchdog.stalls}: ${stepLabel}`, null);
+      this.log().warn("Build watchdog", `no progress for ${window / 1000}s (recovery ${watchdog.stalls}: ${stepLabel})`);
 
       const bot = instance.bot;
       try {
@@ -1297,42 +1340,37 @@ export class BuildService {
         if (bot?.entity && this.runtime.origin) {
           const o = this.runtime.origin;
           try {
-            await pathNear(instance, o.x + 0.5, o.y, o.z + 0.5, 6, token, { clearGoal: true, timeoutMs: 6_000 });
+            await pathNear(instance, o.x + 0.5, o.y, o.z + 0.5, 6, token, { clearGoal: true, timeoutMs: RECOVERY_PATH_MS });
           } catch {
-            /* */
+            cancelCheck(); // Stop/Reset mid-walk must abort the whole run, not continue the ladder
           }
         }
       } else if (watchdog.stalls === 2) {
+        // poison targets don't deserve the full ladder — drop repeat offenders NOW
+        dropPoisonTarget(true);
         repairTick(true);
-        try {
-          await runSmartCollectDrops(instance, undefined, 12, token, () => {}, 8_000);
-        } catch {
-          /* */
-        }
-      } else if (watchdog.stalls === 3) {
-        // drop the poison target: nearest open job that kept failing
-        const bot2 = instance.bot;
-        if (bot2?.entity) {
-          const p = bot2.entity.position;
-          const stuckJob =
-            board.nearestOpen(p.x, p.y, p.z, (j) => j.attempts >= 2 || j.unreachable >= 2) ??
-            board.nearestOpen(p.x, p.y, p.z, () => true);
-          if (stuckJob) {
-            this.log().warn("Watchdog dropped a stuck target", `${stuckJob.name} @${stuckJob.wx},${stuckJob.wy},${stuckJob.wz}`);
-            markDone(stuckJob, "failed");
+        if (!creative) {
+          // survival only: stray drops may hold the missing material (pointless in creative)
+          try {
+            await runSmartCollectDrops(instance, undefined, 12, token, () => {}, RECOVERY_COLLECT_MS);
+          } catch {
+            cancelCheck();
           }
         }
+      } else if (watchdog.stalls === 3) {
+        dropPoisonTarget(false);
       } else {
-        if (board.openCount < watchdog.openAtFirstStall) {
-          // some progress across recoveries — keep going, reset ladder
+        if (watchdog.doneSinceStall > 0) {
+          // targets are still being resolved (even as failures) — keep the ladder rolling
           watchdog.stalls = 0;
-          watchdog.openAtFirstStall = -1;
+          watchdog.doneSinceStall = 0;
         } else {
           throw new Error(
             `Build stuck: no progress after ${watchdog.stalls} recovery attempts (${board.openCount} blocks open)`
           );
         }
       }
+      cancelCheck();
       this.emit(true);
     };
 
