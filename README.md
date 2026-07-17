@@ -149,8 +149,9 @@ The project is designed around three principles:
 | **Combat** | Attack, self-defense, flee, protect players, target tracking, hostile-mob clearing, configurable reach/reaction/CPS behavior |
 | **Survival** | Auto-eat, food acquisition, water safety, hazard escape, bucket handling and configurable fall protection |
 | **Smart gathering** | Separate surface and underground strategies, wood collection, ore mining, arbitrary block collection and dropped-item pickup |
+| **Farming** | Till soil with a hoe, plant/harvest/replant wheat, carrots, potatoes, beetroot, melon and pumpkin, and run a continuous farm loop that deposits produce into a chosen chest — from the panel, automations or the AI agent |
 | **Recursive crafting** | Recipe dependency planning, raw-material acquisition, crafting-table use, furnace chains and storage withdrawal |
-| **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes |
+| **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes — deposits are verified (chest-full is reported honestly) and a specific chest can be targeted by coordinates |
 | **Schematic building** | `.schem`, `.schematic`, `.litematic` and `.caya.json`, rotation, mirroring, material planning, partial building and scaffold cleanup |
 | **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 50+ tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
@@ -255,6 +256,7 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 | Chat | `send_chat`, `send_whisper` |
 | Movement | `goto`, `goto_player`, `follow_player`, `goto_waypoint`, `interact_block` |
 | Gathering | `collect_wood`, `mine_ore`, `collect_blocks`, `collect_drops`, `hunt_animals` |
+| Farming | `till_soil`, `plant_crops`, `harvest_crops`, `farm_cycle` (continuous farm loop with chest deposit) |
 | Crafting & survival | `craft_item`, `preview_craft_plan`, `cook_food`, `eat_now`, `sleep_in_bed`, `wake_up` |
 | Inventory / storage | `deposit_items`, `withdraw_items`, `give_item_to_player`, `drop_items`, `equip_item` |
 | Building (creative) | `plan_structure`, `build_structure`, `build_schematic`, `stop_build` |
