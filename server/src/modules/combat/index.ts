@@ -1,5 +1,6 @@
 import type { Bot } from "mineflayer";
 import type { Entity } from "prismarine-entity";
+import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
@@ -20,6 +21,7 @@ const HOSTILE_SCAN_MS = 400;
 const PROTECT_TICK_MS = 600;
 /** boşta öz savunma tarama aralığı */
 const SELF_GUARD_TICK_MS = 700;
+const HUNTER_TICK_MS = 500;
 
 // caya-combat-mlg-stability-v2: erişilemeyen/ışınlmainn target bekçisi.
 const caya_combat_mlg_stability_v2_combat = true;
@@ -63,6 +65,15 @@ export class CombatService {
   private companionPathPausedUntil = 0;
   private protectTimer: NodeJS.Timeout | null = null;
   private selfGuardTimer: NodeJS.Timeout | null = null;
+  private hunterTimer: NodeJS.Timeout | null = null;
+  private hunterWasEnabled = false;
+  private hunterFleeing = false;
+  private hunterActiveName: string | null = null;
+  private hunterSearchTaskId: string | null = null;
+  private hunterMemories = new Map<string, { name: string; lastSeenAt: number; lastPos: Vec3; velocity: Vec3; searchStartedAt: number }>();
+  private hunterTracePoints: Array<{ at: number; pos: Vec3; kind: "block" | "sound" }> = [];
+  private hunterBlockHook: ((...args: any[]) => void) | null = null;
+  private hunterSoundHook: ((...args: any[]) => void) | null = null;
   private followTaskId: string | null = null;
   private attackTaskId: string | null = null;
   /** ölüm → respawn arası hareket/koruma dondur (pathfinder kilitlenmesi) */
@@ -226,6 +237,8 @@ getRuntime(): CombatRuntime {
     this.deadPaused = false;
     // boşta öz savunma (defendMode) — zombie yaklaşınca savunsun / kaçsın
     this.startSelfGuardLoop();
+    this.startHunterLoop();
+    this.attachHunterTraceHooks();
     // reconnect / ilk spawn: companion görevlerini yeniden başlat
     this.resumeCompanionAfterAlive("attach");
 
@@ -275,6 +288,8 @@ getRuntime(): CombatRuntime {
   private detachKeepCompanion() {
     this.stopProtectLoop();
     this.stopSelfGuardLoop();
+    this.stopHunterLoop();
+    this.detachHunterTraceHooks();
     const bot = this.bot;
     if (bot) {
       if (this.healthHook) bot.removeListener("health", this.healthHook);
@@ -653,6 +668,266 @@ getRuntime(): CombatRuntime {
     }
   }
 
+  private startHunterLoop() {
+    this.stopHunterLoop();
+    this.hunterTimer = setInterval(() => this.hunterTick(), HUNTER_TICK_MS);
+    void this.hunterTick();
+  }
+
+  private stopHunterLoop() {
+    if (this.hunterTimer) clearInterval(this.hunterTimer);
+    this.hunterTimer = null;
+    this.hunterWasEnabled = false;
+    this.hunterFleeing = false;
+    this.hunterActiveName = null;
+    this.hunterSearchTaskId = null;
+    this.hunterMemories.clear();
+    this.hunterTracePoints = [];
+  }
+
+  private hunterEligible(name: string): boolean {
+    const h = this.cfg().hunter;
+    if (!h?.enabled || this.isSelfName(name)) return false;
+    const n = name.toLowerCase();
+    const black = (h.blacklist ?? []).some((x) => x.toLowerCase() === n);
+    const white = (h.whitelist ?? []).some((x) => x.toLowerCase() === n);
+    if (h.targetMode === "blacklist") return black;
+    if (h.targetMode === "exclude_whitelist") return !white;
+    if (h.targetMode === "single") return Boolean(h.singleTarget) && h.singleTarget.toLowerCase() === n;
+    return true;
+  }
+
+  private attachHunterTraceHooks() {
+    const bot = this.bot;
+    if (!bot || this.hunterBlockHook || this.hunterSoundHook) return;
+    this.hunterBlockHook = (...args: any[]) => {
+      const h = this.cfg().hunter;
+      if (!h?.enabled || !h.traceEvents || !this.hunterActiveName) return;
+      const pos = args.find((v) => v && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number")?.position
+        ?? args.find((v) => v?.position)?.position
+        ?? args.find((v) => v && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number");
+      if (pos) this.rememberHunterTrace(new Vec3(pos.x, pos.y, pos.z), "block");
+    };
+    this.hunterSoundHook = (...args: any[]) => {
+      const h = this.cfg().hunter;
+      if (!h?.enabled || !h.traceEvents || !this.hunterActiveName) return;
+      const pos = args.find((v) => v && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number")
+        ?? args.find((v) => v?.position)?.position;
+      if (pos) this.rememberHunterTrace(new Vec3(pos.x, pos.y, pos.z), "sound");
+    };
+    bot.on("blockUpdate", this.hunterBlockHook as never);
+    bot.on("soundEffectHeard", this.hunterSoundHook as never);
+  }
+
+  private detachHunterTraceHooks() {
+    const bot = this.bot;
+    if (bot && this.hunterBlockHook) bot.removeListener("blockUpdate", this.hunterBlockHook as never);
+    if (bot && this.hunterSoundHook) bot.removeListener("soundEffectHeard", this.hunterSoundHook as never);
+    this.hunterBlockHook = null;
+    this.hunterSoundHook = null;
+  }
+
+  private rememberHunterTrace(pos: Vec3, kind: "block" | "sound") {
+    const memory = this.hunterActiveName ? this.hunterMemories.get(this.hunterActiveName.toLowerCase()) : null;
+    const h = this.cfg().hunter;
+    if (!memory || !h) return;
+    if (pos.distanceTo(memory.lastPos) > Math.max(16, h.searchRadius ?? 96)) return;
+    this.hunterTracePoints.push({ at: Date.now(), pos: pos.clone(), kind });
+    const cutoff = Date.now() - 30000;
+    this.hunterTracePoints = this.hunterTracePoints.filter((x) => x.at >= cutoff).slice(-40);
+  }
+
+  private rememberHunterSighting(name: string, entity: Entity) {
+    const key = name.toLowerCase();
+    const now = Date.now();
+    const previous = this.hunterMemories.get(key);
+    const dt = previous ? Math.max(0.05, (now - previous.lastSeenAt) / 1000) : 0;
+    const rawVelocity = previous
+      ? entity.position.minus(previous.lastPos).scaled(1 / dt)
+      : new Vec3(entity.velocity?.x ?? 0, entity.velocity?.y ?? 0, entity.velocity?.z ?? 0);
+    const velocity = new Vec3(
+      Math.max(-8, Math.min(8, rawVelocity.x)),
+      Math.max(-4, Math.min(4, rawVelocity.y)),
+      Math.max(-8, Math.min(8, rawVelocity.z))
+    );
+    this.hunterMemories.set(key, {
+      name,
+      lastSeenAt: now,
+      lastPos: entity.position.clone(),
+      velocity,
+      searchStartedAt: previous?.searchStartedAt ?? 0
+    });
+  }
+
+  private hunterVisibleCandidates(): Entity[] {
+    const bot = this.bot;
+    const h = this.cfg().hunter;
+    if (!bot || !h) return [];
+    const maxVisibleRange = Math.max(16, h.scanRange ?? 128);
+    return Object.values(bot.players)
+      .map((p) => p?.entity)
+      .filter((e): e is Entity => Boolean(e && this.hunterEligible(labelEntity(e))))
+      .filter((e) => distanceEyeToEntity(bot, e) <= maxVisibleRange)
+      .sort((a, b) => distanceEyeToEntity(bot, a) - distanceEyeToEntity(bot, b));
+  }
+
+  private hunterSearchPoints(memory: { lastPos: Vec3; velocity: Vec3 }): Vec3[] {
+    const h = this.cfg().hunter!;
+    const points: Vec3[] = [];
+    const prediction = Math.max(0, h.predictionSeconds ?? 4);
+    const predicted = memory.lastPos.plus(memory.velocity.scaled(prediction));
+    points.push(predicted);
+    const recentTraces = this.hunterTracePoints
+      .filter((x) => Date.now() - x.at < 30000)
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 8);
+    for (const trace of recentTraces) points.push(trace.pos.clone());
+    const sectors = Math.max(4, Math.min(32, h.sectorCount ?? 12));
+    const step = Math.max(3, h.spiralStep ?? 8);
+    const radius = Math.max(step, h.searchRadius ?? 96);
+    for (let r = step; r <= radius; r += step) {
+      const offset = (r / step) * 0.55;
+      for (let i = 0; i < sectors; i++) {
+        const angle = ((Math.PI * 2 * i) / sectors) + offset;
+        points.push(new Vec3(predicted.x + Math.cos(angle) * r, predicted.y, predicted.z + Math.sin(angle) * r));
+      }
+    }
+    return points;
+  }
+
+  private hunterHighGroundNear(origin: Vec3): Vec3 | null {
+    const bot = this.bot;
+    if (!bot) return null;
+    let best: Vec3 | null = null;
+    for (let dx = -8; dx <= 8; dx += 4) {
+      for (let dz = -8; dz <= 8; dz += 4) {
+        for (let dy = 14; dy >= -4; dy--) {
+          const ground = bot.blockAt(new Vec3(Math.floor(origin.x + dx), Math.floor(origin.y + dy), Math.floor(origin.z + dz)));
+          if (!ground || ground.boundingBox === "empty") continue;
+          const feet = ground.position.offset(0, 1, 0);
+          const head = bot.blockAt(feet.offset(0, 1, 0));
+          const feetBlock = bot.blockAt(feet);
+          if (feetBlock?.boundingBox === "empty" && head?.boundingBox === "empty" && (!best || feet.y > best.y)) best = feet;
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  private ensureHunterSearch(name: string) {
+    if (this.hunterSearchTaskId || this.attackTaskId) return;
+    const memory = this.hunterMemories.get(name.toLowerCase());
+    const h = this.cfg().hunter;
+    if (!memory || !h?.enabled) return;
+    const now = Date.now();
+    if (!memory.searchStartedAt) memory.searchStartedAt = now;
+    if (now - memory.searchStartedAt > (h.searchDurationMs ?? 90000)) {
+      this.log().info("Hunter search expired: " + name);
+      this.hunterActiveName = null;
+      return;
+    }
+    const task = this.instance.tasks.enqueue({
+      type: "hunter-search",
+      label: "hunter search: " + name,
+      priority: PRIORITY.DEFENSE,
+      params: { target: name, lastSeen: memory.lastPos },
+      requeueOnPreempt: false
+    }, () => async (token, report) => {
+      const bot = this.requireBot();
+      const started = Date.now();
+      const points = this.hunterSearchPoints(memory);
+      let index = 0;
+      this.setMode("hunter", name);
+      while (!token.cancelled && Date.now() - started < (h.searchDurationMs ?? 90000)) {
+        const visible = bot.players[name]?.entity;
+        if (visible) {
+          this.rememberHunterSighting(name, visible);
+          this.hunterSearchTaskId = null;
+          return;
+        }
+        let point = points[index++ % points.length];
+        if (h.highGroundSearch && index % Math.max(3, h.sectorCount ?? 12) === 0) {
+          point = this.hunterHighGroundNear(point) ?? point;
+        }
+        report({ done: Math.min(index, points.length), total: points.length, label: "search sector " + index + "/" + points.length });
+        try {
+          ensureMovement(this.instance, { mode: "goto", canDig: h.allowBlockBreak, allowPlace: h.allowBlockPlace, parkour: true });
+          bot.pathfinder.setGoal(new goals.GoalNear(Math.floor(point.x), Math.floor(point.y), Math.floor(point.z), 2), true);
+          const legStarted = Date.now();
+          while (!token.cancelled && Date.now() - legStarted < 7000) {
+            if (bot.players[name]?.entity) { this.hunterSearchTaskId = null; return; }
+            if (bot.entity.position.distanceTo(point) <= 3) break;
+            await sleep(200);
+          }
+        } finally {
+          bot.pathfinder.setGoal(null);
+        }
+      }
+      this.hunterSearchTaskId = null;
+    });
+    this.hunterSearchTaskId = task.id;
+  }
+
+  private async hunterTick() {
+    const bot = this.bot;
+    const h = this.cfg().hunter;
+    if (!bot || !h?.enabled || this.deadPaused || this.instance.status !== "online") {
+      if (this.hunterWasEnabled && !h?.enabled) {
+        this.hunterWasEnabled = false;
+        this.hunterFleeing = false;
+        this.hunterActiveName = null;
+        this.setMode("idle", null);
+      }
+      return;
+    }
+    if (!this.hunterWasEnabled) {
+      this.hunterWasEnabled = true;
+      this.instance.tasks.cancelAll("hunter mode enabled");
+      this.companion = defaultCompanion();
+      this.stopProtectLoop();
+      this.setMode("hunter", null);
+      this.log().warn("Hunter mode enabled", "Other action modes are locked; LLM is chat-only");
+    }
+    const hp = bot.health ?? 20;
+    if (this.hunterFleeing) {
+      if (hp < (h.resumeAtHealth ?? 12)) return;
+      this.hunterFleeing = false;
+    }
+    const visible = this.hunterVisibleCandidates();
+    let target: Entity | undefined;
+    if (h.stickyTarget && this.hunterActiveName) {
+      target = visible.find((e) => labelEntity(e).toLowerCase() === this.hunterActiveName!.toLowerCase());
+    }
+    target ??= visible[0];
+    if (!target) {
+      if (this.hunterActiveName) this.ensureHunterSearch(this.hunterActiveName);
+      this.setMode("hunter", this.hunterActiveName);
+      return;
+    }
+    const name = labelEntity(target);
+    this.hunterActiveName = name;
+    this.rememberHunterSighting(name, target);
+    const memory = this.hunterMemories.get(name.toLowerCase());
+    if (memory) memory.searchStartedAt = 0;
+    if (this.hunterSearchTaskId) {
+      this.instance.tasks.cancel(this.hunterSearchTaskId, "hunter target reacquired");
+      this.hunterSearchTaskId = null;
+    }
+    if (hp <= (h.fleeAtHealth ?? 5)) {
+      this.hunterFleeing = true;
+      this.cancelTasksOfType("attack");
+      this.instance.tasks.enqueue({ type: "hunter-flee", label: "hunter kaçışı", priority: PRIORITY.SURVIVAL, params: { from: name }, requeueOnPreempt: false }, () => async (token) => {
+        this.setMode("fleeing", name);
+        await this.fleeFrom(target!.position, h.fleeDistance ?? 18, token);
+        if (!token.cancelled) this.setMode("hunter", null);
+      });
+      return;
+    }
+    this.setMode("hunter", name);
+    this.ensureAttackTask(name);
+  }
+
   private startProtectLoop() {
     this.stopProtectLoop();
     this.protectTimer = setInterval(() => this.protectTick(), PROTECT_TICK_MS);
@@ -939,12 +1214,14 @@ getRuntime(): CombatRuntime {
 
       await this.equipBestWeapon(true);
 
-      const chase = this.cfg().chaseDistance ?? 24;
+      const hunterCfg = this.cfg().hunter;
+      const chase = hunterCfg?.enabled ? (hunterCfg.chaseDistance ?? 64) : (this.cfg().chaseDistance ?? 24);
       const started = Date.now();
       const maxMs = 5 * 60_000;
 
       while (!token.cancelled && Date.now() - started < maxMs) {
-        if ((bot.health ?? 20) <= (this.cfg().fleeAtHealth ?? 6)) {
+        const fleeAt = hunterCfg?.enabled ? (hunterCfg.fleeAtHealth ?? 5) : (this.cfg().fleeAtHealth ?? 6);
+        if ((bot.health ?? 20) <= fleeAt) {
           this.log().warn("Health critical — abandoning attack, switching to flee");
           this.enqueueFlee(playerName);
           throw new Error("Health critical, flee triggered");
@@ -956,6 +1233,7 @@ getRuntime(): CombatRuntime {
           await sleep(500);
           continue;
         }
+        if (entity && hunterCfg?.enabled) this.rememberHunterSighting(playerName, entity);
         if (!entity) {
           const inTab = Boolean(bot.players[playerName]);
           report({

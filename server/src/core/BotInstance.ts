@@ -410,6 +410,9 @@ export class BotInstance extends EventEmitter {
    */
   enqueueAction(action: Record<string, unknown>): TaskSummary | null {
     const type = String(action.type ?? "");
+    if (this.config.combat.hunter?.enabled && !["chat", "stop", "stop-combat", "cancel-task"].includes(type)) {
+      throw new Error("Hunter modu açık: diğer işlemler kilitli, LLM yalnızca sohbet edebilir");
+    }
     switch (type) {
       case "goto": {
         const x = num(action.x, "x");

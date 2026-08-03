@@ -46,6 +46,32 @@ export interface CombatConfig {
   cleaveMobs?: boolean;
   /** yakın, bize hasar vermiş / tehdit oyunculara cleave */
   cleavePlayers?: boolean;
+  /** Hunter/kenetlenme modu. Varsayılan kapalıdır ve açıldığında diğer görev modlarını kilitler. */
+  hunter?: {
+    enabled: boolean;
+    targetMode: "all" | "blacklist" | "exclude_whitelist" | "single";
+    blacklist: string[];
+    whitelist: string[];
+    singleTarget: string;
+    scanRange: number;
+    chaseDistance: number;
+    retargetMs: number;
+    stickyTarget: boolean;
+    fleeAtHealth: number;
+    resumeAtHealth: number;
+    fleeDistance: number;
+    searchDurationMs: number;
+    searchRadius: number;
+    predictionSeconds: number;
+    sectorCount: number;
+    spiralStep: number;
+    highGroundSearch: boolean;
+    traceEvents: boolean;
+    /** Hunter rotası duvar/engel kırabilir mi? */
+    allowBlockBreak: boolean;
+    /** Hunter rotası köprü/scaffold için blok yerleştirebilir mi? */
+    allowBlockPlace: boolean;
+  };
 }
 
 /** last death position for loot recovery (Faz 6) */
@@ -93,7 +119,7 @@ export interface CompanionState {
 export interface CombatRuntime {
   defendMode: CombatConfig["defendMode"];
   fighting: boolean;
-  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting";
+  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting" | "hunter";
   activeTarget: string | null;
   lastDeath: DeathRecord | null;
   companion: CompanionState;
@@ -409,7 +435,30 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       cleaveNearby: false,
       cleaveRange: 3.0,
       cleaveMobs: true,
-      cleavePlayers: true
+      cleavePlayers: true,
+      hunter: {
+        enabled: false,
+        targetMode: "exclude_whitelist",
+        blacklist: [],
+        whitelist: [],
+        singleTarget: "",
+        scanRange: 128,
+        chaseDistance: 128,
+        retargetMs: 1200,
+        stickyTarget: true,
+        fleeAtHealth: 5,
+        resumeAtHealth: 12,
+        fleeDistance: 18,
+        searchDurationMs: 90000,
+        searchRadius: 96,
+        predictionSeconds: 4,
+        sectorCount: 12,
+        spiralStep: 8,
+        highGroundSearch: true,
+        traceEvents: true,
+        allowBlockBreak: false,
+        allowBlockPlace: false
+      }
     },
     survival: {
       autoEat: true,

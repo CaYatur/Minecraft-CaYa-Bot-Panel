@@ -131,7 +131,8 @@ export class AgentRuntime {
 
     try {
       // chat-only mode for untrusted players: no tools at all
-      const tools = trusted ? allowedTools(settings) : [];
+      const hunterChatOnly = Boolean(inst.config.combat.hunter?.enabled);
+      const tools = trusted && !hunterChatOnly ? allowedTools(settings) : [];
       const toolSpecs: OllamaToolSpec[] = tools.map((t) => ({
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.inputSchema }

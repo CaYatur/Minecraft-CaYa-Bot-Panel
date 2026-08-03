@@ -35,6 +35,29 @@ export interface BotConfig {
     cleaveRange?: number;
     cleaveMobs?: boolean;
     cleavePlayers?: boolean;
+    hunter?: {
+      enabled: boolean;
+      targetMode: "all" | "blacklist" | "exclude_whitelist" | "single";
+      blacklist: string[];
+      whitelist: string[];
+      singleTarget: string;
+      scanRange: number;
+      chaseDistance: number;
+      retargetMs: number;
+      stickyTarget: boolean;
+      fleeAtHealth: number;
+      resumeAtHealth: number;
+      fleeDistance: number;
+      searchDurationMs: number;
+      searchRadius: number;
+      predictionSeconds: number;
+      sectorCount: number;
+      spiralStep: number;
+      highGroundSearch: boolean;
+      traceEvents: boolean;
+      allowBlockBreak: boolean;
+      allowBlockPlace: boolean;
+    };
   };
   survival: {
     autoEat: boolean;
@@ -122,7 +145,7 @@ export interface CompanionState {
 export interface CombatRuntime {
   defendMode: "off" | "mob" | "player" | "all";
   fighting: boolean;
-  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting";
+  mode: "idle" | "attacking" | "defending" | "fleeing" | "protecting" | "hunter";
   activeTarget: string | null;
   lastDeath: DeathRecord | null;
   companion: CompanionState;

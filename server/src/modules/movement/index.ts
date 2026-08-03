@@ -385,7 +385,8 @@ export async function runGotoPlayer(
   playerName: string,
   range: number,
   token: TaskToken,
-  report: ProgressFn
+  report: ProgressFn,
+  movementPolicy?: { canDig?: boolean; allowPlace?: boolean }
 ): Promise<void> {
   const bot = requireBot(instance);
   const entity = bot.players[playerName]?.entity;
@@ -429,7 +430,8 @@ export async function runFollow(
   playerName: string,
   distance: number,
   token: TaskToken,
-  report: ProgressFn
+  report: ProgressFn,
+  movementPolicy?: { canDig?: boolean; allowPlace?: boolean }
 ): Promise<void> {
   const holdDist = Math.max(1, Math.min(16, distance));
   let lastReportAt = 0;
@@ -481,7 +483,7 @@ export async function runFollow(
 
   const restoreFollowMovement = () => {
     // normal follow: place kapalı (merdivende rastgele blok spam olmasın)
-    ensureMovement(instance, { mode: "follow", allowPlace: false });
+    ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, allowPlace: movementPolicy?.allowPlace ?? false });
   };
 
   try {
