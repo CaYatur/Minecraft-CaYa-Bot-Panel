@@ -5,12 +5,14 @@ import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
 import { goals } from "mineflayer-pathfinder";
-import { ensureMovement, runFollow, runGoto, stopMovement } from "../movement";
+import { ensureMovement, runFollow, runGoto, stopMovement, tryOpenNearbyDoor } from "../movement";
 import { stepLookAtEntity } from "../movement/look";
 import { CREEPER_SAFE_RANGE, isHostileMob, isPlayerEntity } from "./mobs";
 import {
   distanceEyeToEntity,
   inMeleeRange,
+  hasLineOfSight,
+  hasLineOfSightFrom,
   randomReactionMs,
   tryRealisticAttack
 } from "./realism";
@@ -1912,6 +1914,35 @@ getRuntime(): CombatRuntime {
     return this.findNearestByLabel(label, maxDist);
   }
 
+  private findCombatVantagePoint(entity: Entity, maxRadius = 7): Vec3 | null {
+    const bot = this.requireBot();
+    const target = entity.position;
+    let bestPos: Vec3 | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (let radius = 2; radius <= maxRadius; radius++) {
+      const samples = Math.max(12, radius * 8);
+      for (let i = 0; i < samples; i++) {
+        const angle = (Math.PI * 2 * i) / samples;
+        const x = Math.floor(target.x + Math.cos(angle) * radius);
+        const z = Math.floor(target.z + Math.sin(angle) * radius);
+        for (let dy = -2; dy <= 2; dy++) {
+          const feet = new Vec3(x, Math.floor(target.y + dy), z);
+          const below = bot.blockAt(feet.offset(0, -1, 0));
+          const feetBlock = bot.blockAt(feet);
+          const headBlock = bot.blockAt(feet.offset(0, 1, 0));
+          if (!below || below.boundingBox === "empty") continue;
+          if (feetBlock?.boundingBox !== "empty" || headBlock?.boundingBox !== "empty") continue;
+          const eye = feet.offset(0.5, 1.62, 0.5);
+          if (!hasLineOfSightFrom(bot, eye, entity)) continue;
+          const score = bot.entity.position.distanceTo(feet) + radius * 0.25;
+          if (score < bestScore) { bestPos = feet; bestScore = score; }
+        }
+      }
+      if (bestPos) return bestPos;
+    }
+    return bestPos;
+  }
+
   private async approachEntity(entity: Entity, range: number, token: TaskToken) {
     if (this.deadPaused) return;
     const bot = this.requireBot();
@@ -1922,7 +1953,11 @@ getRuntime(): CombatRuntime {
     }
 
     const hold = Math.max(0.8, range);
-    const chaseLimit = Math.max(12, Number(this.cfg().chaseDistance) || 24);
+    const hunterCfg = this.cfg().hunter;
+    const hunterActive = Boolean(hunterCfg?.enabled);
+    const chaseLimit = Math.max(12, hunterActive ? (hunterCfg?.chaseDistance ?? 128) : (Number(this.cfg().chaseDistance) || 24));
+    const canDigRoute = hunterActive ? Boolean(hunterCfg?.allowBlockBreak) : true;
+    const canPlaceRoute = hunterActive ? Boolean(hunterCfg?.allowBlockPlace) : false;
     let tracked: Entity =
       (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
     let lastBotPos = bot.entity.position.clone();
@@ -1957,8 +1992,9 @@ getRuntime(): CombatRuntime {
         mode: "goto",
         allowSprintNow: true,
         parkour: true,
-        canDig: true,
-        allowPlace: false
+        canDig: canDigRoute,
+        canOpenDoors: true,
+        allowPlace: canPlaceRoute
       });
 
       bot.on("path_update", onPathUpdate);
@@ -1992,8 +2028,19 @@ getRuntime(): CombatRuntime {
 
         const reach = this.cfg().reach ?? 3;
         if (inMeleeRange(bot, live, reach)) {
-          this.clearTargetUnreachable(live);
-          break;
+          if (hasLineOfSight(bot, live)) {
+            this.clearTargetUnreachable(live);
+            break;
+          }
+          const vantage = this.findCombatVantagePoint(live);
+          if (vantage) {
+            ensureMovement(this.instance, { mode: "goto", allowSprintNow: true, parkour: true, canDig: canDigRoute, canOpenDoors: true, allowPlace: canPlaceRoute });
+            bot.pathfinder.setGoal(new goals.GoalNear(vantage.x, vantage.y, vantage.z, 1), true);
+            lastProgressAt = now;
+            noPathSince = 0;
+            await sleep(150);
+            continue;
+          }
         }
 
         const moved = bot.entity.position.distanceTo(lastBotPos);
@@ -2010,6 +2057,14 @@ getRuntime(): CombatRuntime {
         const noPathFor = noPathSince ? now - noPathSince : 0;
 
         if (!routeRetried && (stalledFor >= APPROACH_STALL_RETRY_MS || noPathFor >= 1_500)) {
+          if (await tryOpenNearbyDoor(this.instance)) {
+            ensureMovement(this.instance, { mode: "goto", allowSprintNow: true, parkour: true, canDig: canDigRoute, canOpenDoors: true, allowPlace: canPlaceRoute });
+            setFollowGoal(live);
+            lastProgressAt = now;
+            noPathSince = 0;
+            await sleep(220);
+            continue;
+          }
           routeRetried = true;
           lastProgressAt = now;
           noPathSince = 0;
@@ -2017,8 +2072,9 @@ getRuntime(): CombatRuntime {
             mode: "goto",
             allowSprintNow: true,
             parkour: true,
-            canDig: true,
-            allowPlace: false
+            canDig: canDigRoute,
+            canOpenDoors: true,
+            allowPlace: canPlaceRoute
           });
           setFollowGoal(live);
           this.log().debug("Combat path recalculated", labelEntity(live));

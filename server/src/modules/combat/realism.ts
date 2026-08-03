@@ -29,55 +29,46 @@ export function inMeleeRange(bot: Bot, entity: Entity, reach: number): boolean {
   return distanceEyeToEntity(bot, entity) <= Math.max(1, reach);
 }
 
-/**
- * D3: line-of-sight via world raycast. If a solid block is closer than the target, blocked.
- * Returns true when clear (or raycast unavailable — fail open only when no world).
- */
-export function hasLineOfSight(bot: Bot, entity: Entity): boolean {
-  const from = eyePos(bot);
-  const to = aimPoint(entity);
+/** D3: collision-shape-aware ray test. Glass panes, full glass and closed doors block hits. */
+function clearRay(bot: Bot, from: Vec3, to: Vec3): boolean {
   const dist = from.distanceTo(to);
-  if (dist < 0.15) return true;
-
-  const dx = (to.x - from.x) / dist;
-  const dy = (to.y - from.y) / dist;
-  const dz = (to.z - from.z) / dist;
-
-  const world = bot.world as unknown as {
-    raycast?: (origin: Vec3, direction: Vec3, maxDistance: number) => { position?: Vec3 } | null;
-  };
-
-  if (typeof world.raycast !== "function") {
-    // Fallback: sample blocks along the ray
-    const steps = Math.ceil(dist * 2);
-    for (let i = 1; i < steps; i++) {
-      const t = (i / steps) * dist;
-      const bx = from.x + dx * t;
-      const by = from.y + dy * t;
-      const bz = from.z + dz * t;
-      const block = bot.blockAt(from.offset(dx * t, dy * t, dz * t));
-      if (block && block.boundingBox === "block") {
-        // ignore if sample is past/inside target hitbox volume
-        if (t + 0.3 < dist) return false;
-      }
-      void bx;
-      void by;
-      void bz;
+  if (dist < 0.12) return true;
+  const steps = Math.max(2, Math.ceil(dist / 0.075));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const point = from.offset((to.x - from.x) * t, (to.y - from.y) * t, (to.z - from.z) * t);
+    const block = bot.blockAt(point);
+    if (!block) continue;
+    const shapes = (block as unknown as { shapes?: number[][] }).shapes ?? [];
+    if (shapes.length > 0) {
+      const lx = point.x - block.position.x;
+      const ly = point.y - block.position.y;
+      const lz = point.z - block.position.z;
+      const inside = shapes.some((shape) => {
+        if (!Array.isArray(shape) || shape.length < 6) return false;
+        const [minX, minY, minZ, maxX, maxY, maxZ] = shape;
+        const epsilon = 0.012;
+        return lx > minX + epsilon && lx < maxX - epsilon
+          && ly > minY + epsilon && ly < maxY - epsilon
+          && lz > minZ + epsilon && lz < maxZ - epsilon;
+      });
+      if (inside) return false;
+      continue;
     }
-    return true;
+    if (block.boundingBox === "block") return false;
   }
+  return true;
+}
 
-  // direction as unit vector — mineflayer/prismarine-world expects Vec3-like
-  const dir = from.offset(dx, dy, dz).minus(from);
-  try {
-    const hit = world.raycast(from, dir.normalize ? dir.normalize() : dir, dist - 0.2);
-    if (!hit) return true;
-    const hitPos = (hit as { position?: Vec3 }).position;
-    if (!hitPos) return true;
-    return from.distanceTo(hitPos) + 0.25 >= dist;
-  } catch {
-    return true;
-  }
+export function hasLineOfSightFrom(bot: Bot, from: Vec3, entity: Entity): boolean {
+  const h = Math.max(0.6, entity.height ?? 1.8);
+  const upper = entity.position.offset(0, h * 0.82, 0);
+  const chest = entity.position.offset(0, h * 0.58, 0);
+  return clearRay(bot, from, upper) || clearRay(bot, from, chest);
+}
+
+export function hasLineOfSight(bot: Bot, entity: Entity): boolean {
+  return hasLineOfSightFrom(bot, eyePos(bot), entity);
 }
 
 function normalizeAngle(a: number): number {

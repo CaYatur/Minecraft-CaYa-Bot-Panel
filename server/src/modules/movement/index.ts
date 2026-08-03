@@ -56,6 +56,8 @@ export interface EnsureMovementOpts {
   parkour?: boolean;
   /** takip for canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
   canDig?: boolean;
+  /** kapı ve çit kapılarını kırmak yerine aç */
+  canOpenDoors?: boolean;
   /** blok place (scaffold). Takipte varsayılan KAPALI — merdiven/parkurda
    *  konan blok botu sıkıştırıyor ve haritayı bozuyordu. */
   allowPlace?: boolean;
@@ -73,6 +75,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
+  const registry = bot.registry;
 
   const digDefault = opts?.mode === "follow" ? false : Boolean(cfg.canDig);
   movements.canDig = opts?.canDig !== undefined ? opts.canDig : digDefault;
@@ -83,8 +86,20 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   movements.allow1by1towers = Boolean(cfg.allowTower);
   // DOĞRU özellik adı maxDropDown'dur ("maxDrop" pathfinder'da YOK — eski kod sessizce no-op'tu)
   movements.maxDropDown = Math.max(2, Math.min(6, cfg.maxDrop ?? 4));
+  const canOpenDoors = opts?.canOpenDoors !== false;
   if ("canOpenDoors" in movements) {
-    (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = true;
+    (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = canOpenDoors;
+  }
+  if (canOpenDoors) {
+    for (const block of registry.blocksArray) {
+      const name = block.name.toLowerCase();
+      const openable = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
+      if (openable) movements.openable.add(block.id);
+    }
+  }
+  if (movements.canDig === false) {
+    for (const block of registry.blocksArray) movements.blocksCantBreak.add(block.id);
+    movements.exclusionAreasBreak.push(() => 100);
   }
 
   // DİKKAT: Movements yapıcısı scafoldingBlocks'u KENDİLİĞİNDEN doldurur (dirt/cobble).
@@ -93,8 +108,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   if (!placeAllowed) {
     movements.scafoldingBlocks = [];
   } else {
-    const registry = (bot as unknown as { registry: { itemsByName: Record<string, { id: number } | undefined> } })
-      .registry;
     const ids = (cfg.scaffoldBlocks ?? [])
       .map((name) => registry?.itemsByName?.[name]?.id)
       .filter((id): id is number => typeof id === "number");
@@ -103,6 +116,43 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
 
   bot.pathfinder.setMovements(movements);
   return bot;
+}
+
+
+export async function tryOpenNearbyDoor(instance: BotInstance, radius = 2.8): Promise<boolean> {
+  const bot = requireBot(instance);
+  const base = bot.entity.position;
+  let best: ReturnType<Bot["blockAt"]> = null;
+  let bestDistance = radius + 0.001;
+  const reach = Math.max(1, Math.ceil(radius));
+  for (let dx = -reach; dx <= reach; dx++) {
+    for (let dz = -reach; dz <= reach; dz++) {
+      for (let dy = -1; dy <= 2; dy++) {
+        const block = bot.blockAt(base.floored().offset(dx, dy, dz));
+        if (!block) continue;
+        const name = block.name.toLowerCase();
+        const isDoor = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
+        if (!isDoor) continue;
+        const props = typeof block.getProperties === "function" ? block.getProperties() as Record<string, unknown> : {};
+        if (props.open === true) continue;
+        const distance = base.distanceTo(block.position.offset(0.5, 0.5, 0.5));
+        if (distance < bestDistance) {
+          best = block;
+          bestDistance = distance;
+        }
+      }
+    }
+  }
+  if (!best) return false;
+  try {
+    bot.pathfinder.setGoal(null);
+    await bot.lookAt(best.position.offset(0.5, 0.5, 0.5), false);
+    await bot.activateBlock(best);
+    await sleep(180);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- merdiven atlayış asisti (takip) ----------------------------------------------
@@ -466,10 +516,12 @@ export async function runFollow(
   const enableScaffoldForStuck = (bot: Bot) => {
     ensureMovement(instance, {
       mode: "follow",
-      canDig: false,
-      allowPlace: true,
+      canDig: movementPolicy?.canDig ?? false,
+      canOpenDoors: true,
+      allowPlace: movementPolicy?.allowPlace === false ? false : true,
       parkour: moveCfg(instance).allowParkour !== false
     });
+    if (movementPolicy?.allowPlace === false) return false;
     // sadece sıkışınca: basamak/kule koyabilsin (sürekli açık değil)
     try {
       const mov = (bot.pathfinder as unknown as { movements?: Movements }).movements;
@@ -479,11 +531,12 @@ export async function runFollow(
     } catch {
       /* */
     }
+    return true;
   };
 
   const restoreFollowMovement = () => {
     // normal follow: place kapalı (merdivende rastgele blok spam olmasın)
-    ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, allowPlace: movementPolicy?.allowPlace ?? false });
+    ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, canOpenDoors: true, allowPlace: movementPolicy?.allowPlace ?? false });
   };
 
   try {
@@ -521,10 +574,20 @@ export async function runFollow(
         lastNoPathAt = Date.now();
         const live = bot.players[playerName]?.entity;
         if (!live || !bot.entity) return;
-        // yol yok → blok koyarak path dene (sadece takip takılınca)
-        throttledReport(`follow: ${playerName} · no path — bridging…`);
-        enableScaffoldForStuck(bot);
-        scaffoldUntil = Date.now() + 20_000;
+        void (async () => {
+          if (await tryOpenNearbyDoor(instance)) {
+            throttledReport(`follow: ${playerName} · door opened`);
+            restoreFollowMovement();
+            try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
+            return;
+          }
+          if (enableScaffoldForStuck(bot)) {
+            throttledReport(`follow: ${playerName} · no path — bridging…`);
+            scaffoldUntil = Date.now() + 20_000;
+          } else {
+            throttledReport(`follow: ${playerName} · no reachable natural path`);
+          }
+        })();
         try {
           bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
         } catch {
@@ -589,10 +652,17 @@ export async function runFollow(
                 /* */
               }
             } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
-              // 2. takılma + merdiven değil → scaffold ile yol aç
-              throttledReport(`follow: ${playerName} · stuck — bridging…`);
-              enableScaffoldForStuck(bot);
-              scaffoldUntil = Date.now() + 25_000;
+              const openedDoor = await tryOpenNearbyDoor(instance);
+              if (openedDoor) {
+                throttledReport(`follow: ${playerName} · door opened`);
+                restoreFollowMovement();
+                consecutiveStucks = 0;
+              } else if (enableScaffoldForStuck(bot)) {
+                throttledReport(`follow: ${playerName} · stuck — bridging…`);
+                scaffoldUntil = Date.now() + 25_000;
+              } else {
+                throttledReport(`follow: ${playerName} · inaccessible point skipped`);
+              }
               try {
                 bot.pathfinder.setGoal(null);
               } catch {
