@@ -693,6 +693,8 @@ export const en: MessageTree = {
     scanRange: "Scan range (blocks)",
     fleeHealth: "Flee health threshold",
     chaseDistance: "Chase distance",
+    allowBlockBreak: "Break blocks in combat",
+    allowBlockPlace: "Place blocks in combat",
     cleaveTitle: "Cleave · while locked on",
     cleaveOn: "on",
     cleaveOff: "off",

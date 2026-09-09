@@ -1,6 +1,6 @@
 import type { Bot } from "mineflayer";
 import type { Entity } from "prismarine-entity";
-import type { Vec3 } from "vec3";
+import { Vec3 } from "vec3";
 import type { CombatConfig } from "../../types";
 import type { TaskToken } from "../../core/TaskQueue";
 import { cooldownMsForWeapon } from "./weapons";
@@ -29,46 +29,43 @@ export function inMeleeRange(bot: Bot, entity: Entity, reach: number): boolean {
   return distanceEyeToEntity(bot, entity) <= Math.max(1, reach);
 }
 
-/** D3: collision-shape-aware ray test. Glass panes, full glass and closed doors block hits. */
+/**
+ * D3: voxel raycast (prismarine-world Amanatides–Woo + block.shapes).
+ * Point sampling misses 0.125-thick panes (issue #8). A hit before the
+ * entity means the swing is blocked.
+ */
 function clearRay(bot: Bot, from: Vec3, to: Vec3): boolean {
   const dist = from.distanceTo(to);
   if (dist < 0.12) return true;
-  const steps = Math.max(2, Math.ceil(dist / 0.075));
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const point = from.offset((to.x - from.x) * t, (to.y - from.y) * t, (to.z - from.z) * t);
-    const block = bot.blockAt(point);
-    if (!block) continue;
-    const shapes = (block as unknown as { shapes?: number[][] }).shapes ?? [];
-    if (shapes.length > 0) {
-      const lx = point.x - block.position.x;
-      const ly = point.y - block.position.y;
-      const lz = point.z - block.position.z;
-      const inside = shapes.some((shape) => {
-        if (!Array.isArray(shape) || shape.length < 6) return false;
-        const [minX, minY, minZ, maxX, maxY, maxZ] = shape;
-        const epsilon = 0.012;
-        return lx > minX + epsilon && lx < maxX - epsilon
-          && ly > minY + epsilon && ly < maxY - epsilon
-          && lz > minZ + epsilon && lz < maxZ - epsilon;
-      });
-      if (inside) return false;
-      continue;
-    }
-    if (block.boundingBox === "block") return false;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const dir = new Vec3(dx / dist, dy / dist, dz / dist);
+  const world = bot.world as unknown as {
+    raycast?: (origin: Vec3, direction: Vec3, maxDistance: number) => { position?: Vec3 } | null;
+  };
+  if (typeof world.raycast !== "function") return true;
+  try {
+    const hit = world.raycast(from, dir, Math.max(0.05, dist - 0.2));
+    if (!hit) return true;
+    const hitPos = hit.position;
+    if (!hitPos) return true;
+    return from.distanceTo(hitPos) + 0.25 >= dist;
+  } catch {
+    return true;
   }
-  return true;
 }
 
 export function hasLineOfSightFrom(bot: Bot, from: Vec3, entity: Entity): boolean {
   const h = Math.max(0.6, entity.height ?? 1.8);
   const upper = entity.position.offset(0, h * 0.82, 0);
   const chest = entity.position.offset(0, h * 0.58, 0);
-  return clearRay(bot, from, upper) || clearRay(bot, from, chest);
+  // Both rays must be clear — one grazing a pane edge is not a legal swing.
+  return clearRay(bot, from, upper) && clearRay(bot, from, chest);
 }
 
 export function hasLineOfSight(bot: Bot, entity: Entity): boolean {
-  return hasLineOfSightFrom(bot, eyePos(bot), entity);
+  return clearRay(bot, eyePos(bot), aimPoint(entity));
 }
 
 function normalizeAngle(a: number): number {

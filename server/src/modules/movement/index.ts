@@ -3,7 +3,7 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
-import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
+import { isTokenAborted, type TaskToken, type ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
 import { installWaterMovementAssist } from "./water";
@@ -96,6 +96,34 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
       const openable = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
       if (openable) movements.openable.add(block.id);
     }
+    // Pathfinder always safeOrBreaks the HEAD cell (upper door half) before
+    // useOne on the feet cell. Without this, canDig=false yields no path and
+    // canDig=true queues the door to be broken (issue #11 / Mindcraft patch).
+    const origSafe = (movements as unknown as { safeOrBreak: (block: { name?: string }, toBreak?: unknown[]) => number })
+      .safeOrBreak.bind(movements);
+    (movements as unknown as { safeOrBreak: (block: { name?: string }, toBreak?: unknown[]) => number }).safeOrBreak = (
+      block,
+      toBreak
+    ) => {
+      if (isWoodenOpenableBlock(block)) return 0;
+      return origSafe(block, toBreak);
+    };
+    const origForward = movements.getMoveForward.bind(movements);
+    movements.getMoveForward = (node, dir, neighbors) => {
+      const before = neighbors.length;
+      origForward(node, dir, neighbors);
+      for (let i = before; i < neighbors.length; i++) {
+        const move = neighbors[i] as { toPlace?: Array<{ x: number; y: number; z: number; useOne?: boolean }> };
+        if (!move.toPlace?.length) continue;
+        move.toPlace = move.toPlace.filter((p) => {
+          if (!p.useOne) return true;
+          const b = bot.blockAt(new Vec3(p.x, p.y, p.z));
+          if (!b) return true;
+          const props = typeof b.getProperties === "function" ? (b.getProperties() as Record<string, unknown>) : {};
+          return props.open !== true;
+        });
+      }
+    };
   }
   if (movements.canDig === false) {
     for (const block of registry.blocksArray) movements.blocksCantBreak.add(block.id);
@@ -115,7 +143,28 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   }
 
   bot.pathfinder.setMovements(movements);
+  try {
+    const pf = bot.pathfinder as unknown as { thinkTimeout?: number };
+    pf.thinkTimeout = movements.canDig ? 5_000 : 15_000;
+  } catch {
+    /* */
+  }
   return bot;
+}
+
+function isWoodenOpenableBlock(block: { name?: string } | null | undefined): boolean {
+  const name = String(block?.name ?? "").toLowerCase();
+  if (!name || name.includes("iron_")) return false;
+  return name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor");
+}
+
+function resolveDoorActivateTarget(bot: Bot, block: NonNullable<ReturnType<Bot["blockAt"]>>): NonNullable<ReturnType<Bot["blockAt"]>> {
+  const props = typeof block.getProperties === "function" ? (block.getProperties() as Record<string, unknown>) : {};
+  if (props.half === "upper") {
+    const lower = bot.blockAt(block.position.offset(0, -1, 0));
+    if (lower && isWoodenOpenableBlock(lower)) return lower;
+  }
+  return block;
 }
 
 
@@ -133,11 +182,12 @@ export async function tryOpenNearbyDoor(instance: BotInstance, radius = 2.8): Pr
         const name = block.name.toLowerCase();
         const isDoor = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
         if (!isDoor) continue;
-        const props = typeof block.getProperties === "function" ? block.getProperties() as Record<string, unknown> : {};
+        const target = resolveDoorActivateTarget(bot, block);
+        const props = typeof target.getProperties === "function" ? target.getProperties() as Record<string, unknown> : {};
         if (props.open === true) continue;
-        const distance = base.distanceTo(block.position.offset(0.5, 0.5, 0.5));
+        const distance = base.distanceTo(target.position.offset(0.5, 0.5, 0.5));
         if (distance < bestDistance) {
-          best = block;
+          best = target;
           bestDistance = distance;
         }
       }
@@ -256,6 +306,7 @@ function pathfinderGoal(
 ): Promise<void> {
   const bot = requireBot(instance);
   const timeoutMs = opts?.timeoutMs ?? GOTO_TIMEOUT_MS;
+  const epoch = instance.controlEpoch;
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -299,7 +350,7 @@ function pathfinderGoal(
 
     const watch = setInterval(() => {
       if (settled) return;
-      if (token.cancelled) {
+      if (isTokenAborted(token) || instance.controlEpoch !== epoch) {
         finish(() => {
           stopGoal();
           reject(new Error(token.reason ?? "Task cancelled."));
@@ -597,7 +648,8 @@ export async function runFollow(
       bot.on("path_update", onPath);
 
       try {
-        while (!token.cancelled && instance.status === "online") {
+        const followEpoch = instance.controlEpoch;
+        while (!isTokenAborted(token) && instance.controlEpoch === followEpoch && instance.status === "online") {
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
             clearGoal(bot);
             throw new Error("Bot died — follow stopped.");

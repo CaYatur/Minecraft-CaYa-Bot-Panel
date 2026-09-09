@@ -30,6 +30,8 @@ export interface BotConfig {
     jumpCrit: boolean;
     fleeAtHealth: number;
     chaseDistance: number;
+    allowBlockBreak?: boolean;
+    allowBlockPlace?: boolean;
     /** hedefe kilitliyken yakın tehditlere ara vuruş */
     cleaveNearby?: boolean;
     cleaveRange?: number;

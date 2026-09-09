@@ -222,8 +222,8 @@ export class BuildService {
   /**
    * Keep freezing while the build runner is still stuck inside dig/pathNear.
    * Stops as soon as runnerActive clears or a new run arms the gate (freezeEpoch).
-   * issue #4: 4sn'de kesilen nabız yetmiyordu — runner asılı kaldığı sürece
-   * (60sn tavan) periyodik devam eder ki zombi pathfinder botu geri kapamasın.
+   * issue #4 leftover: a few residual pulses while the runner is still inside
+   * dig/pathNear. Capped at 2s so it cannot fight a new task (issue #14).
    */
   private scheduleReFreeze() {
     const epoch = ++this.freezeEpoch;
@@ -238,7 +238,8 @@ export class BuildService {
         if (!this.runnerActive && delayMs > 250) return;
         this.freezeBot();
         const next = delayMs < 800 ? Math.min(800, delayMs * 2) : 800;
-        if (Date.now() - startedAt < 60_000) pulse(next);
+        // Residual pulses only — a 60s freeze fight with the next task is issue #14.
+        if (Date.now() - startedAt < 2_000) pulse(next);
       }, delayMs);
     };
     pulse(50); // 50 → 100 → 200 → 400 → 800 → 800… (tek zincir)

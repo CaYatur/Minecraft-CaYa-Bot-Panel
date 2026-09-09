@@ -693,6 +693,8 @@ export const tr: MessageTree = {
     scanRange: "Tarama menzili (blok)",
     fleeHealth: "Kaçış can eşiği",
     chaseDistance: "Kovalama mesafesi",
+    allowBlockBreak: "Dövüşte blok kır",
+    allowBlockPlace: "Dövüşte blok koy",
     cleaveTitle: "Ara vuruş · kenetlenmişken",
     cleaveOn: "açık",
     cleaveOff: "kapalı",

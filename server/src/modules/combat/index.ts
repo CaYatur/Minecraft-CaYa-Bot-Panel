@@ -2,7 +2,7 @@ import type { Bot } from "mineflayer";
 import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
-import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
+import { isTokenAborted, PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
 import { goals } from "mineflayer-pathfinder";
 import { ensureMovement, runFollow, runGoto, stopMovement, tryOpenNearbyDoor } from "../movement";
@@ -1058,6 +1058,7 @@ getRuntime(): CombatRuntime {
    */
   private protectTick() {
     if (this.deadPaused) return;
+    if (Date.now() < this.companionPathPausedUntil) return;
     if (!this.hasProtect() || this.instance.status !== "online") return;
     const bot = this.bot ?? this.instance.bot;
     if (!bot?.entity) return;
@@ -1956,8 +1957,12 @@ getRuntime(): CombatRuntime {
     const hunterCfg = this.cfg().hunter;
     const hunterActive = Boolean(hunterCfg?.enabled);
     const chaseLimit = Math.max(12, hunterActive ? (hunterCfg?.chaseDistance ?? 128) : (Number(this.cfg().chaseDistance) || 24));
-    const canDigRoute = hunterActive ? Boolean(hunterCfg?.allowBlockBreak) : true;
-    const canPlaceRoute = hunterActive ? Boolean(hunterCfg?.allowBlockPlace) : false;
+    const canDigRoute = hunterActive
+      ? Boolean(hunterCfg?.allowBlockBreak)
+      : Boolean(this.cfg().allowBlockBreak);
+    const canPlaceRoute = hunterActive
+      ? Boolean(hunterCfg?.allowBlockPlace)
+      : Boolean(this.cfg().allowBlockPlace);
     let tracked: Entity =
       (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
     let lastBotPos = bot.entity.position.clone();
@@ -1980,9 +1985,10 @@ getRuntime(): CombatRuntime {
       const status = String(result?.status ?? "");
       if (status === "noPath" || status === "timeout") {
         if (!noPathSince) noPathSince = Date.now();
-      } else if (status === "success" || status === "partial") {
+      } else if (status === "success") {
         noPathSince = 0;
       }
+      // `partial` is in-progress A* (issue #10) — do not treat as a valid path.
     };
 
     try {
@@ -2000,8 +2006,9 @@ getRuntime(): CombatRuntime {
       bot.on("path_update", onPathUpdate);
       setFollowGoal(tracked);
       const startedAt = Date.now();
+      const approachEpoch = this.instance.controlEpoch;
 
-      while (!token.cancelled && !this.deadPaused && Date.now() - startedAt < 15_000) {
+      while (!isTokenAborted(token) && !this.deadPaused && this.instance.controlEpoch === approachEpoch && Date.now() - startedAt < 15_000) {
         if ((bot.health ?? 0) <= 0 || !bot.entity) break;
 
         const live = typeof entity.id === "number" ? bot.entities[entity.id] : tracked;

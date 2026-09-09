@@ -21,6 +21,27 @@ export const PRIORITY = {
 export interface TaskToken {
   cancelled: boolean;
   reason?: string;
+  /** Aborted on cancel/detach so in-flight runners can stop even if they miss `cancelled`. */
+  abort?: AbortController;
+}
+
+export function isTokenAborted(token: TaskToken | null | undefined): boolean {
+  if (!token) return false;
+  return token.cancelled || Boolean(token.abort?.signal.aborted);
+}
+
+export function abortToken(token: TaskToken, reason: string): void {
+  token.cancelled = true;
+  token.reason = reason;
+  try {
+    if (token.abort && !token.abort.signal.aborted) token.abort.abort(reason);
+  } catch {
+    /* already aborted */
+  }
+}
+
+function freshToken(): TaskToken {
+  return { cancelled: false, abort: new AbortController() };
 }
 
 export type ProgressFn = (p: { done: number; total: number; label?: string }) => void;
@@ -73,7 +94,7 @@ export class TaskQueue extends EventEmitter {
       seq: this.seq++,
       def,
       state: "queued",
-      token: { cancelled: false },
+      token: freshToken(),
       makeRunner
     };
     this.queue.push(task);
@@ -96,9 +117,9 @@ export class TaskQueue extends EventEmitter {
   cancel(id: string, reason = "cancelled"): boolean {
     const cur = this.current;
     if (cur && cur.id === id) {
-      cur.token.cancelled = true;
-      cur.token.reason = reason;
+      abortToken(cur.token, reason);
       this.armForceDetach(cur);
+      this.emit("taskAbort", this.summarize(cur), reason);
       return true;
     }
     const idx = this.queue.findIndex((t) => t.id === id);
@@ -120,12 +141,13 @@ export class TaskQueue extends EventEmitter {
     this.queue = [];
     const cur = this.current;
     if (cur) {
-      cur.token.cancelled = true;
-      cur.token.reason = reason;
+      abortToken(cur.token, reason);
       this.armForceDetach(cur);
+      this.emit("taskAbort", this.summarize(cur), reason);
     }
     // pause ile kilitlenmiş kuyruk bug'ı: reset/stop sonrası held açık kalsın
     this.held = false;
+    this.emit("queueCleared", reason);
     this.emitUpdate();
   }
 
@@ -152,16 +174,16 @@ export class TaskQueue extends EventEmitter {
     if (!cur && this.queue.length === 0) return false;
     this.held = true;
     if (cur) {
-      cur.token.cancelled = true;
-      cur.token.reason = reason;
+      abortToken(cur.token, reason);
       this.armForceDetach(cur);
+      this.emit("taskAbort", this.summarize(cur), reason);
       if (cur.def.requeueOnPreempt !== false) {
         const clone: InternalTask = {
           id: newId(),
           seq: -1, // front of same priority
           def: cur.def,
           state: "queued",
-          token: { cancelled: false },
+          token: freshToken(),
           makeRunner: cur.makeRunner
         };
         this.queue.unshift(clone);
@@ -197,9 +219,9 @@ export class TaskQueue extends EventEmitter {
   }
 
   private preempt(cur: InternalTask, reason: string) {
-    cur.token.cancelled = true;
-    cur.token.reason = reason;
+    abortToken(cur.token, reason);
     this.armForceDetach(cur);
+    this.emit("taskAbort", this.summarize(cur), reason);
     if (cur.def.requeueOnPreempt !== false) {
       // aynı def yeni görev olarak kuyruğa geri girer (öncelik sırasına göre yerleşir)
       const clone: InternalTask = {
@@ -207,7 +229,7 @@ export class TaskQueue extends EventEmitter {
         seq: this.seq++,
         def: cur.def,
         state: "queued",
-        token: { cancelled: false },
+        token: freshToken(),
         makeRunner: cur.makeRunner
       };
       this.queue.push(clone);
@@ -260,9 +282,11 @@ export class TaskQueue extends EventEmitter {
         if (outcome === "detached") {
           task.state = "cancelled";
           task.error = task.token.reason ?? "force-detached (runner hung)";
+          abortToken(task.token, task.error);
           // geç de olsa biterse sonucu yok say — görev çoktan tarihe yazıldı
           void runPromise.catch(() => {});
           this.emit("taskDetached", this.summarize(task));
+          this.emit("taskAbort", this.summarize(task), task.error);
         } else if (outcome === "error") {
           task.state = task.token.cancelled ? "cancelled" : "failed";
         } else {

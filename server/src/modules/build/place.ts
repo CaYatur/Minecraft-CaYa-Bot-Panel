@@ -3,7 +3,7 @@ import type { Block } from "prismarine-block";
 import type { Vec3 } from "vec3";
 import { goals } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
-import type { TaskToken } from "../../core/TaskQueue";
+import { isTokenAborted, type TaskToken } from "../../core/TaskQueue";
 import { ensureMovement } from "../movement";
 import {
   dist3,
@@ -105,16 +105,35 @@ export function forceStopPath(bot: Bot) {
  * Paper 1.21.x'te yanıtsız kalan placeBlock/equip await'leri runner'ı sonsuza
  * dek asıyordu (issue #4) — hiçbir sunucu işlemi sınırsız beklenemez.
  */
-export async function boundedOp<T>(p: Promise<T>, token: TaskToken | null, ms: number, what: string): Promise<T> {
+export async function boundedOp<T>(
+  p: Promise<T>,
+  token: TaskToken | null,
+  ms: number,
+  what: string,
+  onKill?: () => void
+): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
   let poll: NodeJS.Timeout | null = null;
+  const runKill = () => {
+    try {
+      onKill?.();
+    } catch {
+      /* */
+    }
+  };
   try {
     return await new Promise<T>((resolve, reject) => {
       p.then(resolve, reject);
-      timer = setTimeout(() => reject(new Error(`${what} timed out (${ms}ms)`)), ms);
+      timer = setTimeout(() => {
+        runKill();
+        reject(new Error(`${what} timed out (${ms}ms)`));
+      }, ms);
       if (token) {
         poll = setInterval(() => {
-          if (token.cancelled) reject(new Error(token.reason ?? "cancelled"));
+          if (isTokenAborted(token)) {
+            runKill();
+            reject(new Error(token.reason ?? "cancelled"));
+          }
         }, 100);
       }
     });
@@ -134,7 +153,18 @@ function equipSafe(bot: Bot, item: Parameters<Bot["equip"]>[0], token: TaskToken
 }
 
 function placeSafe(bot: Bot, refBlock: Block, face: Vec3, token: TaskToken | null): Promise<void> {
-  return boundedOp(bot.placeBlock(refBlock, face), token, PLACE_TIMEOUT_MS, "placeBlock");
+  return boundedOp(bot.placeBlock(refBlock, face), token, PLACE_TIMEOUT_MS, "placeBlock", () => {
+    try {
+      bot.pathfinder?.setGoal(null);
+    } catch {
+      /* */
+    }
+    try {
+      bot.clearControlStates();
+    } catch {
+      /* */
+    }
+  });
 }
 
 /**
