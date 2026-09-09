@@ -90,9 +90,17 @@ function centerDoorPathNodes(bot: Bot, path: Array<{ x: number; y: number; z: nu
     const z = Math.floor(node.z);
     const here = bot.blockAt(new Vec3(x, y, z));
     const below = bot.blockAt(new Vec3(x, y - 1, z));
-    if (!isWoodenOpenableBlock(here) && !isWoodenOpenableBlock(below)) continue;
-    node.x = x + 0.5;
-    node.z = z + 0.5;
+    // getPositionOnTopOf puts Y on top of the 1-high door AABB → bot jumps.
+    // Stand in the doorway cell, not on the door.
+    if (isWoodenOpenableBlock(here)) {
+      node.x = x + 0.5;
+      node.y = y;
+      node.z = z + 0.5;
+    } else if (isWoodenOpenableBlock(below)) {
+      node.x = x + 0.5;
+      node.y = y - 1;
+      node.z = z + 0.5;
+    }
   }
 }
 
