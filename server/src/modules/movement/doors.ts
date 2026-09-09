@@ -29,6 +29,12 @@ export function isWoodenOpenableBlock(block: { name?: string } | null | undefine
   return name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor");
 }
 
+function isDoorOrGateBlock(block: { name?: string } | null | undefined): boolean {
+  const name = String(block?.name ?? "").toLowerCase();
+  if (!name || name.includes("iron_")) return false;
+  return name.endsWith("_door") || name.endsWith("_fence_gate");
+}
+
 function propsOf(block: { getProperties?: () => unknown; _properties?: Record<string, unknown> }): Record<string, unknown> {
   if (block._properties && typeof block._properties === "object") return block._properties;
   if (typeof block.getProperties === "function") {
@@ -53,11 +59,12 @@ export function resolveDoorActivateTarget(bot: Bot, block: NonNullable<ReturnTyp
 function findNearbyDoor(
   bot: Bot,
   radius: number,
-  opts?: { includeOpen?: boolean }
+  opts?: { includeOpen?: boolean; doorsAndGatesOnly?: boolean }
 ): NonNullable<ReturnType<Bot["blockAt"]>> | null {
   const base = bot.entity?.position;
   if (!base) return null;
   const includeOpen = opts?.includeOpen !== false;
+  const match = opts?.doorsAndGatesOnly ? isDoorOrGateBlock : isWoodenOpenableBlock;
   let best: NonNullable<ReturnType<Bot["blockAt"]>> | null = null;
   let bestDistance = radius + 0.001;
   const reach = Math.max(1, Math.ceil(radius));
@@ -66,7 +73,7 @@ function findNearbyDoor(
     for (let dz = -reach; dz <= reach; dz++) {
       for (let dy = -1; dy <= 2; dy++) {
         const block = bot.blockAt(origin.offset(dx, dy, dz));
-        if (!block || !isWoodenOpenableBlock(block)) continue;
+        if (!block || !match(block)) continue;
         const target = resolveDoorActivateTarget(bot, block);
         const props = propsOf(target);
         if (!includeOpen && props.open === true) continue;
@@ -91,18 +98,33 @@ function centerDoorPathNodes(bot: Bot, path: Array<{ x: number; y: number; z: nu
     const z = Math.floor(node.z);
     const here = bot.blockAt(new Vec3(x, y, z));
     const below = bot.blockAt(new Vec3(x, y - 1, z));
-    // getPositionOnTopOf puts Y on top of the 1-high door AABB → bot jumps.
-    // Stand in the doorway cell, not on the door.
-    if (isWoodenOpenableBlock(here)) {
-      node.x = x + 0.5;
-      node.y = y;
-      node.z = z + 0.5;
-    } else if (isWoodenOpenableBlock(below)) {
-      node.x = x + 0.5;
-      node.y = y - 1;
-      node.z = z + 0.5;
+    // getPositionOnTopOf parks on the 1-high door AABB (Y = door+1 / upper half).
+    // Always stand in the lower door cell or the bot jumps into the doorway.
+    const door = isDoorOrGateBlock(here) ? here : isDoorOrGateBlock(below) ? below : null;
+    if (!door) continue;
+    const feet = resolveDoorActivateTarget(bot, door);
+    node.x = feet.position.x + 0.5;
+    node.y = feet.position.y;
+    node.z = feet.position.z + 0.5;
+  }
+}
+
+function doorAheadOf(bot: Bot, dist = 3.2): NonNullable<ReturnType<Bot["blockAt"]>> | null {
+  const entity = bot.entity;
+  if (!entity) return null;
+  const yaw = entity.yaw;
+  const ux = -Math.sin(yaw);
+  const uz = -Math.cos(yaw);
+  const py = Math.floor(entity.position.y);
+  for (let t = 0; t <= dist; t += 0.5) {
+    const x = Math.floor(entity.position.x + ux * t);
+    const z = Math.floor(entity.position.z + uz * t);
+    for (const dy of [0, 1, -1]) {
+      const block = bot.blockAt(new Vec3(x, py + dy, z));
+      if (block && isDoorOrGateBlock(block)) return resolveDoorActivateTarget(bot, block);
     }
   }
+  return null;
 }
 
 function pathfinderHasGoal(bot: Bot): boolean {
@@ -122,9 +144,13 @@ export function installDoorMovementAssist(bot: Bot): void {
   let lastProgressAt = Date.now();
   let lastActivateAt = 0;
   let nudging = false;
+  let lastPath: Array<{ x: number; y: number; z: number }> | null = null;
 
   const onPathUpdate = (results: { path?: Array<{ x: number; y: number; z: number }> }) => {
-    if (results?.path) centerDoorPathNodes(bot, results.path);
+    if (results?.path) {
+      lastPath = results.path;
+      centerDoorPathNodes(bot, results.path);
+    }
   };
   bot.on("path_update", onPathUpdate);
 
@@ -132,10 +158,19 @@ export function installDoorMovementAssist(bot: Bot): void {
     const entity = bot.entity;
     if (!entity) return;
     const now = Date.now();
-    const doorEarly = findNearbyDoor(bot, 1.85, { includeOpen: true });
-    // Pathfinder jumps on the 1-high door slab. Hold jump down while standing in a doorway,
-    // even during a mistaken parkour lock — real gap jumps are not from inside a door cell.
-    if (doorEarly && entity.onGround && Math.abs(entity.position.y - doorEarly.position.y) < 1.25) {
+    if (lastPath?.length) centerDoorPathNodes(bot, lastPath);
+    const next = lastPath?.[0];
+    const nextDoor =
+      next &&
+      (isDoorOrGateBlock(bot.blockAt(new Vec3(Math.floor(next.x), Math.floor(next.y), Math.floor(next.z)))) ||
+        isDoorOrGateBlock(bot.blockAt(new Vec3(Math.floor(next.x), Math.floor(next.y) - 1, Math.floor(next.z)))));
+    const doorEarly =
+      findNearbyDoor(bot, 3.2, { includeOpen: true, doorsAndGatesOnly: true }) ??
+      doorAheadOf(bot, 3.2) ??
+      (nextDoor ? findNearbyDoor(bot, 4, { includeOpen: true, doorsAndGatesOnly: true }) : null);
+    // Pathfinder jumps 1–3 blocks before the door because the waypoint sits on the slab.
+    // Kill jump on approach and inside the cell; real parkour gaps are not doorways.
+    if (entity.onGround && (nextDoor || (doorEarly && Math.abs(entity.position.y - doorEarly.position.y) < 1.6))) {
       try {
         bot.setControlState("jump", false);
       } catch {
