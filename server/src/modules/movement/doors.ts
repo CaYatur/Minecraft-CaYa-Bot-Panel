@@ -172,6 +172,17 @@ export function installDoorMovementAssist(bot: Bot): void {
       void bot.activateBlock(target).catch(() => {});
     }
 
+    const sameLevel = Math.abs(entity.position.y - target.position.y) < 1.15;
+    // Pathfinder physics.canWalkJump sees the 1-high door slab and jumps.
+    // Always suppress jump in the doorway; do not wait for a stall.
+    if (sameLevel) {
+      try {
+        bot.setControlState("jump", false);
+      } catch {
+        /* */
+      }
+    }
+
     const stalled = now - lastProgressAt >= STALL_MS;
     if (!stalled) return;
 

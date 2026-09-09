@@ -43,6 +43,16 @@ function moveCfg(instance: BotInstance): MovementConfig {
   return instance.config.movement;
 }
 
+/** How far we may drop without dying. Config is a floor; health raises it. */
+function smartMaxDropDown(bot: Bot, cfg: MovementConfig): number {
+  const hp = Math.max(0, bot.health ?? 20);
+  const keepHp = 4; // never plan a fall that leaves us under 2 hearts
+  const affordableDmg = Math.max(0, Math.floor(hp - keepHp));
+  const byHealth = 3 + affordableDmg;
+  const configured = Math.max(2, cfg.maxDrop ?? 3);
+  return Math.max(configured, Math.min(10, byHealth));
+}
+
 /** İnsanî dönüş hızı (°/tick) — sadece DURURKEN yapılan bakışlarda kullanılır */
 function turnSpeed(instance: BotInstance): number {
   const c = moveCfg(instance);
@@ -93,8 +103,9 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // tırmanışı zaten doğal yetenek, ayrı bayrak gerekmez.
   movements.allowParkour = opts?.parkour === true ? true : cfg.allowParkour !== false;
   movements.allow1by1towers = Boolean(cfg.allowTower);
-  // DOĞRU özellik adı maxDropDown'dur ("maxDrop" pathfinder'da YOK — eski kod sessizce no-op'tu)
-  movements.maxDropDown = Math.max(2, Math.min(6, cfg.maxDrop ?? 4));
+  // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
+  // Take the short drop if it will not kill; walk around only when lethal.
+  movements.maxDropDown = smartMaxDropDown(bot, cfg);
   const canOpenDoors = opts?.canOpenDoors !== false;
   if ("canOpenDoors" in movements) {
     (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = canOpenDoors;
