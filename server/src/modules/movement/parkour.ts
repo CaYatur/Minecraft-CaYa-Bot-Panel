@@ -5,6 +5,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
 import { v3 } from "../build/vec3util";
+import { noteJumpFail, noteJumpOk, shouldSkipJump } from "./traverseMemory";
 
 /**
  * Gelişmiş parkur:
@@ -630,6 +631,7 @@ export async function executeGapJump(
     const ly = landing.y;
     const lz = landing.z + 0.5;
     const pos0 = bot.entity.position;
+    const from0 = { x: pos0.x, z: pos0.z };
     const drop = Math.max(0, pos0.y - ly);
     const dx = lx - pos0.x;
     const dz = lz - pos0.z;
@@ -680,6 +682,7 @@ export async function executeGapJump(
 
     clearControls(bot);
     if (fellPast) {
+      noteJumpFail(bot, from0, landing);
       instance.getLogger().info("Parkour jump", "landing missed — abandoned to MLG");
       await yieldFallToMlg(instance, bot, token);
       return false;
@@ -694,9 +697,11 @@ export async function executeGapJump(
       Math.abs(pos.y - ly) < Math.max(1.8, drop + 1.2);
 
     if (landed) {
+      noteJumpOk(bot, from0, landing);
       report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
       instance.getLogger().info(`Parkour jump succeeded`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
     } else {
+      noteJumpFail(bot, from0, landing);
       instance.getLogger().debug("Parkour jump weak landing", `gap=${g} d=${Math.hypot(pos.x - lx, pos.z - lz).toFixed(1)}`);
     }
     return landed;
@@ -787,6 +792,7 @@ export async function tryReplayObservedJump(
     2,
     Math.min(10, Math.round(Math.hypot(jump.to.x - jump.from.x, jump.to.z - jump.from.z)))
   );
+  if (shouldSkipJump(bot, jump.from, jump.to)) return false;
   if (!jumpIsReachable(bot.entity.position.y, { y: ly, gap })) return false;
   instance.getLogger().info("Replay player jump", `gap≈${gap} → ${lx},${ly},${lz}`);
   return executeGapJump(instance, { x: lx, y: ly, z: lz }, gap, token, report);
@@ -815,6 +821,7 @@ export async function tryJumpAcrossToPlayer(
   if (tp.y - pos.y > 2.2) return false;
   const xz = Math.hypot(tp.x - pos.x, tp.z - pos.z);
   if (xz < 2.05 || xz > 10.5) return false;
+  if (shouldSkipJump(bot, pos, tp)) return false;
 
   const land = findGapLanding(bot, tp, 10);
   if (!land) return false;
