@@ -23,7 +23,6 @@ import {
   tryReplayObservedJump,
   type ObservedJump
 } from "./parkour";
-import { applyJumpFailCosts, installTraverseMemory } from "./traverseMemory";
 import { installWaterMovementAssist } from "./water";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
@@ -103,7 +102,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
-  installTraverseMemory(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
@@ -167,8 +165,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // DİKKAT: Movements yapıcısı scafoldingBlocks'u KENDİLİĞİNDEN doldurur (dirt/cobble).
   // Placeme istenmiyorsa listeyi BOŞALTMAK şart — atlamak yetmez.
   const placeAllowed = opts?.allowPlace !== undefined ? opts.allowPlace : opts?.mode !== "follow";
-  applyJumpFailCosts(bot, movements);
-
   if (!placeAllowed) {
     movements.scafoldingBlocks = [];
   } else {
