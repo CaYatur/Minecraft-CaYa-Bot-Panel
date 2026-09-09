@@ -24,7 +24,6 @@ import {
   type ObservedJump
 } from "./parkour";
 import { installWaterMovementAssist } from "./water";
-import { applySensibleMoveCosts, carrotAlong, commitStillValid, goalKeyOf, type RouteCommit } from "./routePick";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
 
@@ -166,8 +165,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // DİKKAT: Movements yapıcısı scafoldingBlocks'u KENDİLİĞİNDEN doldurur (dirt/cobble).
   // Placeme istenmiyorsa listeyi BOŞALTMAK şart — atlamak yetmez.
   const placeAllowed = opts?.allowPlace !== undefined ? opts.allowPlace : opts?.mode !== "follow";
-  applySensibleMoveCosts(movements);
-
   if (!placeAllowed) {
     movements.scafoldingBlocks = [];
   } else {
@@ -609,21 +606,21 @@ export async function runFollow(
       let lastGapAttemptAt = 0;
       let lastApproachScan = 0;
       let approach: { x: number; y: number; z: number } | null = null;
-      const routeRef: { current: RouteCommit | null } = { current: null };
 
       const applyFollowGoal = (ent: Entity, forceApproach = false) => {
-        const botPos = bot.entity?.position;
-        if (!botPos) return;
-        const dy = ent.position.y - botPos.y;
+        const botY = bot.entity?.position.y ?? 0;
+        const dy = ent.position.y - botY;
         if (dy >= 2.5) {
-          routeRef.current = null;
           if (forceApproach || !approach || Date.now() - lastApproachScan > 10_000) {
             lastApproachScan = Date.now();
             approach = findElevatedApproach(bot, ent.position);
           }
           if (approach) {
-            const dAp = Math.hypot(botPos.x - (approach.x + 0.5), botPos.z - (approach.z + 0.5));
-            const yAp = Math.abs(botPos.y - approach.y);
+            const dAp = Math.hypot(
+              (bot.entity?.position.x ?? 0) - (approach.x + 0.5),
+              (bot.entity?.position.z ?? 0) - (approach.z + 0.5)
+            );
+            const yAp = Math.abs((bot.entity?.position.y ?? 0) - approach.y);
             if (dAp < 1.7 && yAp < 1.6) {
               approach = null;
               bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
@@ -635,26 +632,6 @@ export async function runFollow(
         } else {
           approach = null;
         }
-
-        const gpos = { x: ent.position.x, y: ent.position.y, z: ent.position.z };
-        if (forceApproach) routeRef.current = null;
-        if (routeRef.current && commitStillValid(routeRef.current, botPos, gpos)) {
-          const car = carrotAlong(routeRef.current.nodes, botPos, 10);
-          if (car) {
-            routeRef.current.carrot = car;
-            const last = routeRef.current.nodes[routeRef.current.nodes.length - 1]!;
-            const atEnd =
-              Math.hypot(botPos.x - last.x, botPos.y - last.y, botPos.z - last.z) < 2.2;
-            if (atEnd) {
-              routeRef.current = null;
-              bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
-              return;
-            }
-            bot.pathfinder.setGoal(new goals.GoalNear(car.x, car.y, car.z, 1.25), false);
-            return;
-          }
-        }
-        routeRef.current = null;
         bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
       };
 
@@ -664,29 +641,8 @@ export async function runFollow(
         /* */
       }
 
-      const onPath = (result: { status: string; path?: Array<{ x: number; y: number; z: number }> }) => {
-        if (
-          (result.status === "success" || result.status === "partial") &&
-          result.path &&
-          result.path.length > 5 &&
-          tracked
-        ) {
-          const bp = bot.entity?.position;
-          const gp = tracked.position;
-          if (bp && (!routeRef.current || !commitStillValid(routeRef.current, bp, gp))) {
-            const car = carrotAlong(result.path, bp, 10);
-            if (car) {
-              routeRef.current = {
-                nodes: result.path.slice(),
-                carrot: car,
-                setAt: Date.now(),
-                goalKey: goalKeyOf(gp)
-              };
-            }
-          }
-        }
+      const onPath = (result: { status: string }) => {
         if (result.status !== "noPath") return;
-        routeRef.current = null;
         if (isParkourLocked(bot)) return;
         if (Date.now() - lastNoPathAt < 4000) return;
         lastNoPathAt = Date.now();
@@ -805,24 +761,6 @@ export async function runFollow(
               applyFollowGoal(cur);
               await sleep(FOLLOW_TICK_MS);
               continue;
-            }
-          }
-
-          if (routeRef.current && commitStillValid(routeRef.current, pos, { x: cur.position.x, y: cur.position.y, z: cur.position.z })) {
-            const car = carrotAlong(routeRef.current.nodes, pos, 10);
-            if (car) {
-              const g = bot.pathfinder.goal as { x?: number; y?: number; z?: number } | undefined;
-              const same =
-                g &&
-                Math.floor(g.x ?? 9999) === Math.floor(car.x) &&
-                Math.floor(g.z ?? 9999) === Math.floor(car.z);
-              if (!same) {
-                try {
-                  bot.pathfinder.setGoal(new goals.GoalNear(car.x, car.y, car.z, 1.25), false);
-                } catch {
-                  /* */
-                }
-              }
             }
           }
 
