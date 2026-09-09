@@ -35,8 +35,27 @@ export function isWoodenOpenableBlock(block: { name?: string } | null | undefine
 
 function isDoorOrGateBlock(block: { name?: string } | null | undefined): boolean {
   const name = String(block?.name ?? "").toLowerCase();
-  if (!name || name.includes("iron_")) return false;
-  return name.endsWith("_door") || name.endsWith("_fence_gate");
+  if (!name) return false;
+  if (name.endsWith("_fence_gate") && !name.includes("iron_")) return true;
+  return name.endsWith("_door");
+}
+
+function isIronDoorBlock(block: { name?: string } | null | undefined): boolean {
+  const name = String(block?.name ?? "").toLowerCase();
+  return name.endsWith("_door") && name.includes("iron");
+}
+
+function isDoorControlBlock(block: { name?: string } | null | undefined): boolean {
+  const name = String(block?.name ?? "").toLowerCase();
+  if (!name) return false;
+  return name.endsWith("_button") || name === "lever" || name.endsWith("_pressure_plate") || name.includes("pressure_plate");
+}
+
+function controlKind(name: string): "button" | "lever" | "plate" {
+  const n = name.toLowerCase();
+  if (n.includes("pressure_plate")) return "plate";
+  if (n.includes("lever")) return "lever";
+  return "button";
 }
 
 function propsOf(block: { getProperties?: () => unknown; _properties?: Record<string, unknown> }): Record<string, unknown> {
@@ -55,9 +74,43 @@ export function resolveDoorActivateTarget(bot: Bot, block: NonNullable<ReturnTyp
   const props = propsOf(block);
   if (props.half === "upper") {
     const lower = bot.blockAt(block.position.offset(0, -1, 0));
-    if (lower && isWoodenOpenableBlock(lower)) return lower;
+    if (lower && (isWoodenOpenableBlock(lower) || isIronDoorBlock(lower))) return lower;
   }
   return block;
+}
+
+function findDoorControl(
+  bot: Bot,
+  door: { position: { x: number; y: number; z: number }; name?: string }
+): NonNullable<ReturnType<Bot["blockAt"]>> | null {
+  const base = bot.entity?.position;
+  if (!base) return null;
+  const doorOpen = propsOf(door as { getProperties?: () => unknown }).open === true;
+  const doorCenter = new Vec3(door.position.x + 0.5, door.position.y + 0.5, door.position.z + 0.5);
+  let best: NonNullable<ReturnType<Bot["blockAt"]>> | null = null;
+  let bestScore = Infinity;
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      for (let dy = -1; dy <= 2; dy++) {
+        if (Math.abs(dx) + Math.abs(dz) + Math.abs(dy) > 5) continue;
+        const block = bot.blockAt(new Vec3(door.position.x + dx, door.position.y + dy, door.position.z + dz));
+        if (!block || !isDoorControlBlock(block)) continue;
+        const center = block.position.offset(0.5, 0.5, 0.5);
+        const distBot = base.distanceTo(center);
+        if (distBot > 4.5) continue;
+        const kind = controlKind(block.name);
+        const powered = propsOf(block).powered === true;
+        if (kind === "lever" && doorOpen && powered) continue;
+        if (kind === "lever" && !doorOpen && powered) continue;
+        const score = distBot * 1.15 + doorCenter.distanceTo(center) * 0.4 + (kind === "plate" ? 0.7 : 0);
+        if (score < bestScore) {
+          best = block;
+          bestScore = score;
+        }
+      }
+    }
+  }
+  return best;
 }
 
 function findNearbyDoor(
@@ -412,7 +465,7 @@ export function installDoorMovementAssist(bot: Bot): void {
       return;
     }
 
-    const door = findNearbyDoor(bot, 1.6, { includeOpen: true });
+    const door = findNearbyDoor(bot, 1.6, { includeOpen: true, doorsAndGatesOnly: true });
     if (!door) return;
     const live = bot.blockAt(door.position);
     const target = live ? resolveDoorActivateTarget(bot, live) : door;
@@ -430,10 +483,29 @@ export function installDoorMovementAssist(bot: Bot): void {
       return;
     }
     const travel = travelThroughDoor(bot, target, lastPath);
-    if (!isTrap && now - lastActivateAt >= ACTIVATE_COOLDOWN_MS && shouldToggleDoor(bot, target, travel)) {
+    if (!isTrap && !isIronDoorBlock(target) && now - lastActivateAt >= ACTIVATE_COOLDOWN_MS && shouldToggleDoor(bot, target, travel)) {
       lastActivateAt = now;
       noteDoorToggle(bot, target.position, now);
       void bot.activateBlock(target).catch(() => {});
+    }
+    if (isIronDoorBlock(target) && propsOf(target).open !== true && now - lastActivateAt >= 650) {
+      const ctrl = findDoorControl(bot, target);
+      if (ctrl) {
+        lastActivateAt = now;
+        noteDoorToggle(bot, target.position, now);
+        const kind = controlKind(ctrl.name);
+        if (kind === "plate") {
+          try {
+            void bot.lookAt(ctrl.position.offset(0.5, 0.2, 0.5), true);
+            bot.setControlState("forward", true);
+            bot.setControlState("jump", false);
+          } catch {
+            /* */
+          }
+        } else {
+          void bot.activateBlock(ctrl).catch(() => {});
+        }
+      }
     }
 
     const sameLevel = Math.abs(entity.position.y - target.position.y) < 1.15;
@@ -548,10 +620,39 @@ async function walkThroughDoorway(bot: Bot, door: NonNullable<ReturnType<Bot["bl
 export async function tryPassNearbyDoor(instance: BotInstance, radius = 2.8): Promise<boolean> {
   const bot = instance.bot;
   if (!bot || instance.status !== "online" || !bot.entity) return false;
-  const door = findNearbyDoor(bot, radius, { includeOpen: true });
+  const door = findNearbyDoor(bot, radius, { includeOpen: true, doorsAndGatesOnly: true });
   if (!door) return false;
   if (isDoorOnCooldown(bot, door.position) || !doorIsOnTheWay(bot, door)) return false;
   try {
+    if (isIronDoorBlock(door)) {
+      if (propsOf(door).open !== true) {
+        const ctrl = findDoorControl(bot, door);
+        if (!ctrl) return false;
+        try {
+          bot.pathfinder.setGoal(null);
+        } catch {
+          /* */
+        }
+        noteDoorToggle(bot, door.position);
+        await bot.lookAt(ctrl.position.offset(0.5, 0.5, 0.5), false);
+        if (controlKind(ctrl.name) === "plate") {
+          bot.setControlState("forward", true);
+          bot.setControlState("jump", false);
+          await sleep(280);
+        } else {
+          await bot.activateBlock(ctrl);
+          await sleep(200);
+        }
+        const until = Date.now() + 700;
+        while (Date.now() < until) {
+          const live = bot.blockAt(door.position);
+          if (live && propsOf(live).open === true) break;
+          await sleep(40);
+        }
+      }
+      await walkThroughDoorway(bot, door);
+      return true;
+    }
     const travel = travelThroughDoor(bot, door, null);
     const snagged = bot.entity.position.distanceTo(door.position.offset(0.5, 0, 0.5)) < 1.25;
     if (!shouldToggleDoor(bot, door, travel) && !snagged) return false;
@@ -593,8 +694,8 @@ export function patchMovementsForDoors(bot: Bot, movements: object): void {
     const b = origGetBlock(pos, dx, dy, dz);
     if (!b?.name) return b;
     const name = b.name.toLowerCase();
-    if (name.includes("iron_")) return b;
-    const doorOrGate = name.endsWith("_door") || name.endsWith("_fence_gate");
+    if (name.includes("iron_") && name.endsWith("_trapdoor")) return b;
+    const doorOrGate = name.endsWith("_door") || (name.endsWith("_fence_gate") && !name.includes("iron_"));
     const trap = name.endsWith("_trapdoor");
     if (!doorOrGate && !trap) return b;
     const open = propsOf(b as { getProperties?: () => unknown }).open === true;
