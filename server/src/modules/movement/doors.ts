@@ -11,8 +11,12 @@ import { isParkourLocked } from "./parkour";
  * `physical`, so a 1-block doorway looks like a wall. After we click a door,
  * `useOne` can leave pathfinder in `placing=true` and it waits forever.
  *
+ * Reversed / maze doors: "open" is not always passable. The 0.1875 leaf sits on
+ * one face (facing + hinge). If that face is on our travel axis, toggle
+ * (open or close). If the far cell is empty, the door is a two-way passage.
+ *
  * Fix: treat wooden doors/gates as walkable for A*, force path nodes to the
- * cell center, open on approach, and push forward through the center when stuck.
+ * lower cell, toggle only when the leaf blocks our axis, walk the clear side.
  */
 
 const installedBots = new WeakSet<Bot>();
@@ -107,6 +111,122 @@ function centerDoorPathNodes(bot: Bot, path: Array<{ x: number; y: number; z: nu
     node.y = feet.position.y;
     node.z = feet.position.z + 0.5;
   }
+}
+
+type DoorFace = "north" | "south" | "east" | "west";
+
+function isAirishBlock(block: { name?: string; boundingBox?: string } | null | undefined): boolean {
+  if (!block) return true;
+  const n = String(block.name ?? "").replace(/^minecraft:/, "").toLowerCase();
+  if (n === "air" || n === "cave_air" || n === "void_air" || n === "light" || n === "barrier") return true;
+  if (block.boundingBox && block.boundingBox !== "block") return true;
+  return false;
+}
+
+function cellIsPassage(bot: Bot, x: number, y: number, z: number): boolean {
+  const feet = bot.blockAt(new Vec3(x, y, z));
+  const head = bot.blockAt(new Vec3(x, y + 1, z));
+  if (isDoorOrGateBlock(feet) || isDoorOrGateBlock(head)) return true;
+  if (isWoodenOpenableBlock(feet) || isWoodenOpenableBlock(head)) return true;
+  return isAirishBlock(feet) && isAirishBlock(head);
+}
+
+/** Which face holds the 0.1875 collision leaf (vanilla DoorBlock / FenceGateBlock). */
+function doorCollisionFace(block: { name?: string; getProperties?: () => unknown; _properties?: Record<string, unknown> }): DoorFace | null {
+  const name = String(block.name ?? "").toLowerCase();
+  const props = propsOf(block);
+  const facing = String(props.facing ?? "").toLowerCase() as DoorFace | "";
+  const open = props.open === true;
+  if (name.includes("fence_gate")) {
+    if (open) return null;
+    if (facing === "north" || facing === "south" || facing === "east" || facing === "west") return facing;
+    return null;
+  }
+  if (!name.endsWith("_door")) return null;
+  const hingeRight = String(props.hinge ?? "").toLowerCase() === "right";
+  if (!open) {
+    if (facing === "east" || facing === "west" || facing === "north" || facing === "south") return facing;
+    return "north";
+  }
+  switch (facing) {
+    case "east":
+      return hingeRight ? "north" : "south";
+    case "south":
+      return hingeRight ? "east" : "west";
+    case "west":
+      return hingeRight ? "south" : "north";
+    case "north":
+    default:
+      return hingeRight ? "west" : "east";
+  }
+}
+
+function slabBlocksAxis(slab: DoorFace | null, axis: "x" | "z"): boolean {
+  if (!slab) return false;
+  if (axis === "x") return slab === "east" || slab === "west";
+  return slab === "north" || slab === "south";
+}
+
+function passOffset(slab: DoorFace | null): { x: number; z: number } {
+  const o = 0.22;
+  if (slab === "north") return { x: 0, z: o };
+  if (slab === "south") return { x: 0, z: -o };
+  if (slab === "west") return { x: o, z: 0 };
+  if (slab === "east") return { x: -o, z: 0 };
+  return { x: 0, z: 0 };
+}
+
+function travelThroughDoor(
+  bot: Bot,
+  door: { position: { x: number; y: number; z: number } },
+  lastPath: Array<{ x: number; y: number; z: number }> | null
+): { dx: number; dz: number } {
+  if (lastPath) {
+    for (const n of lastPath) {
+      const nx = Math.floor(n.x) - door.position.x;
+      const nz = Math.floor(n.z) - door.position.z;
+      if (nx !== 0 || nz !== 0) return { dx: nx, dz: nz };
+    }
+  }
+  try {
+    const g = (
+      bot.pathfinder as unknown as {
+        goal?: { x?: number; z?: number; entity?: { position?: { x: number; z: number } } };
+      }
+    ).goal;
+    const gx = g?.entity?.position?.x ?? g?.x;
+    const gz = g?.entity?.position?.z ?? g?.z;
+    if (typeof gx === "number" && typeof gz === "number") {
+      return { dx: gx - (door.position.x + 0.5), dz: gz - (door.position.z + 0.5) };
+    }
+  } catch {
+    /* */
+  }
+  const p = bot.entity?.position;
+  return {
+    dx: door.position.x + 0.5 - (p?.x ?? 0),
+    dz: door.position.z + 0.5 - (p?.z ?? 0)
+  };
+}
+
+/** Toggle only when the leaf is on our travel axis and the far (or near) cell is a passage. */
+function shouldToggleDoor(
+  bot: Bot,
+  door: NonNullable<ReturnType<Bot["blockAt"]>>,
+  travel: { dx: number; dz: number }
+): boolean {
+  const name = String(door.name ?? "").toLowerCase();
+  if (name.includes("trapdoor") || name.includes("iron_")) return false;
+  const axis: "x" | "z" = Math.abs(travel.dx) >= Math.abs(travel.dz) ? "x" : "z";
+  const slab = doorCollisionFace(door);
+  if (!slabBlocksAxis(slab, axis)) return false;
+  const sx = axis === "x" ? (travel.dx >= 0 ? 1 : -1) : 0;
+  const sz = axis === "z" ? (travel.dz >= 0 ? 1 : -1) : 0;
+  const y = door.position.y;
+  const far = cellIsPassage(bot, door.position.x + sx, y, door.position.z + sz);
+  const near = cellIsPassage(bot, door.position.x - sx, y, door.position.z - sz);
+  if (!far && !near) return false;
+  return true;
 }
 
 function doorAheadOf(bot: Bot, dist = 3.2): NonNullable<ReturnType<Bot["blockAt"]>> | null {
@@ -212,9 +332,8 @@ export function installDoorMovementAssist(bot: Bot): void {
     const target = live ? resolveDoorActivateTarget(bot, live) : door;
     const name = String(target.name ?? "").toLowerCase();
     const isTrap = name.includes("trapdoor");
-    const closed = propsOf(target).open !== true;
-    // Re-read state so we never click an already-open door (that would close it).
-    if (!isTrap && closed && now - lastActivateAt >= ACTIVATE_COOLDOWN_MS) {
+    const travel = travelThroughDoor(bot, target, lastPath);
+    if (!isTrap && now - lastActivateAt >= ACTIVATE_COOLDOWN_MS && shouldToggleDoor(bot, target, travel)) {
       lastActivateAt = now;
       void bot.activateBlock(target).catch(() => {});
     }
@@ -233,14 +352,16 @@ export function installDoorMovementAssist(bot: Bot): void {
     const stalled = now - lastProgressAt >= STALL_MS;
     if (!stalled) return;
 
-    const cx = door.position.x + 0.5;
-    const cz = door.position.z + 0.5;
+    const liveNow = bot.blockAt(target.position) ?? target;
+    const slab = doorCollisionFace(liveNow);
+    const off = passOffset(slab);
+    const cx = door.position.x + 0.5 + off.x;
+    const cz = door.position.z + 0.5 + off.z;
     const px = entity.position.x;
     const pz = entity.position.z;
     const dx = cx - px;
     const dz = cz - pz;
     const len = Math.hypot(dx, dz) || 1;
-    // Aim at the cell center, then slightly past it so we don't stop on the slab.
     const lookX = cx + (dx / len) * 0.45;
     const lookZ = cz + (dz / len) * 0.45;
     try {
@@ -264,8 +385,10 @@ export function installDoorMovementAssist(bot: Bot): void {
 async function walkThroughDoorway(bot: Bot, door: NonNullable<ReturnType<Bot["blockAt"]>>): Promise<void> {
   const entity = bot.entity;
   if (!entity) return;
-  const cx = door.position.x + 0.5;
-  const cz = door.position.z + 0.5;
+  const live = bot.blockAt(door.position) ?? door;
+  const off = passOffset(doorCollisionFace(live));
+  const cx = door.position.x + 0.5 + off.x;
+  const cz = door.position.z + 0.5 + off.z;
   const px = entity.position.x;
   const pz = entity.position.z;
   const dx = cx - px;
@@ -309,17 +432,17 @@ async function walkThroughDoorway(bot: Bot, door: NonNullable<ReturnType<Bot["bl
 }
 
 /**
- * Open a nearby wooden door/gate if closed, then walk through the cell center.
- * Also handles an already-open door the bot is snagged on.
+ * Toggle a nearby door/gate only if the leaf blocks our travel axis, then walk
+ * the clear side of the cell. Reversed and maze doors may need to be closed.
  */
 export async function tryPassNearbyDoor(instance: BotInstance, radius = 2.8): Promise<boolean> {
   const bot = instance.bot;
   if (!bot || instance.status !== "online" || !bot.entity) return false;
   const door = findNearbyDoor(bot, radius, { includeOpen: true });
   if (!door) return false;
-  const props = propsOf(door);
   try {
-    if (props.open !== true) {
+    const travel = travelThroughDoor(bot, door, null);
+    if (shouldToggleDoor(bot, door, travel)) {
       try {
         bot.pathfinder.setGoal(null);
       } catch {
