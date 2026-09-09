@@ -5,7 +5,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import { isTokenAborted, PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
 import { goals } from "mineflayer-pathfinder";
-import { ensureMovement, runFollow, runGoto, stopMovement, tryOpenNearbyDoor } from "../movement";
+import { ensureMovement, runFollow, runGoto, stopMovement, tryPassNearbyDoor } from "../movement";
 import { stepLookAtEntity } from "../movement/look";
 import { CREEPER_SAFE_RANGE, isHostileMob, isPlayerEntity } from "./mobs";
 import {
@@ -2064,7 +2064,7 @@ getRuntime(): CombatRuntime {
         const noPathFor = noPathSince ? now - noPathSince : 0;
 
         if (!routeRetried && (stalledFor >= APPROACH_STALL_RETRY_MS || noPathFor >= 1_500)) {
-          if (await tryOpenNearbyDoor(this.instance)) {
+          if (await tryPassNearbyDoor(this.instance)) {
             ensureMovement(this.instance, { mode: "goto", allowSprintNow: true, parkour: true, canDig: canDigRoute, canOpenDoors: true, allowPlace: canPlaceRoute });
             setFollowGoal(live);
             lastProgressAt = now;

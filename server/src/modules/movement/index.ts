@@ -5,8 +5,16 @@ import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
 import { isTokenAborted, type TaskToken, type ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
+import {
+  installDoorMovementAssist,
+  isWoodenOpenableBlock,
+  patchMovementsForDoors,
+  tryPassNearbyDoor
+} from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
 import { installWaterMovementAssist } from "./water";
+
+export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
 
 /**
  * HAREKET ÇEKİRDEĞİ — tek altın kural (TODO §12'ye de yazıldı):
@@ -72,6 +80,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
+  installDoorMovementAssist(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
@@ -108,6 +117,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
       if (isWoodenOpenableBlock(block)) return 0;
       return origSafe(block, toBreak);
     };
+    patchMovementsForDoors(bot, movements);
     const origForward = movements.getMoveForward.bind(movements);
     movements.getMoveForward = (node, dir, neighbors) => {
       const before = neighbors.length;
@@ -115,12 +125,12 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
       for (let i = before; i < neighbors.length; i++) {
         const move = neighbors[i] as { toPlace?: Array<{ x: number; y: number; z: number; useOne?: boolean }> };
         if (!move.toPlace?.length) continue;
+        // Pathfinder's useOne click can leave `placing=true` forever. We open
+        // doors ourselves and walk the cell center (doors.ts).
         move.toPlace = move.toPlace.filter((p) => {
           if (!p.useOne) return true;
           const b = bot.blockAt(new Vec3(p.x, p.y, p.z));
-          if (!b) return true;
-          const props = typeof b.getProperties === "function" ? (b.getProperties() as Record<string, unknown>) : {};
-          return props.open !== true;
+          return !isWoodenOpenableBlock(b);
         });
       }
     };
@@ -150,59 +160,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
     /* */
   }
   return bot;
-}
-
-function isWoodenOpenableBlock(block: { name?: string } | null | undefined): boolean {
-  const name = String(block?.name ?? "").toLowerCase();
-  if (!name || name.includes("iron_")) return false;
-  return name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor");
-}
-
-function resolveDoorActivateTarget(bot: Bot, block: NonNullable<ReturnType<Bot["blockAt"]>>): NonNullable<ReturnType<Bot["blockAt"]>> {
-  const props = typeof block.getProperties === "function" ? (block.getProperties() as Record<string, unknown>) : {};
-  if (props.half === "upper") {
-    const lower = bot.blockAt(block.position.offset(0, -1, 0));
-    if (lower && isWoodenOpenableBlock(lower)) return lower;
-  }
-  return block;
-}
-
-
-export async function tryOpenNearbyDoor(instance: BotInstance, radius = 2.8): Promise<boolean> {
-  const bot = requireBot(instance);
-  const base = bot.entity.position;
-  let best: ReturnType<Bot["blockAt"]> = null;
-  let bestDistance = radius + 0.001;
-  const reach = Math.max(1, Math.ceil(radius));
-  for (let dx = -reach; dx <= reach; dx++) {
-    for (let dz = -reach; dz <= reach; dz++) {
-      for (let dy = -1; dy <= 2; dy++) {
-        const block = bot.blockAt(base.floored().offset(dx, dy, dz));
-        if (!block) continue;
-        const name = block.name.toLowerCase();
-        const isDoor = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
-        if (!isDoor) continue;
-        const target = resolveDoorActivateTarget(bot, block);
-        const props = typeof target.getProperties === "function" ? target.getProperties() as Record<string, unknown> : {};
-        if (props.open === true) continue;
-        const distance = base.distanceTo(target.position.offset(0.5, 0.5, 0.5));
-        if (distance < bestDistance) {
-          best = target;
-          bestDistance = distance;
-        }
-      }
-    }
-  }
-  if (!best) return false;
-  try {
-    bot.pathfinder.setGoal(null);
-    await bot.lookAt(best.position.offset(0.5, 0.5, 0.5), false);
-    await bot.activateBlock(best);
-    await sleep(180);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ---- merdiven atlayış asisti (takip) ----------------------------------------------
@@ -372,6 +329,15 @@ function pathfinderGoal(
           stuckRetried = true;
           lastMoveAt = Date.now();
           opts?.onStuckRetry?.();
+          void tryPassNearbyDoor(instance).then((passed) => {
+            if (settled) return;
+            try {
+              bot.pathfinder.setGoal(goal);
+            } catch {
+              /* */
+            }
+            void passed;
+          });
           try {
             bot.pathfinder.setGoal(goal); // recompute from scratch
           } catch {
@@ -626,8 +592,8 @@ export async function runFollow(
         const live = bot.players[playerName]?.entity;
         if (!live || !bot.entity) return;
         void (async () => {
-          if (await tryOpenNearbyDoor(instance)) {
-            throttledReport(`follow: ${playerName} · door opened`);
+          if (await tryPassNearbyDoor(instance)) {
+            throttledReport(`follow: ${playerName} · door passed`);
             restoreFollowMovement();
             try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
             return;
@@ -704,9 +670,9 @@ export async function runFollow(
                 /* */
               }
             } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
-              const openedDoor = await tryOpenNearbyDoor(instance);
+              const openedDoor = await tryPassNearbyDoor(instance);
               if (openedDoor) {
-                throttledReport(`follow: ${playerName} · door opened`);
+                throttledReport(`follow: ${playerName} · door passed`);
                 restoreFollowMovement();
                 consecutiveStucks = 0;
               } else if (enableScaffoldForStuck(bot)) {
