@@ -12,7 +12,13 @@ import {
   tryPassNearbyDoor
 } from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
-import { findGapLanding, isLongSprintGap, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
+import {
+  findGapLanding,
+  GoalFollowAtHeight,
+  isLongSprintGap,
+  isParkourLocked,
+  tryCommittedGapJumpToward
+} from "./parkour";
 import { installWaterMovementAssist } from "./water";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
@@ -583,7 +589,7 @@ export async function runFollow(
 
       restoreFollowMovement();
       try {
-        bot.pathfinder.setGoal(new goals.GoalFollow(tracked, holdDist), true);
+        bot.pathfinder.setGoal(followGoal(tracked, holdDist), true);
       } catch {
         /* pathfinder bir tık sonra hazır olabilir */
       }
@@ -610,14 +616,14 @@ export async function runFollow(
           if (await tryPassNearbyDoor(instance)) {
             throttledReport(`follow: ${playerName} · door passed`);
             restoreFollowMovement();
-            try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
+            try { bot.pathfinder.setGoal(followGoal(live, holdDist), true); } catch { /* */ }
             return;
           }
           lastGapAttemptAt = Date.now();
           if (await tryCommittedGapJumpToward(instance, live, token, (p) => throttledReport(p.label ?? "parkour"))) {
             throttledReport(`follow: ${playerName} · gap jump`);
             restoreFollowMovement();
-            try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
+            try { bot.pathfinder.setGoal(followGoal(live, holdDist), true); } catch { /* */ }
             return;
           }
           if (enableScaffoldForStuck(bot)) {
@@ -627,7 +633,7 @@ export async function runFollow(
             throttledReport(`follow: ${playerName} · no reachable natural path`);
           }
           try {
-            bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
+            bot.pathfinder.setGoal(followGoal(live, holdDist), true);
           } catch {
             /* */
           }
@@ -682,7 +688,7 @@ export async function runFollow(
               restoreFollowMovement();
               if (jumped) consecutiveStucks = 0;
               try {
-                bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+                bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
               } catch {
                 /* */
               }
@@ -700,7 +706,7 @@ export async function runFollow(
               scaffoldUntil = 0;
               restoreFollowMovement();
               try {
-                bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+                bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
               } catch {
                 /* */
               }
@@ -756,7 +762,7 @@ export async function runFollow(
             }
 
             try {
-              bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+              bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
             } catch {
               /* */
             }
@@ -798,6 +804,10 @@ export function stopMovement(instance: BotInstance) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function followGoal(entity: Entity, range: number) {
+  return new GoalFollowAtHeight(entity, range);
 }
 
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";

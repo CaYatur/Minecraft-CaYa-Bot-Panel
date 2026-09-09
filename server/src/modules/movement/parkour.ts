@@ -1,5 +1,6 @@
 import type { Bot } from "mineflayer";
 import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
+import type { Entity } from "prismarine-entity";
 import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
@@ -164,7 +165,7 @@ function standYAt(bot: Bot, x: number, yHint: number, z: number, maxDown = 8): n
 /** Same-level 1–2 block hops stay on pathfinder. We only take long / down sprint jumps. */
 export function isLongSprintGap(land: { y: number; gap: number }, botY: number): boolean {
   const drop = botY - land.y;
-  return land.gap >= 4 || (drop >= 2 && land.gap >= 3);
+  return land.gap >= 4 || (drop >= 2 && land.gap >= 3) || (drop >= 4 && land.gap >= 2);
 }
 
 function maxAirForDrop(drop: number, sameLevelMax: number): number {
@@ -233,13 +234,15 @@ function scanGapAlongStep(
   const py = Math.floor(origin.y);
   const pz = Math.floor(origin.z);
   let gapStart = 0;
+  let best: GapLanding | null = null;
 
   for (let d = 1; d <= 13; d++) {
     const cx = px + step.dx * d;
     const cz = pz + step.dz * d;
-    if (isOpenableCell(bot, cx, py, cz)) return null;
-    const sameLevel = isPlatformStand(bot, cx, py, cz);
-    if (!sameLevel) {
+    if (isOpenableCell(bot, cx, py, cz)) return best;
+    // Landing may be several blocks BELOW takeoff (downward sprint). Do not require same Y.
+    const sy = standYAt(bot, cx, py, cz);
+    if (sy === null) {
       if (gapStart === 0) {
         if (d > 3) break;
         gapStart = d;
@@ -248,12 +251,10 @@ function scanGapAlongStep(
     }
     if (gapStart === 0) continue;
     const airBlocks = d - gapStart;
-    const sy = standYAt(bot, cx, py, cz);
-    if (sy === null) break;
     const drop = py - sy;
-    if (drop > maxSafeDrop(bot)) break;
+    if (drop > maxSafeDrop(bot)) continue;
     const maxAir = maxAirForDrop(drop, maxGap);
-    if (airBlocks < 2 || airBlocks > maxAir) break;
+    if (airBlocks < 2 || airBlocks > maxAir) continue;
 
     const flyY = Math.max(py, sy);
     let blocked = false;
@@ -269,14 +270,16 @@ function scanGapAlongStep(
         break;
       }
     }
-    if (blocked) break;
+    if (blocked) continue;
 
     const toGoal = Math.hypot(goal.x - (cx + 0.5), goal.y - sy, goal.z - (cz + 0.5));
     const fromHere = Math.hypot(goal.x - origin.x, goal.z - origin.z);
-    if (fromHere - toGoal < 1.2) break;
-    return { x: cx, y: sy, z: cz, gap: airBlocks, score: toGoal + airBlocks * 0.12 };
+    if (fromHere - toGoal < 1.2) continue;
+    const cand: GapLanding = { x: cx, y: sy, z: cz, gap: airBlocks, score: toGoal + airBlocks * 0.08 };
+    if (!best || cand.score < best.score) best = cand;
+    if (toGoal < 1.5) break;
   }
-  return null;
+  return best;
 }
 
 /**
@@ -322,6 +325,66 @@ export function findGapLanding(
   }
 
   return best ? { x: best.x, y: best.y, z: best.z, gap: best.gap } : null;
+}
+
+type PathNode = { x: number; y: number; z: number };
+
+/**
+ * Follow goal that does not treat "standing under the player" as almost-there.
+ * Ground-floor A* otherwise camps the house while the player is on the roof;
+ * a land-connected sky platform is a longer XZ path but the correct height.
+ */
+export class GoalFollowAtHeight extends goals.Goal {
+  entity: Entity;
+  rangeSq: number;
+  x: number;
+  y: number;
+  z: number;
+
+  constructor(entity: Entity, range: number) {
+    super();
+    this.entity = entity;
+    this.rangeSq = range * range;
+    const p = entity.position;
+    this.x = Math.floor(p.x);
+    this.y = Math.floor(p.y);
+    this.z = Math.floor(p.z);
+  }
+
+  heuristic(node: PathNode): number {
+    const dx = this.x - node.x;
+    const dy = this.y - node.y;
+    const dz = this.z - node.z;
+    const xz = Math.hypot(dx, dz);
+    if (dy > 1.5) return xz + dy * 8;
+    return xz + Math.abs(dy);
+  }
+
+  isEnd(node: PathNode): boolean {
+    const dx = this.x - node.x;
+    const dy = this.y - node.y;
+    const dz = this.z - node.z;
+    if (Math.abs(dy) > 1.7) return false;
+    return dx * dx + dy * dy + dz * dz <= this.rangeSq;
+  }
+
+  hasChanged(): boolean {
+    const p = this.entity.position.floored();
+    const dx = this.x - p.x;
+    const dy = this.y - p.y;
+    const dz = this.z - p.z;
+    if (dx * dx + dy * dy + dz * dz > this.rangeSq) {
+      this.x = p.x;
+      this.y = p.y;
+      this.z = p.z;
+      return true;
+    }
+    return false;
+  }
+
+  isValid(): boolean {
+    return this.entity != null;
+  }
 }
 
 /**
@@ -459,8 +522,8 @@ export async function executeGapJump(
       throw new Error(token.reason ?? "cancelled");
     }
 
-    // Commit: look once at the landing, then never chase the moving target.
-    await alignManualLookAt(bot, v3(lx, ly + 0.8, lz));
+    // Look toward landing XZ at takeoff eye height — staring down kills sprint distance.
+    await alignManualLookAt(bot, v3(lx, pos0.y + 0.3, lz));
     await sprintJumpAtEdge(bot, dir, g, token);
     if (token.cancelled) {
       clearControls(bot);
