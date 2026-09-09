@@ -185,9 +185,16 @@ export function isLongSprintGap(land: { y: number; gap: number }, botY: number):
 }
 
 function maxAirForDrop(drop: number, sameLevelMax: number): number {
-  if (drop <= 0) return sameLevelMax;
-  // Downward sprint carries extra horizontal distance (~+1 block per drop, capped).
-  return Math.min(10, Math.max(sameLevelMax, 4 + Math.min(drop, 6)));
+  // Same-level sprint jump tops out around 4. An L-corner looks like a 6–8 gap.
+  if (drop <= 0.6) return Math.min(4, sameLevelMax);
+  return Math.min(10, 4 + Math.min(Math.floor(drop), 6));
+}
+
+/** True only if a sprint-jump can actually land this gap (not an L-shortcut). */
+function jumpIsReachable(fromY: number, land: { y: number; gap: number }): boolean {
+  const drop = fromY - land.y;
+  if (drop < -1.2) return false;
+  return land.gap <= maxAirForDrop(drop, 4);
 }
 
 function maxSafeDrop(bot: Bot): number {
@@ -780,6 +787,7 @@ export async function tryReplayObservedJump(
     2,
     Math.min(10, Math.round(Math.hypot(jump.to.x - jump.from.x, jump.to.z - jump.from.z)))
   );
+  if (!jumpIsReachable(bot.entity.position.y, { y: ly, gap })) return false;
   instance.getLogger().info("Replay player jump", `gap≈${gap} → ${lx},${ly},${lz}`);
   return executeGapJump(instance, { x: lx, y: ly, z: lz }, gap, token, report);
 }
@@ -812,6 +820,7 @@ export async function tryJumpAcrossToPlayer(
   if (!land) return false;
   const nearPlayer = Math.hypot(land.x + 0.5 - tp.x, land.y - tp.y, land.z + 0.5 - tp.z);
   if (nearPlayer > 2.8) return false;
+  if (!jumpIsReachable(pos.y, land)) return false;
 
   const dir = {
     ux: (land.x + 0.5 - pos.x) / (Math.hypot(land.x + 0.5 - pos.x, land.z + 0.5 - pos.z) || 1),
