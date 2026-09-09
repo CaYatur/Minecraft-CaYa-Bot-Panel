@@ -12,12 +12,12 @@ import { v3 } from "../build/vec3util";
  * - merdiven: tırman + merdivenden merdivene / kenara atlama
  */
 
-export type ParkourGap = 1 | 2 | 3 | 4;
+export type ParkourGap = 2 | 3 | 4;
 
 export interface ParkourConfig {
   /** pathfinder parkour (varsayılan true) */
   enabled: boolean;
-  /** özel gap jump üst sınırı: 1 | 2 | 3 | 4 */
+  /** özel gap jump üst sınırı: 2 | 3 | 4 (aynı Y). Aşağı sprint daha uzağa gidebilir. */
   maxGap: ParkourGap;
   /** merdiven parkuru / tırmanma */
   ladderParkour: boolean;
@@ -26,7 +26,7 @@ export interface ParkourConfig {
 }
 
 export function parkourFromMovement(cfg: MovementConfig): ParkourConfig {
-  const maxGap = Math.min(4, Math.max(1, Math.floor(cfg.parkourMaxGap ?? 3))) as ParkourGap;
+  const maxGap = Math.min(4, Math.max(2, Math.floor(cfg.parkourMaxGap ?? 3))) as ParkourGap;
   return {
     enabled: cfg.allowParkour !== false,
     maxGap,
@@ -51,7 +51,6 @@ function ensureParkourBot(instance: BotInstance): Bot {
   if (!bot || instance.status !== "online") throw new Error("Bot offline");
   const anyBot = bot as unknown as { pathfinder?: { setMovements(m: unknown): void; setGoal(g: unknown): void } };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
-  installParkourJumpAssist(bot);
   const cfg = instance.config.movement;
   const movements = new Movements(bot);
   movements.canDig = Boolean(cfg.canDig);
@@ -154,13 +153,29 @@ function isOpenableCell(bot: Bot, x: number, y: number, z: number): boolean {
 }
 
 /** Y the player would stand at in this cell, or null if nothing to land on. */
-function standYAt(bot: Bot, x: number, yHint: number, z: number): number | null {
-  for (const dy of [0, 1, -1, 2, -2]) {
-    const y = yHint + dy;
-    if (!isPlatformStand(bot, x, y, z)) continue;
-    return y;
+function standYAt(bot: Bot, x: number, yHint: number, z: number, maxDown = 8): number | null {
+  for (let dy = 0; dy >= -maxDown; dy--) {
+    if (isPlatformStand(bot, x, yHint + dy, z)) return yHint + dy;
   }
+  if (isPlatformStand(bot, x, yHint + 1, z)) return yHint + 1;
   return null;
+}
+
+/** Same-level 1–2 block hops stay on pathfinder. We only take long / down sprint jumps. */
+export function isLongSprintGap(land: { y: number; gap: number }, botY: number): boolean {
+  const drop = botY - land.y;
+  return land.gap >= 4 || (drop >= 2 && land.gap >= 3);
+}
+
+function maxAirForDrop(drop: number, sameLevelMax: number): number {
+  if (drop <= 0) return sameLevelMax;
+  // Downward sprint carries extra horizontal distance (~+1 block per drop, capped).
+  return Math.min(10, Math.max(sameLevelMax, 4 + Math.min(drop, 6)));
+}
+
+function maxSafeDrop(bot: Bot): number {
+  const hp = Math.max(0, bot.health ?? 20);
+  return Math.min(10, 3 + Math.max(0, Math.floor(hp - 4)));
 }
 
 /** Horizontal distance to the first hole at the current platform Y. */
@@ -184,57 +199,6 @@ async function waitTicks(bot: Bot, ticks: number): Promise<void> {
   } catch {
     await sleep(Math.max(50, ticks * 50));
   }
-}
-
-const jumpAssistInstalled = new WeakSet<Bot>();
-
-/**
- * Pathfinder often sprints without jumping (canStraightLine is true if a *later*
- * jump would work). Force jump while on the last block before a real air gap.
- */
-export function installParkourJumpAssist(bot: Bot): void {
-  if (jumpAssistInstalled.has(bot)) return;
-  jumpAssistInstalled.add(bot);
-  bot.on("physicsTick", () => {
-    const entity = bot.entity;
-    if (!entity?.onGround) return;
-    if (isParkourLocked(bot)) return;
-    if ((entity as { isInWater?: boolean }).isInWater) return;
-    try {
-      if (!bot.controlState.forward && !bot.controlState.sprint) return;
-    } catch {
-      return;
-    }
-    const yaw = entity.yaw;
-    const ux = -Math.sin(yaw);
-    const uz = -Math.cos(yaw);
-    const edge = distToFrontEdge(bot, ux, uz);
-    if (edge > 0.72) return;
-    const py = Math.floor(entity.position.y);
-    const px = entity.position.x;
-    const pz = entity.position.z;
-    let sawHole = false;
-    for (let d = 1; d <= 4; d++) {
-      const cx = Math.floor(px + ux * d);
-      const cz = Math.floor(pz + uz * d);
-      if (isOpenableCell(bot, cx, py, cz)) return;
-      const stand = isPlatformStand(bot, cx, py, cz);
-      if (!stand) {
-        if (d === 1 || sawHole) sawHole = true;
-        else return;
-        continue;
-      }
-      if (sawHole) {
-        try {
-          bot.setControlState("jump", true);
-        } catch {
-          /* */
-        }
-        return;
-      }
-      return;
-    }
-  });
 }
 
 function isLadder(bot: Bot, x: number, y: number, z: number): boolean {
@@ -270,7 +234,7 @@ function scanGapAlongStep(
   const pz = Math.floor(origin.z);
   let gapStart = 0;
 
-  for (let d = 1; d <= maxGap + 3; d++) {
+  for (let d = 1; d <= 13; d++) {
     const cx = px + step.dx * d;
     const cz = pz + step.dz * d;
     if (isOpenableCell(bot, cx, py, cz)) return null;
@@ -284,9 +248,12 @@ function scanGapAlongStep(
     }
     if (gapStart === 0) continue;
     const airBlocks = d - gapStart;
-    if (airBlocks < 1 || airBlocks > maxGap) break;
     const sy = standYAt(bot, cx, py, cz);
     if (sy === null) break;
+    const drop = py - sy;
+    if (drop > maxSafeDrop(bot)) break;
+    const maxAir = maxAirForDrop(drop, maxGap);
+    if (airBlocks < 2 || airBlocks > maxAir) break;
 
     const flyY = Math.max(py, sy);
     let blocked = false;
@@ -306,26 +273,26 @@ function scanGapAlongStep(
 
     const toGoal = Math.hypot(goal.x - (cx + 0.5), goal.y - sy, goal.z - (cz + 0.5));
     const fromHere = Math.hypot(goal.x - origin.x, goal.z - origin.z);
-    if (fromHere - toGoal < 0.55) break;
+    if (fromHere - toGoal < 1.2) break;
     return { x: cx, y: sy, z: cz, gap: airBlocks, score: toGoal + airBlocks * 0.12 };
   }
   return null;
 }
 
 /**
- * Nearby parkour landing toward the goal: 2–4 air cells, same / ±2 Y.
- * Only looks a few blocks ahead so we jump the gap in front, not a distant hole.
+ * Nearby parkour landing toward the goal.
+ * Same-level cap is maxGap (2–4). Downward sprint may land 5–10 blocks out.
  */
 export function findGapLanding(
   bot: Bot,
   goal: { x: number; y: number; z: number },
-  maxGap: ParkourGap
+  maxGap: number = 4
 ): { x: number; y: number; z: number; gap: number } | null {
   if (!bot.entity) return null;
   const pos = bot.entity.position;
   const gdx = goal.x - pos.x;
   const gdz = goal.z - pos.z;
-  if (Math.hypot(gdx, gdz) < 1.05) return null;
+  if (Math.hypot(gdx, gdz) < 2.4) return null;
 
   const sx = Math.abs(gdx) >= 0.25 ? (gdx > 0 ? 1 : -1) : 0;
   const sz = Math.abs(gdz) >= 0.25 ? (gdz > 0 ? 1 : -1) : 0;
@@ -368,7 +335,7 @@ async function prepareRunUp(
   token: TaskToken
 ): Promise<void> {
   if (gap < 3 || !bot.entity) return;
-  const need = gap >= 4 ? 2.5 : 1.7;
+  const need = gap >= 6 ? 3.2 : gap >= 4 ? 2.6 : 1.8;
   const edge = distToFrontEdge(bot, dir.ux, dir.uz);
   const backDist = need - Math.min(edge, need);
   if (backDist < 0.45) return;
@@ -426,12 +393,11 @@ async function sprintJumpAtEdge(
   gap: number,
   token: TaskToken
 ): Promise<void> {
-  const maxMs = 280 + gap * 280;
-  // Last ~half of the takeoff block. Tight 0.16 windows are skipped between ticks.
-  const jumpAt = gap >= 4 ? 0.62 : gap >= 3 ? 0.55 : 0.48;
+  const maxMs = 400 + gap * 220;
+  const jumpAt = gap >= 6 ? 0.7 : gap >= 4 ? 0.62 : 0.55;
   bot.setControlState("sneak", false);
   bot.setControlState("forward", true);
-  bot.setControlState("sprint", gap >= 2);
+  bot.setControlState("sprint", true);
   bot.setControlState("jump", false);
 
   const t0 = Date.now();
@@ -457,8 +423,7 @@ async function sprintJumpAtEdge(
 }
 
 /**
- * Kontrollü sprint jump: 2 / 3 / 4 blok boşluk.
- * gap=2: kısa sprint+zıpla · gap=3: edge timing · gap=4: run-up + sprint jump
+ * Sprint jump: run-up + hold jump until airborne. Used only for long / down gaps.
  * Once airborne, look and controls stay on the landing — no retarget.
  */
 export async function executeGapJump(
@@ -473,7 +438,7 @@ export async function executeGapJump(
   const ownsLock = !parkourLocks.has(bot);
   if (ownsLock) parkourLocks.add(bot);
 
-  const g = Math.min(4, Math.max(1, Math.round(gap)));
+  const g = Math.min(10, Math.max(2, Math.round(gap)));
   report?.({ done: 0, total: 1, label: `parkur ${g} blok atlama → ${landing.x},${landing.y},${landing.z}` });
   try {
     await handoffToManualControl(bot);
@@ -482,6 +447,7 @@ export async function executeGapJump(
     const ly = landing.y;
     const lz = landing.z + 0.5;
     const pos0 = bot.entity.position;
+    const drop = Math.max(0, pos0.y - ly);
     const dx = lx - pos0.x;
     const dz = lz - pos0.z;
     const len = Math.hypot(dx, dz) || 1;
@@ -494,7 +460,7 @@ export async function executeGapJump(
     }
 
     // Commit: look once at the landing, then never chase the moving target.
-    await alignManualLookAt(bot, v3(lx, ly + 0.5, lz));
+    await alignManualLookAt(bot, v3(lx, ly + 0.8, lz));
     await sprintJumpAtEdge(bot, dir, g, token);
     if (token.cancelled) {
       clearControls(bot);
@@ -502,35 +468,29 @@ export async function executeGapJump(
     }
 
     bot.setControlState("forward", true);
-    if (g >= 2) bot.setControlState("sprint", true);
-    const airDeadline = Date.now() + (g <= 2 ? 750 : g === 3 ? 950 : 1200);
+    bot.setControlState("sprint", true);
+    const airDeadline = Date.now() + 800 + g * 160 + drop * 90;
     const jumpHoldUntil = Date.now() + 220;
     let fellPast = false;
     while (Date.now() < airDeadline && !token.cancelled) {
       const ent = bot.entity;
       if (!ent) break;
-      if (Date.now() < jumpHoldUntil || ent.onGround) {
+      if (Date.now() < jumpHoldUntil) {
         try {
-          bot.setControlState("jump", Date.now() < jumpHoldUntil);
+          bot.setControlState("jump", true);
         } catch {
           /* */
         }
       }
       const pos = ent.position;
       const vy = ent.velocity?.y ?? 0;
-      if (pos.y < ly - 1.4 && vy < -0.35) {
-        fellPast = true;
-        clearControls(bot);
-        break;
-      }
-      const fg = instance.survival?.getFallGuardState?.();
-      if (fg?.active || (fg?.falling && (fg.predictedDamage ?? 0) >= 2)) {
+      if (pos.y < ly - 2.2 && vy < -0.35) {
         fellPast = true;
         clearControls(bot);
         break;
       }
       const d = Math.hypot(pos.x - lx, pos.z - lz);
-      if (ent.onGround && d < 1.45 && Math.abs(pos.y - ly) < 1.6) break;
+      if (ent.onGround && d < 2.1 && Math.abs(pos.y - ly) < Math.max(1.8, drop + 1)) break;
       if (ent.onGround && Date.now() > airDeadline - 400) break;
       await sleep(30);
     }
@@ -547,8 +507,8 @@ export async function executeGapJump(
     const pos = bot.entity.position;
     const landed =
       Boolean(bot.entity.onGround) &&
-      Math.hypot(pos.x - lx, pos.z - lz) < 1.7 &&
-      Math.abs(pos.y - ly) < 1.8;
+      Math.hypot(pos.x - lx, pos.z - lz) < 2.2 &&
+      Math.abs(pos.y - ly) < Math.max(1.8, drop + 1.2);
 
     if (landed) {
       report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
@@ -600,27 +560,24 @@ export async function tryCommittedGapJumpToward(
   const cfg = parkourFromMovement(instance.config.movement);
   if (!cfg.enabled) return false;
 
+  const botY = bot.entity.position.y;
+  const preview = findGapLanding(bot, target.position, 10);
+  if (!preview || !isLongSprintGap(preview, botY)) return false;
+
   parkourLocks.add(bot);
   try {
     await handoffToManualControl(bot, 80);
     if (token.cancelled) return false;
 
-    const maxGap = (cfg.sprintJumps ? 4 : cfg.maxGap) as ParkourGap;
-    const preview = findGapLanding(bot, target.position, maxGap);
-    if (!preview) return false;
-
-    let land = preview;
-    if (preview.gap >= 2) {
-      report?.({ done: 0, total: 1, label: "parkur: hedef dursun" });
-      const aim = await waitTargetStable(() => {
-        const p = target.position;
-        return { x: p.x, y: p.y, z: p.z };
-      }, token);
-      if (token.cancelled) return false;
-      land = findGapLanding(bot, aim, maxGap) ?? preview;
-    }
-    if (!land || land.gap < 1) return false;
-    instance.getLogger().info("Committed gap jump", `gap=${land.gap} → ${land.x},${land.y},${land.z}`);
+    report?.({ done: 0, total: 1, label: "parkur: hedef dursun" });
+    const aim = await waitTargetStable(() => {
+      const p = target.position;
+      return { x: p.x, y: p.y, z: p.z };
+    }, token);
+    if (token.cancelled) return false;
+    const land = findGapLanding(bot, aim, 10) ?? preview;
+    if (!isLongSprintGap(land, bot.entity.position.y)) return false;
+    instance.getLogger().info("Committed gap jump", `gap=${land.gap} drop≈${(botY - land.y).toFixed(0)} → ${land.x},${land.y},${land.z}`);
     return await executeGapJump(instance, land, land.gap, token, report);
   } finally {
     parkourLocks.delete(bot);

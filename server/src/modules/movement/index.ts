@@ -12,7 +12,7 @@ import {
   tryPassNearbyDoor
 } from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
-import { findGapLanding, installParkourJumpAssist, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
+import { findGapLanding, isLongSprintGap, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
 import { installWaterMovementAssist } from "./water";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
@@ -92,7 +92,6 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
-  installParkourJumpAssist(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
@@ -665,18 +664,17 @@ export async function runFollow(
           const d = bot.entity.position.distanceTo(cur.position);
           const pos = bot.entity.position;
 
-          // Sprint-gap in front of us: wait for a stable landing, then one locked jump.
-          // Pathfinder's own jump aborts when GoalFollow(dynamic) sees the player move.
+          // Only take over for long / downward sprint jumps. Short hops stay on pathfinder.
           if (
             bot.entity.onGround &&
             d > holdDist + 0.8 &&
-            Date.now() - lastGapAttemptAt > 900 &&
+            Date.now() - lastGapAttemptAt > 1200 &&
             moveCfg(instance).allowParkour !== false
           ) {
-            const land = findGapLanding(bot, cur.position, 4);
-            if (land && land.gap >= 1) {
+            const land = findGapLanding(bot, cur.position, 10);
+            if (land && isLongSprintGap(land, pos.y)) {
               lastGapAttemptAt = Date.now();
-              throttledReport(`follow: ${playerName} · sprint jump ${land.gap} blocks`);
+              throttledReport(`follow: ${playerName} · long sprint jump ${land.gap} blocks`);
               clearGoal(bot);
               const jumped = await tryCommittedGapJumpToward(instance, cur, token, (p) =>
                 throttledReport(p.label ?? "parkour")
