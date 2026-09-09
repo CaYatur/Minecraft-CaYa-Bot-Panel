@@ -13,11 +13,17 @@ import {
 } from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
 import {
+  findElevatedApproach,
   findGapLanding,
+  findReplayJump,
   GoalFollowAtHeight,
   isLongSprintGap,
   isParkourLocked,
-  tryCommittedGapJumpToward
+  pruneObservedJumps,
+  pushObservedJump,
+  tryCommittedGapJumpToward,
+  tryReplayObservedJump,
+  type ObservedJump
 } from "./parkour";
 import { installWaterMovementAssist } from "./water";
 
@@ -574,6 +580,10 @@ export async function runFollow(
     ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, canOpenDoors: true, allowPlace: movementPolicy?.allowPlace ?? false });
   };
 
+  const observedJumps: ObservedJump[] = [];
+  let jumpTakeoff: { x: number; y: number; z: number } | null = null;
+  let prevPlayerGround = true;
+
   try {
     while (!token.cancelled) {
       const bot = requireBot(instance);
@@ -588,21 +598,51 @@ export async function runFollow(
       }
 
       restoreFollowMovement();
-      try {
-        bot.pathfinder.setGoal(followGoal(tracked, holdDist), true);
-      } catch {
-        /* pathfinder bir tık sonra hazır olabilir */
-      }
 
-      // iç döngü: goal churn yok. Takılınca: 1) rota tazele 2) merdiven hop
-      // 3) hâlâ gidilemiyorsa scaffold ile yeniden path (blok koyarak geç)
       let lastPos = bot.entity.position.clone();
       let lastMoveAt = Date.now();
       let consecutiveStucks = 0;
       let lastHopAt = 0;
-      let scaffoldUntil = 0; // scaffold may stay open until this time
+      let scaffoldUntil = 0;
       let lastNoPathAt = 0;
       let lastGapAttemptAt = 0;
+      let lastApproachScan = 0;
+      let approach: { x: number; y: number; z: number } | null = null;
+
+      const applyFollowGoal = (ent: Entity, forceApproach = false) => {
+        const botY = bot.entity?.position.y ?? 0;
+        const dy = ent.position.y - botY;
+        if (dy >= 2.5) {
+          if (forceApproach || !approach || Date.now() - lastApproachScan > 10_000) {
+            lastApproachScan = Date.now();
+            approach = findElevatedApproach(bot, ent.position);
+          }
+          if (approach) {
+            const dAp = Math.hypot(
+              (bot.entity?.position.x ?? 0) - (approach.x + 0.5),
+              (bot.entity?.position.z ?? 0) - (approach.z + 0.5)
+            );
+            const yAp = Math.abs((bot.entity?.position.y ?? 0) - approach.y);
+            if (dAp < 1.7 && yAp < 1.6) {
+              approach = null;
+              bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+              return;
+            }
+            // Static waypoint: do not retarget under the player mid-path.
+            bot.pathfinder.setGoal(new goals.GoalNear(approach.x, approach.y, approach.z, 1), false);
+            return;
+          }
+        } else {
+          approach = null;
+        }
+        bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+      };
+
+      try {
+        applyFollowGoal(tracked);
+      } catch {
+        /* */
+      }
 
       const onPath = (result: { status: string }) => {
         if (result.status !== "noPath") return;
@@ -616,15 +656,28 @@ export async function runFollow(
           if (await tryPassNearbyDoor(instance)) {
             throttledReport(`follow: ${playerName} · door passed`);
             restoreFollowMovement();
-            try { bot.pathfinder.setGoal(followGoal(live, holdDist), true); } catch { /* */ }
+            applyFollowGoal(live);
             return;
           }
-          lastGapAttemptAt = Date.now();
-          if (await tryCommittedGapJumpToward(instance, live, token, (p) => throttledReport(p.label ?? "parkour"))) {
-            throttledReport(`follow: ${playerName} · gap jump`);
-            restoreFollowMovement();
-            try { bot.pathfinder.setGoal(followGoal(live, holdDist), true); } catch { /* */ }
-            return;
+          const replay = findReplayJump(bot, observedJumps);
+          if (replay) {
+            lastGapAttemptAt = Date.now();
+            if (await tryReplayObservedJump(instance, replay, token, (p) => throttledReport(p.label ?? "parkour"))) {
+              throttledReport(`follow: ${playerName} · copied jump`);
+              restoreFollowMovement();
+              applyFollowGoal(live);
+              return;
+            }
+          }
+          // Only invent a downward jump if we are still above the player — never up into a roof void.
+          if (bot.entity.position.y - live.position.y >= 2) {
+            lastGapAttemptAt = Date.now();
+            if (await tryCommittedGapJumpToward(instance, live, token, (p) => throttledReport(p.label ?? "parkour"))) {
+              throttledReport(`follow: ${playerName} · gap jump`);
+              restoreFollowMovement();
+              applyFollowGoal(live);
+              return;
+            }
           }
           if (enableScaffoldForStuck(bot)) {
             throttledReport(`follow: ${playerName} · no path — bridging…`);
@@ -632,11 +685,7 @@ export async function runFollow(
           } else {
             throttledReport(`follow: ${playerName} · no reachable natural path`);
           }
-          try {
-            bot.pathfinder.setGoal(followGoal(live, holdDist), true);
-          } catch {
-            /* */
-          }
+          applyFollowGoal(live, true);
         })();
       };
       bot.on("path_update", onPath);
@@ -658,7 +707,20 @@ export async function runFollow(
             break;
           }
 
-          // insanî bakış: SADECE dururken
+          pruneObservedJumps(observedJumps);
+          const playerGround = cur.onGround !== false;
+          if (prevPlayerGround && !playerGround) {
+            jumpTakeoff = { x: cur.position.x, y: cur.position.y, z: cur.position.z };
+          } else if (!prevPlayerGround && playerGround && jumpTakeoff) {
+            pushObservedJump(observedJumps, jumpTakeoff, {
+              x: cur.position.x,
+              y: cur.position.y,
+              z: cur.position.z
+            });
+            jumpTakeoff = null;
+          }
+          prevPlayerGround = playerGround;
+
           if (!pfIsMoving(bot) && bot.entity.onGround) {
             try {
               await stepLookAtEntity(bot, cur, turnSpeed(instance));
@@ -670,34 +732,50 @@ export async function runFollow(
           const d = bot.entity.position.distanceTo(cur.position);
           const pos = bot.entity.position;
 
-          // Only take over for long / downward sprint jumps. Short hops stay on pathfinder.
+          if (bot.entity.onGround && Date.now() - lastGapAttemptAt > 700) {
+            const replay = findReplayJump(bot, observedJumps);
+            if (replay) {
+              lastGapAttemptAt = Date.now();
+              throttledReport(`follow: ${playerName} · copying jump`);
+              clearGoal(bot);
+              const jumped = await tryReplayObservedJump(instance, replay, token, (p) =>
+                throttledReport(p.label ?? "parkour")
+              );
+              restoreFollowMovement();
+              if (jumped) consecutiveStucks = 0;
+              applyFollowGoal(cur);
+              await sleep(FOLLOW_TICK_MS);
+              continue;
+            }
+          }
+
+          // Downward copy-fallback only: we are above them, they already went down.
           if (
             bot.entity.onGround &&
+            pos.y - cur.position.y >= 2 &&
             d > holdDist + 0.8 &&
-            Date.now() - lastGapAttemptAt > 1200 &&
+            Date.now() - lastGapAttemptAt > 1500 &&
             moveCfg(instance).allowParkour !== false
           ) {
             const land = findGapLanding(bot, cur.position, 10);
-            if (land && isLongSprintGap(land, pos.y)) {
+            const nearPlayer =
+              land &&
+              Math.hypot(land.x + 0.5 - cur.position.x, land.z + 0.5 - cur.position.z) < 2.8;
+            if (land && nearPlayer && isLongSprintGap(land, pos.y)) {
               lastGapAttemptAt = Date.now();
-              throttledReport(`follow: ${playerName} · long sprint jump ${land.gap} blocks`);
+              throttledReport(`follow: ${playerName} · down sprint jump`);
               clearGoal(bot);
               const jumped = await tryCommittedGapJumpToward(instance, cur, token, (p) =>
                 throttledReport(p.label ?? "parkour")
               );
               restoreFollowMovement();
               if (jumped) consecutiveStucks = 0;
-              try {
-                bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
-              } catch {
-                /* */
-              }
+              applyFollowGoal(cur);
               await sleep(FOLLOW_TICK_MS);
               continue;
             }
           }
 
-          // ilerlediyse scaffold penceresi bitsin → normal takip
           if (pos.distanceTo(lastPos) > 0.35) {
             lastPos = pos.clone();
             lastMoveAt = Date.now();
@@ -705,11 +783,7 @@ export async function runFollow(
             if (scaffoldUntil > 0 && Date.now() > scaffoldUntil) {
               scaffoldUntil = 0;
               restoreFollowMovement();
-              try {
-                bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
-              } catch {
-                /* */
-              }
+              applyFollowGoal(cur);
             }
           } else if (d > holdDist + 0.6 && Date.now() - lastMoveAt > FOLLOW_STUCK_MS) {
             lastMoveAt = Date.now();
@@ -735,8 +809,13 @@ export async function runFollow(
                 restoreFollowMovement();
                 consecutiveStucks = 0;
               } else {
+                const replay = findReplayJump(bot, observedJumps);
                 lastGapAttemptAt = Date.now();
-                if (await tryCommittedGapJumpToward(instance, cur, token, (p) => throttledReport(p.label ?? "parkour"))) {
+                if (replay && (await tryReplayObservedJump(instance, replay, token, (p) => throttledReport(p.label ?? "parkour")))) {
+                  throttledReport(`follow: ${playerName} · copied jump`);
+                  restoreFollowMovement();
+                  consecutiveStucks = 0;
+                } else if (pos.y - cur.position.y >= 2 && (await tryCommittedGapJumpToward(instance, cur, token, (p) => throttledReport(p.label ?? "parkour")))) {
                   throttledReport(`follow: ${playerName} · gap jump`);
                   restoreFollowMovement();
                   consecutiveStucks = 0;
@@ -746,26 +825,12 @@ export async function runFollow(
                 } else {
                   throttledReport(`follow: ${playerName} · inaccessible point skipped`);
                 }
-                try {
-                  bot.pathfinder.setGoal(null);
-                } catch {
-                  /* */
-                }
               }
             } else {
-              throttledReport(`follow: ${playerName} · stuck — refreshing path`);
-              try {
-                bot.pathfinder.setGoal(null);
-              } catch {
-                /* */
-              }
+              throttledReport(`follow: ${playerName} · stuck — holding route`);
             }
 
-            try {
-              bot.pathfinder.setGoal(followGoal(cur, holdDist), true);
-            } catch {
-              /* */
-            }
+            applyFollowGoal(cur, consecutiveStucks >= 2);
           }
 
           throttledReport(`follow: ${playerName} · ${Math.round(d)}m (target ${holdDist}m)`);

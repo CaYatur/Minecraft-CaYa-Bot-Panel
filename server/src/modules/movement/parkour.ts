@@ -356,7 +356,11 @@ export class GoalFollowAtHeight extends goals.Goal {
     const dy = this.y - node.y;
     const dz = this.z - node.z;
     const xz = Math.hypot(dx, dz);
-    if (dy > 1.5) return xz + dy * 8;
+    if (dy > 1.8) {
+      // Standing under the player is the worst node, not the closest.
+      const underPenalty = xz < 6 ? (6 - xz) * 12 : 0;
+      return dy * 7 + xz * 0.25 + underPenalty;
+    }
     return xz + Math.abs(dy);
   }
 
@@ -371,9 +375,10 @@ export class GoalFollowAtHeight extends goals.Goal {
   hasChanged(): boolean {
     const p = this.entity.position.floored();
     const dx = this.x - p.x;
-    const dy = this.y - p.y;
     const dz = this.z - p.z;
-    if (dx * dx + dy * dy + dz * dz > this.rangeSq) {
+    const dy = Math.abs(this.y - p.y);
+    // Ignore jump-bob and small steps so a long detour is not aborted.
+    if (dx * dx + dz * dz > 16 || dy > 2.2) {
       this.x = p.x;
       this.y = p.y;
       this.z = p.z;
@@ -385,6 +390,94 @@ export class GoalFollowAtHeight extends goals.Goal {
   isValid(): boolean {
     return this.entity != null;
   }
+}
+
+export type ObservedJump = {
+  from: { x: number; y: number; z: number };
+  to: { x: number; y: number; z: number };
+  at: number;
+};
+
+export function pushObservedJump(
+  list: ObservedJump[],
+  from: { x: number; y: number; z: number },
+  to: { x: number; y: number; z: number }
+): void {
+  const dxz = Math.hypot(to.x - from.x, to.z - from.z);
+  if (dxz < 1.7) return;
+  list.push({
+    from: { x: from.x, y: from.y, z: from.z },
+    to: { x: to.x, y: to.y, z: to.z },
+    at: Date.now()
+  });
+  while (list.length > 8) list.shift();
+}
+
+export function pruneObservedJumps(list: ObservedJump[], maxAgeMs = 45_000): void {
+  const t0 = Date.now();
+  while (list.length && t0 - list[0]!.at > maxAgeMs) list.shift();
+}
+
+/** If we are standing on a takeoff the player already used, copy that jump. */
+export function findReplayJump(bot: Bot, list: ObservedJump[]): ObservedJump | null {
+  if (!bot.entity?.onGround) return null;
+  const p = bot.entity.position;
+  let best: ObservedJump | null = null;
+  let bestD = 1.75;
+  const now = Date.now();
+  for (const jump of list) {
+    if (now - jump.at > 45_000) continue;
+    const dFrom = Math.hypot(p.x - jump.from.x, p.z - jump.from.z);
+    if (dFrom > bestD || Math.abs(p.y - jump.from.y) > 1.3) continue;
+    const dTo = Math.hypot(p.x - jump.to.x, p.z - jump.to.z);
+    if (dTo <= dFrom + 0.2) continue;
+    const lx = Math.floor(jump.to.x);
+    const ly = Math.floor(jump.to.y);
+    const lz = Math.floor(jump.to.z);
+    if (standYAt(bot, lx, ly, lz) == null && !isPlatformStand(bot, lx, ly, lz)) continue;
+    best = jump;
+    bestD = dFrom;
+  }
+  return best;
+}
+
+/**
+ * Connected platform at the player's height, on the land side — not the isolated roof
+ * the player is standing on, and not the ground under them.
+ */
+export function findElevatedApproach(
+  bot: Bot,
+  goal: { x: number; y: number; z: number },
+  radius = 24
+): { x: number; y: number; z: number } | null {
+  if (!bot.entity) return null;
+  const py = Math.floor(goal.y);
+  const bx = bot.entity.position.x;
+  const bz = bot.entity.position.z;
+  const reach = Math.max(8, Math.min(radius, Math.ceil(Math.hypot(goal.x - bx, goal.z - bz) + 6)));
+  let best: { x: number; y: number; z: number; score: number } | null = null;
+  for (let dx = -reach; dx <= reach; dx++) {
+    for (let dz = -reach; dz <= reach; dz++) {
+      if (dx * dx + dz * dz > reach * reach) continue;
+      const x = Math.floor(goal.x) + dx;
+      const z = Math.floor(goal.z) + dz;
+      for (const y of [py, py - 1]) {
+        if (!isPlatformStand(bot, x, y, z)) continue;
+        let n = 0;
+        if (isPlatformStand(bot, x + 1, y, z)) n++;
+        if (isPlatformStand(bot, x - 1, y, z)) n++;
+        if (isPlatformStand(bot, x, y, z + 1)) n++;
+        if (isPlatformStand(bot, x, y, z - 1)) n++;
+        const distP = Math.hypot(x + 0.5 - goal.x, z + 0.5 - goal.z);
+        const distB = Math.hypot(x + 0.5 - bx, z + 0.5 - bz);
+        if (distP < 2.3 && n <= 2) continue;
+        if (n < 2 || distP > 16) continue;
+        const score = distP * 0.55 + distB * 0.45 - n * 0.6;
+        if (!best || score < best.score) best = { x, y, z, score };
+      }
+    }
+  }
+  return best ? { x: best.x, y: best.y, z: best.z } : null;
 }
 
 /**
@@ -624,6 +717,8 @@ export async function tryCommittedGapJumpToward(
   if (!cfg.enabled) return false;
 
   const botY = bot.entity.position.y;
+  // Player above us: do not invent an up-jump into the void under a roof.
+  if (target.position.y - botY > 2.2) return false;
   const preview = findGapLanding(bot, target.position, 10);
   if (!preview || !isLongSprintGap(preview, botY)) return false;
 
@@ -645,6 +740,27 @@ export async function tryCommittedGapJumpToward(
   } finally {
     parkourLocks.delete(bot);
   }
+}
+
+/** Copy a jump the followed player already completed. Do not invent a new line. */
+export async function tryReplayObservedJump(
+  instance: BotInstance,
+  jump: ObservedJump,
+  token: TaskToken,
+  report?: ProgressFn
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity || instance.status !== "online") return false;
+  if (parkourLocks.has(bot)) return false;
+  const lx = Math.floor(jump.to.x);
+  const ly = standYAt(bot, lx, Math.floor(jump.to.y), Math.floor(jump.to.z)) ?? Math.floor(jump.to.y);
+  const lz = Math.floor(jump.to.z);
+  const gap = Math.max(
+    2,
+    Math.min(10, Math.round(Math.hypot(jump.to.x - jump.from.x, jump.to.z - jump.from.z)))
+  );
+  instance.getLogger().info("Replay player jump", `gap≈${gap} → ${lx},${ly},${lz}`);
+  return executeGapJump(instance, { x: lx, y: ly, z: lz }, gap, token, report);
 }
 
 type LadderPos = { x: number; y: number; z: number };
