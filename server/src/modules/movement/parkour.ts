@@ -39,6 +39,12 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const parkourLocks = new WeakSet<Bot>();
+
+export function isParkourLocked(bot: Bot | null | undefined): boolean {
+  return Boolean(bot && parkourLocks.has(bot));
+}
+
 /** circular import yok — parkour kendi Movements kurar */
 function ensureParkourBot(instance: BotInstance): Bot {
   const bot = instance.bot;
@@ -131,6 +137,30 @@ function isAirish(bot: Bot, x: number, y: number, z: number): boolean {
   return n === "air" || n === "cave_air" || n === "void_air" || n === "light";
 }
 
+/** Y the player would stand at in this cell, or null if nothing to land on. */
+function standYAt(bot: Bot, x: number, yHint: number, z: number): number | null {
+  for (const dy of [0, 1, -1, 2, -2]) {
+    const y = yHint + dy;
+    if (!isSolid(bot, x, y - 1, z)) continue;
+    if (!isAirish(bot, x, y, z) || !isAirish(bot, x, y + 1, z)) continue;
+    return y;
+  }
+  return null;
+}
+
+/** Horizontal distance to the first non-standable cell in direction (ux, uz). */
+function distToFrontEdge(bot: Bot, ux: number, uz: number): number {
+  const pos = bot.entity?.position;
+  if (!pos) return 0;
+  const py = Math.floor(pos.y);
+  for (let t = 0.05; t <= 4.05; t += 0.1) {
+    const x = Math.floor(pos.x + ux * t);
+    const z = Math.floor(pos.z + uz * t);
+    if (standYAt(bot, x, py, z) === null) return t;
+  }
+  return 4;
+}
+
 function isLadder(bot: Bot, x: number, y: number, z: number): boolean {
   const b = bot.blockAt(v3(x, y, z));
   if (!b) return false;
@@ -149,8 +179,59 @@ export function measureGapBlocks(
   return Math.max(dx, dz);
 }
 
+type GapLanding = { x: number; y: number; z: number; gap: number; score: number };
+
+function scanGapAlongStep(
+  bot: Bot,
+  origin: { x: number; y: number; z: number },
+  step: { dx: number; dz: number },
+  maxGap: number,
+  goal: { x: number; y: number; z: number }
+): GapLanding | null {
+  if (step.dx === 0 && step.dz === 0) return null;
+  const px = Math.floor(origin.x);
+  const py = Math.floor(origin.y);
+  const pz = Math.floor(origin.z);
+  let gapStart = 0;
+
+  for (let d = 1; d <= maxGap + 3; d++) {
+    const cx = px + step.dx * d;
+    const cz = pz + step.dz * d;
+    const sy = standYAt(bot, cx, py, cz);
+    if (sy === null) {
+      if (gapStart === 0) {
+        if (d > 3) break;
+        gapStart = d;
+      }
+      continue;
+    }
+    if (gapStart === 0) continue;
+    const airBlocks = d - gapStart;
+    if (airBlocks < 2 || airBlocks > maxGap) break;
+
+    const flyY = Math.max(py, sy);
+    let blocked = false;
+    for (let t = gapStart; t < d; t++) {
+      const mx = px + step.dx * t;
+      const mz = pz + step.dz * t;
+      if (isSolid(bot, mx, flyY, mz) || isSolid(bot, mx, flyY + 1, mz)) {
+        blocked = true;
+        break;
+      }
+    }
+    if (blocked) break;
+
+    const toGoal = Math.hypot(goal.x - (cx + 0.5), goal.y - sy, goal.z - (cz + 0.5));
+    const fromHere = Math.hypot(goal.x - origin.x, goal.z - origin.z);
+    if (fromHere - toGoal < 1.2) break;
+    return { x: cx, y: sy, z: cz, gap: airBlocks, score: toGoal + airBlocks * 0.12 };
+  }
+  return null;
+}
+
 /**
- * Botun baktığı yönde / targete doğru 2–4 blok parkour inişi ara.
+ * Nearby parkour landing toward the goal: 2–4 air cells, same / ±2 Y.
+ * Only looks a few blocks ahead so we jump the gap in front, not a distant hole.
  */
 export function findGapLanding(
   bot: Bot,
@@ -158,62 +239,124 @@ export function findGapLanding(
   maxGap: ParkourGap
 ): { x: number; y: number; z: number; gap: number } | null {
   if (!bot.entity) return null;
-  const px = Math.floor(bot.entity.position.x);
-  const py = Math.floor(bot.entity.position.y);
-  const pz = Math.floor(bot.entity.position.z);
+  const pos = bot.entity.position;
+  const gdx = goal.x - pos.x;
+  const gdz = goal.z - pos.z;
+  if (Math.hypot(gdx, gdz) < 1.6) return null;
 
-  const gdx = goal.x - bot.entity.position.x;
-  const gdz = goal.z - bot.entity.position.z;
-  const glen = Math.hypot(gdx, gdz) || 1;
-  const ux = gdx / glen;
-  const uz = gdz / glen;
+  const sx = Math.abs(gdx) >= 0.25 ? (gdx > 0 ? 1 : -1) : 0;
+  const sz = Math.abs(gdz) >= 0.25 ? (gdz > 0 ? 1 : -1) : 0;
+  const steps: Array<{ dx: number; dz: number }> = [];
+  if (sx) steps.push({ dx: sx, dz: 0 });
+  if (sz) steps.push({ dx: 0, dz: sz });
+  if (sx && sz) steps.push({ dx: sx, dz: sz });
 
-  let best: { x: number; y: number; z: number; gap: number; score: number } | null = null;
+  const origin = { x: pos.x, y: pos.y, z: pos.z };
+  let best: GapLanding | null = null;
+  for (const step of steps) {
+    const found = scanGapAlongStep(bot, origin, step, maxGap, goal);
+    if (found && (!best || found.score < best.score)) best = found;
+  }
 
-  // 2..maxGap blok önde iniş platformu ara (aynı / ±1 y)
-  for (let gap = 2; gap <= maxGap; gap++) {
-    for (const dy of [0, 1, -1, 2, -2]) {
-      // gap = boşluk; iniş ≈ gap+1 blok merkez distancesi
-      const dist = gap + 0.2;
-      for (const side of [0, 0.35, -0.35]) {
-        // yan ofset (diagonal parkour)
-        const pxo = -uz * side;
-        const pzo = ux * side;
-        const lx = Math.floor(px + ux * dist + pxo);
-        const ly = py + dy;
-        const lz = Math.floor(pz + uz * dist + pzo);
+  // Odd angles: step along the unit heading in whole-block increments.
+  if (!best) {
+    const glen = Math.hypot(gdx, gdz) || 1;
+    const found = scanGapAlongStep(
+      bot,
+      origin,
+      { dx: Math.round(gdx / glen) || 0, dz: Math.round(gdz / glen) || 0 },
+      maxGap,
+      goal
+    );
+    if (found) best = found;
+  }
 
-        // iniş: solid top, üstü hava
-        if (!isSolid(bot, lx, ly - 1, lz) && !isSolid(bot, lx, ly, lz)) continue;
-        const standY = isSolid(bot, lx, ly, lz) ? ly + 1 : ly;
-        if (!isAirish(bot, lx, standY, lz) || !isAirish(bot, lx, standY + 1, lz)) continue;
+  return best ? { x: best.x, y: best.y, z: best.z, gap: best.gap } : null;
+}
 
-        // arada büyük engel var mı (basit)
-        let blocked = false;
-        for (let t = 1; t < gap; t++) {
-          const mx = Math.floor(px + ux * t);
-          const mz = Math.floor(pz + uz * t);
-          if (isSolid(bot, mx, standY, mz) || isSolid(bot, mx, standY + 1, mz)) {
-            blocked = true;
-            break;
-          }
-        }
-        if (blocked) continue;
+/**
+ * Back up from the lip so a 3–4 block sprint jump has room to accelerate.
+ * Sneak while reversing so we don't fall off the far side.
+ */
+async function prepareRunUp(
+  bot: Bot,
+  dir: { ux: number; uz: number },
+  gap: number,
+  token: TaskToken
+): Promise<void> {
+  if (gap < 3 || !bot.entity) return;
+  const need = gap >= 4 ? 2.5 : 1.7;
+  const edge = distToFrontEdge(bot, dir.ux, dir.uz);
+  const backDist = need - Math.min(edge, need);
+  if (backDist < 0.45) return;
 
-        const toGoal = Math.hypot(goal.x - lx, goal.y - standY, goal.z - lz);
-        const score = toGoal + gap * 0.3;
-        if (!best || score < best.score) {
-          best = { x: lx, y: standY, z: lz, gap, score };
-        }
+  const pos = bot.entity.position;
+  const py = Math.floor(pos.y);
+  const bx = pos.x - dir.ux * backDist;
+  const bz = pos.z - dir.uz * backDist;
+  if (standYAt(bot, Math.floor(bx), py, Math.floor(bz)) === null) return;
+
+  bot.setControlState("sprint", false);
+  bot.setControlState("jump", false);
+  bot.setControlState("sneak", true);
+  await alignManualLookAt(bot, v3(bx, pos.y + 0.4, bz));
+  bot.setControlState("forward", true);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 750 && !token.cancelled && bot.entity) {
+    const p = bot.entity.position;
+    if (Math.hypot(p.x - bx, p.z - bz) < 0.38) break;
+    if (distToFrontEdge(bot, -dir.ux, -dir.uz) < 0.18) break;
+    await sleep(20);
+  }
+  clearControls(bot);
+  await sleep(40);
+}
+
+/**
+ * Sprint toward the committed landing and jump on the last pixels of the takeoff block.
+ * Does not retarget — yaw was already locked onto the landing.
+ */
+async function sprintJumpAtEdge(
+  bot: Bot,
+  dir: { ux: number; uz: number },
+  gap: number,
+  token: TaskToken
+): Promise<void> {
+  const maxMs = gap >= 4 ? 950 : gap === 3 ? 720 : 280;
+  const jumpAt = gap >= 4 ? 0.34 : gap === 3 ? 0.22 : 0.16;
+  const minSpeed = gap >= 4 ? 0.22 : gap === 3 ? 0.15 : 0;
+  bot.setControlState("sneak", false);
+  bot.setControlState("forward", true);
+  if (gap >= 2) bot.setControlState("sprint", true);
+
+  const t0 = Date.now();
+  let jumped = false;
+  while (Date.now() - t0 < maxMs && !token.cancelled && bot.entity) {
+    const edge = distToFrontEdge(bot, dir.ux, dir.uz);
+    const speed = Math.hypot(bot.entity.velocity?.x ?? 0, bot.entity.velocity?.z ?? 0);
+    const inAir = bot.entity.onGround === false;
+    if (!jumped && (inAir || edge <= jumpAt)) {
+      if (inAir || speed >= minSpeed || edge <= 0.08 || Date.now() - t0 > maxMs - 90) {
+        bot.setControlState("jump", true);
+        jumped = true;
+        await sleep(gap >= 4 ? 80 : gap === 3 ? 65 : 50);
+        bot.setControlState("jump", false);
+        break;
       }
     }
+    await sleep(20);
   }
-  return best ? { x: best.x, y: best.y, z: best.z, gap: best.gap } : null;
+  if (!jumped && bot.entity) {
+    bot.setControlState("jump", true);
+    await sleep(55);
+    bot.setControlState("jump", false);
+  }
 }
 
 /**
  * Kontrollü sprint jump: 2 / 3 / 4 blok boşluk.
  * gap=2: kısa sprint+zıpla · gap=3: edge timing · gap=4: run-up + sprint jump
+ * Once airborne, look and controls stay on the landing — no retarget.
  */
 export async function executeGapJump(
   instance: BotInstance,
@@ -224,92 +367,148 @@ export async function executeGapJump(
 ): Promise<boolean> {
   const bot = instance.bot;
   if (!bot?.entity || instance.status !== "online") return false;
-  ensureParkourBot(instance);
+  const ownsLock = !parkourLocks.has(bot);
+  if (ownsLock) parkourLocks.add(bot);
 
   const g = Math.min(4, Math.max(2, Math.round(gap)));
   report?.({ done: 0, total: 1, label: `parkur ${g} blok atlama → ${landing.x},${landing.y},${landing.z}` });
-  await handoffToManualControl(bot);
+  try {
+    await handoffToManualControl(bot);
 
-  const lx = landing.x + 0.5;
-  const ly = landing.y;
-  const lz = landing.z + 0.5;
+    const lx = landing.x + 0.5;
+    const ly = landing.y;
+    const lz = landing.z + 0.5;
+    const pos0 = bot.entity.position;
+    const dx = lx - pos0.x;
+    const dz = lz - pos0.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const dir = { ux: dx / len, uz: dz / len };
 
-  // Hedefe yalnızca hareket başlamadan önce, yumuşak biçimde hizalan.
-  await alignManualLookAt(bot, v3(lx, ly + 0.5, lz));
+    await prepareRunUp(bot, dir, g, token);
+    if (token.cancelled) {
+      clearControls(bot);
+      throw new Error(token.reason ?? "cancelled");
+    }
 
-  // kenara hizalan — acele etme (daha emin iniş)
-  const edgeMs = g >= 4 ? 320 : g === 3 ? 220 : 150;
-  bot.setControlState("forward", true);
-  if (g >= 3) bot.setControlState("sprint", true);
-  await sleep(edgeMs);
-  if (token.cancelled) {
+    // Commit: look once at the landing, then never chase the moving target.
+    await alignManualLookAt(bot, v3(lx, ly + 0.5, lz));
+    await sprintJumpAtEdge(bot, dir, g, token);
+    if (token.cancelled) {
+      clearControls(bot);
+      throw new Error(token.reason ?? "cancelled");
+    }
+
+    bot.setControlState("forward", true);
+    if (g >= 2) bot.setControlState("sprint", true);
+    const airDeadline = Date.now() + (g === 2 ? 750 : g === 3 ? 950 : 1200);
+    let fellPast = false;
+    while (Date.now() < airDeadline && !token.cancelled) {
+      const ent = bot.entity;
+      if (!ent) break;
+      const pos = ent.position;
+      const vy = ent.velocity?.y ?? 0;
+      if (pos.y < ly - 1.4 && vy < -0.35) {
+        fellPast = true;
+        clearControls(bot);
+        break;
+      }
+      const fg = instance.survival?.getFallGuardState?.();
+      if (fg?.active || (fg?.falling && (fg.predictedDamage ?? 0) >= 2)) {
+        fellPast = true;
+        clearControls(bot);
+        break;
+      }
+      const d = Math.hypot(pos.x - lx, pos.z - lz);
+      if (ent.onGround && d < 1.45 && Math.abs(pos.y - ly) < 1.6) break;
+      if (ent.onGround && Date.now() > airDeadline - 400) break;
+      await sleep(30);
+    }
+
     clearControls(bot);
-    throw new Error(token.reason ?? "cancelled");
-  }
+    if (fellPast) {
+      instance.getLogger().info("Parkour jump", "landing missed — abandoned to MLG");
+      await yieldFallToMlg(instance, bot, token);
+      return false;
+    }
+    await sleep(60);
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
-  // zıpla — kısa basış, sonra drop
-  if (g >= 4) await sleep(60);
-  bot.setControlState("jump", true);
-  await sleep(g >= 4 ? 80 : g === 3 ? 70 : 60);
-  bot.setControlState("jump", false);
-  if (token.cancelled) {
-    clearControls(bot);
-    throw new Error(token.reason ?? "cancelled");
-  }
-
-  // havada yön tut (daha kontrollü süre)
-  bot.setControlState("forward", true);
-  if (g >= 3) bot.setControlState("sprint", true);
-  const airMs = g === 2 ? 360 : g === 3 ? 460 : 560;
-  const t0 = Date.now();
-  let fellPast = false;
-  while (Date.now() - t0 < airMs && !token.cancelled) {
     const pos = bot.entity.position;
-    const vy = bot.entity.velocity?.y ?? 0;
-    // inişi kaçırdı / tehlikeli düşüş — lookAt durdur, MLG'ye drop
-    if (pos.y < ly - 1.4 && vy < -0.35) {
-      fellPast = true;
-      clearControls(bot);
-      break;
+    const landed =
+      Boolean(bot.entity.onGround) &&
+      Math.hypot(pos.x - lx, pos.z - lz) < 1.7 &&
+      Math.abs(pos.y - ly) < 1.8;
+
+    if (landed) {
+      report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
+      instance.getLogger().info(`Parkour jump succeeded`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
+    } else {
+      instance.getLogger().debug("Parkour jump weak landing", `gap=${g} d=${Math.hypot(pos.x - lx, pos.z - lz).toFixed(1)}`);
     }
-    // FallGuard MLG başladıysa parkur bakışını drop
-    const fg = instance.survival?.getFallGuardState?.();
-    if (fg?.active || (fg?.falling && (fg.predictedDamage ?? 0) >= 2)) {
-      fellPast = true;
-      clearControls(bot);
-      break;
+    return landed;
+  } finally {
+    if (ownsLock) parkourLocks.delete(bot);
+  }
+}
+
+async function waitTargetStable(
+  getPos: () => { x: number; y: number; z: number },
+  token: TaskToken,
+  stableMs = 550,
+  timeoutMs = 2000
+): Promise<{ x: number; y: number; z: number }> {
+  // XZ only — ignore jump bobbing on the far platform.
+  const horiz = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
+  let last = { ...getPos() };
+  let stillSince = Date.now();
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs && !token.cancelled) {
+    const p = getPos();
+    if (horiz(p, last) > 0.45) {
+      last = { x: p.x, y: p.y, z: p.z };
+      stillSince = Date.now();
+    } else if (Date.now() - stillSince >= stableMs) {
+      return { x: p.x, y: p.y, z: p.z };
     }
-    // Havada yaw değiştirme: yön, başlangıç hizası ve hareket momentumu ile korunur.
-    // inişe yaklaştıysa drop
-    const d = pos.distanceTo(v3(lx, ly, lz) as never);
-    if (d < 1.2 && bot.entity.onGround) break;
-    await sleep(40);
+    await sleep(50);
   }
+  const p = getPos();
+  return { x: p.x, y: p.y, z: p.z };
+}
 
-  clearControls(bot);
-  if (fellPast) {
-    instance.getLogger().info("Parkour jump", "landing missed — abandoned to MLG");
-    await yieldFallToMlg(instance, bot, token);
-    return false;
+/** Follow/goto: wait until the target stops jittering, then one locked sprint-jump. */
+export async function tryCommittedGapJumpToward(
+  instance: BotInstance,
+  target: { position: { x: number; y: number; z: number } },
+  token: TaskToken,
+  report?: ProgressFn
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity || instance.status !== "online") return false;
+  if (parkourLocks.has(bot)) return false;
+  const cfg = parkourFromMovement(instance.config.movement);
+  if (!cfg.enabled) return false;
+
+  parkourLocks.add(bot);
+  try {
+    await handoffToManualControl(bot, 80);
+    if (token.cancelled) return false;
+
+    report?.({ done: 0, total: 1, label: "parkur: hedef dursun" });
+    const aim = await waitTargetStable(() => {
+      const p = target.position;
+      return { x: p.x, y: p.y, z: p.z };
+    }, token);
+    if (token.cancelled) return false;
+
+    const maxGap = (cfg.sprintJumps ? 4 : cfg.maxGap) as ParkourGap;
+    const land = findGapLanding(bot, aim, maxGap);
+    if (!land || land.gap < 2) return false;
+    instance.getLogger().info("Committed gap jump", `gap=${land.gap} → ${land.x},${land.y},${land.z}`);
+    return await executeGapJump(instance, land, land.gap, token, report);
+  } finally {
+    parkourLocks.delete(bot);
   }
-  await sleep(80);
-
-  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-
-  // başarı: iniş bloğuna yakın ve yerde
-  const pos = bot.entity.position;
-  const landed =
-    bot.entity.onGround &&
-    Math.hypot(pos.x - lx, pos.z - lz) < 1.6 &&
-    Math.abs(pos.y - ly) < 1.8;
-
-  if (landed) {
-    report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
-    instance.getLogger().info(`Parkour jump succeeded`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
-  } else {
-    instance.getLogger().debug("Parkour jump weak landing", `gap=${g} d=${Math.hypot(pos.x - lx, pos.z - lz).toFixed(1)}`);
-  }
-  return landed;
 }
 
 type LadderPos = { x: number; y: number; z: number };
@@ -912,11 +1111,22 @@ export async function runParkourGoto(
 
       if (!refreshTarget()) return;
       if (cfg.enabled) {
-        const land = findGapLanding(bot, { x: gx, y: gy, z: gz }, cfg.maxGap);
-        if (land && land.gap <= cfg.maxGap) {
-          instance.getLogger().info("Parkur gap jump", `${land.gap} blok → ${land.x},${land.y},${land.z}`);
-          const ok = await executeGapJump(instance, land, land.gap, token, report);
+        if (opts?.liveTarget) {
+          const live = {
+            get position() {
+              const t = opts.liveTarget?.();
+              return t ?? { x: gx, y: gy, z: gz };
+            }
+          };
+          const ok = await tryCommittedGapJumpToward(instance, live, token, report);
           if (ok) continue;
+        } else {
+          const land = findGapLanding(bot, { x: gx, y: gy, z: gz }, cfg.maxGap);
+          if (land && land.gap <= cfg.maxGap) {
+            instance.getLogger().info("Parkur gap jump", `${land.gap} blok → ${land.x},${land.y},${land.z}`);
+            const ok = await executeGapJump(instance, land, land.gap, token, report);
+            if (ok) continue;
+          }
         }
       }
 

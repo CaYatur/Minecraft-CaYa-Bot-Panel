@@ -12,6 +12,7 @@ import {
   tryPassNearbyDoor
 } from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
+import { findGapLanding, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
 import { installWaterMovementAssist } from "./water";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
@@ -595,16 +596,26 @@ export async function runFollow(
       let lastHopAt = 0;
       let scaffoldUntil = 0; // scaffold may stay open until this time
       let lastNoPathAt = 0;
+      let lastGapAttemptAt = 0;
 
       const onPath = (result: { status: string }) => {
         if (result.status !== "noPath") return;
+        if (isParkourLocked(bot)) return;
         if (Date.now() - lastNoPathAt < 4000) return;
         lastNoPathAt = Date.now();
         const live = bot.players[playerName]?.entity;
         if (!live || !bot.entity) return;
         void (async () => {
+          if (isParkourLocked(bot)) return;
           if (await tryPassNearbyDoor(instance)) {
             throttledReport(`follow: ${playerName} · door passed`);
+            restoreFollowMovement();
+            try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
+            return;
+          }
+          lastGapAttemptAt = Date.now();
+          if (await tryCommittedGapJumpToward(instance, live, token, (p) => throttledReport(p.label ?? "parkour"))) {
+            throttledReport(`follow: ${playerName} · gap jump`);
             restoreFollowMovement();
             try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
             return;
@@ -615,12 +626,12 @@ export async function runFollow(
           } else {
             throttledReport(`follow: ${playerName} · no reachable natural path`);
           }
+          try {
+            bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
+          } catch {
+            /* */
+          }
         })();
-        try {
-          bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
-        } catch {
-          /* */
-        }
       };
       bot.on("path_update", onPath);
 
@@ -630,6 +641,10 @@ export async function runFollow(
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
             clearGoal(bot);
             throw new Error("Bot died — follow stopped.");
+          }
+          if (isParkourLocked(bot)) {
+            await sleep(40);
+            continue;
           }
           const cur = bot.players[playerName]?.entity ?? null;
           if (!cur || cur !== tracked) {
@@ -648,6 +663,34 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(cur.position);
           const pos = bot.entity.position;
+
+          // Sprint-gap in front of us: wait for a stable landing, then one locked jump.
+          // Pathfinder's own jump aborts when GoalFollow(dynamic) sees the player move.
+          if (
+            bot.entity.onGround &&
+            d > holdDist + 0.8 &&
+            Date.now() - lastGapAttemptAt > 900 &&
+            moveCfg(instance).allowParkour !== false
+          ) {
+            const land = findGapLanding(bot, cur.position, 4);
+            if (land && land.gap >= 2) {
+              lastGapAttemptAt = Date.now();
+              throttledReport(`follow: ${playerName} · sprint jump ${land.gap} blocks`);
+              clearGoal(bot);
+              const jumped = await tryCommittedGapJumpToward(instance, cur, token, (p) =>
+                throttledReport(p.label ?? "parkour")
+              );
+              restoreFollowMovement();
+              if (jumped) consecutiveStucks = 0;
+              try {
+                bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
+              } catch {
+                /* */
+              }
+              await sleep(FOLLOW_TICK_MS);
+              continue;
+            }
+          }
 
           // ilerlediyse scaffold penceresi bitsin → normal takip
           if (pos.distanceTo(lastPos) > 0.35) {
@@ -680,22 +723,29 @@ export async function runFollow(
               } catch {
                 /* */
               }
-            } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
+            } else if (consecutiveStucks >= 2 && !onLadderNow(bot) && !isParkourLocked(bot)) {
               const openedDoor = await tryPassNearbyDoor(instance);
               if (openedDoor) {
                 throttledReport(`follow: ${playerName} · door passed`);
                 restoreFollowMovement();
                 consecutiveStucks = 0;
-              } else if (enableScaffoldForStuck(bot)) {
-                throttledReport(`follow: ${playerName} · stuck — bridging…`);
-                scaffoldUntil = Date.now() + 25_000;
               } else {
-                throttledReport(`follow: ${playerName} · inaccessible point skipped`);
-              }
-              try {
-                bot.pathfinder.setGoal(null);
-              } catch {
-                /* */
+                lastGapAttemptAt = Date.now();
+                if (await tryCommittedGapJumpToward(instance, cur, token, (p) => throttledReport(p.label ?? "parkour"))) {
+                  throttledReport(`follow: ${playerName} · gap jump`);
+                  restoreFollowMovement();
+                  consecutiveStucks = 0;
+                } else if (enableScaffoldForStuck(bot)) {
+                  throttledReport(`follow: ${playerName} · stuck — bridging…`);
+                  scaffoldUntil = Date.now() + 25_000;
+                } else {
+                  throttledReport(`follow: ${playerName} · inaccessible point skipped`);
+                }
+                try {
+                  bot.pathfinder.setGoal(null);
+                } catch {
+                  /* */
+                }
               }
             } else {
               throttledReport(`follow: ${playerName} · stuck — refreshing path`);
@@ -751,7 +801,5 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Deneysel el-yapımı parkur SADECE açık "parkour-goto" aksiyonuyla erişilir —
-// normal goto/follow akışına otomatik karışmaz (güvenilirlik for ayrıştırıldı).
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";
 export { stepLookAtEntity, easeLookAt, stepLookAt, entityLookPoint } from "./look";

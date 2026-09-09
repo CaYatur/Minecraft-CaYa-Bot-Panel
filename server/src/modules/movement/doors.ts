@@ -1,6 +1,7 @@
 import type { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
+import { isParkourLocked } from "./parkour";
 
 /**
  * Door passage assist.
@@ -130,6 +131,7 @@ export function installDoorMovementAssist(bot: Bot): void {
   const onPhysicsTick = () => {
     const entity = bot.entity;
     if (!entity) return;
+    if (isParkourLocked(bot)) return;
     const now = Date.now();
     if (lastPos && entity.position.distanceTo(lastPos) >= 0.08) {
       lastPos = entity.position.clone();
