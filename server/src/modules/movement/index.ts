@@ -608,9 +608,11 @@ export async function runFollow(
       let approach: { x: number; y: number; z: number } | null = null;
 
       const applyFollowGoal = (ent: Entity, forceApproach = false) => {
-        const botY = bot.entity?.position.y ?? 0;
+        const botPos = bot.entity?.position;
+        const botY = botPos?.y ?? 0;
         const dy = ent.position.y - botY;
-        if (dy >= 2.5) {
+        const xz = botPos ? Math.hypot(ent.position.x - botPos.x, ent.position.z - botPos.z) : 99;
+        if (dy >= 2.5 && xz < 14) {
           if (forceApproach || !approach || Date.now() - lastApproachScan > 10_000) {
             lastApproachScan = Date.now();
             approach = findElevatedApproach(bot, ent.position);

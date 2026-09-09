@@ -372,11 +372,9 @@ export class GoalFollowAtHeight extends goals.Goal {
     const dy = this.y - node.y;
     const dz = this.z - node.z;
     const xz = Math.hypot(dx, dz);
-    if (dy > 1.8) {
-      // Standing under the player is the worst node, not the closest.
-      const underPenalty = xz < 6 ? (6 - xz) * 12 : 0;
-      return dy * 7 + xz * 0.25 + underPenalty;
-    }
+    // Keep XZ as the main cost so unused long sky roads lose to a normal walk.
+    // Only punish actually standing under a high target (roof camp).
+    if (dy > 2.2 && xz < 5) return xz + dy * 1.6 + (5 - xz) * 3;
     return xz + Math.abs(dy);
   }
 
@@ -471,7 +469,11 @@ export function findElevatedApproach(
   const py = Math.floor(goal.y);
   const bx = bot.entity.position.x;
   const bz = bot.entity.position.z;
-  const reach = Math.max(8, Math.min(radius, Math.ceil(Math.hypot(goal.x - bx, goal.z - bz) + 6)));
+  const distGoal = Math.hypot(goal.x - bx, goal.z - bz);
+  // Far away: let pathfinder pick the normal walk. Only kick in when we are
+  // already under/beside the high target.
+  if (distGoal > 14) return null;
+  const reach = Math.min(radius, Math.max(6, Math.ceil(distGoal + 4)));
   let best: { x: number; y: number; z: number; score: number } | null = null;
   for (let dx = -reach; dx <= reach; dx++) {
     for (let dz = -reach; dz <= reach; dz++) {
@@ -488,8 +490,9 @@ export function findElevatedApproach(
         const distP = Math.hypot(x + 0.5 - goal.x, z + 0.5 - goal.z);
         const distB = Math.hypot(x + 0.5 - bx, z + 0.5 - bz);
         if (distP < 2.3 && n <= 2) continue;
-        if (n < 2 || distP > 16) continue;
-        const score = distP * 0.55 + distB * 0.45 - n * 0.6;
+        if (n < 2 || distP > 10) continue;
+        if (distB > distGoal + 8) continue;
+        const score = distP * 0.35 + distB * 0.65 - n * 0.4;
         if (!best || score < best.score) best = { x, y, z, score };
       }
     }
