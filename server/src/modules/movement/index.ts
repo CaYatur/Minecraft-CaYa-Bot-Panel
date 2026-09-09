@@ -12,7 +12,7 @@ import {
   tryPassNearbyDoor
 } from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
-import { findGapLanding, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
+import { findGapLanding, installParkourJumpAssist, isParkourLocked, tryCommittedGapJumpToward } from "./parkour";
 import { installWaterMovementAssist } from "./water";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
@@ -92,6 +92,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
+  installParkourJumpAssist(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
@@ -673,7 +674,7 @@ export async function runFollow(
             moveCfg(instance).allowParkour !== false
           ) {
             const land = findGapLanding(bot, cur.position, 4);
-            if (land && land.gap >= 2) {
+            if (land && land.gap >= 1) {
               lastGapAttemptAt = Date.now();
               throttledReport(`follow: ${playerName} · sprint jump ${land.gap} blocks`);
               clearGoal(bot);
