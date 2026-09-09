@@ -14,14 +14,12 @@ import {
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
 import {
   findElevatedApproach,
-  findGapLanding,
   findReplayJump,
   GoalFollowAtHeight,
-  isLongSprintGap,
   isParkourLocked,
   pruneObservedJumps,
   pushObservedJump,
-  tryCommittedGapJumpToward,
+  tryJumpAcrossToPlayer,
   tryReplayObservedJump,
   type ObservedJump
 } from "./parkour";
@@ -669,15 +667,12 @@ export async function runFollow(
               return;
             }
           }
-          // Only invent a downward jump if we are still above the player — never up into a roof void.
-          if (bot.entity.position.y - live.position.y >= 2) {
-            lastGapAttemptAt = Date.now();
-            if (await tryCommittedGapJumpToward(instance, live, token, (p) => throttledReport(p.label ?? "parkour"))) {
-              throttledReport(`follow: ${playerName} · gap jump`);
-              restoreFollowMovement();
-              applyFollowGoal(live);
-              return;
-            }
+          lastGapAttemptAt = Date.now();
+          if (await tryJumpAcrossToPlayer(instance, live, token, (p) => throttledReport(p.label ?? "parkour"), { force: true })) {
+            throttledReport(`follow: ${playerName} · jump to player`);
+            restoreFollowMovement();
+            applyFollowGoal(live);
+            return;
           }
           if (enableScaffoldForStuck(bot)) {
             throttledReport(`follow: ${playerName} · no path — bridging…`);
@@ -749,27 +744,21 @@ export async function runFollow(
             }
           }
 
-          // Downward copy-fallback only: we are above them, they already went down.
+          // Already waiting on the far side: jump to their platform, do not path under them.
           if (
             bot.entity.onGround &&
-            pos.y - cur.position.y >= 2 &&
             d > holdDist + 0.8 &&
-            Date.now() - lastGapAttemptAt > 1500 &&
+            Date.now() - lastGapAttemptAt > 900 &&
             moveCfg(instance).allowParkour !== false
           ) {
-            const land = findGapLanding(bot, cur.position, 10);
-            const nearPlayer =
-              land &&
-              Math.hypot(land.x + 0.5 - cur.position.x, land.z + 0.5 - cur.position.z) < 2.8;
-            if (land && nearPlayer && isLongSprintGap(land, pos.y)) {
-              lastGapAttemptAt = Date.now();
-              throttledReport(`follow: ${playerName} · down sprint jump`);
-              clearGoal(bot);
-              const jumped = await tryCommittedGapJumpToward(instance, cur, token, (p) =>
-                throttledReport(p.label ?? "parkour")
-              );
+            lastGapAttemptAt = Date.now();
+            const jumped = await tryJumpAcrossToPlayer(instance, cur, token, (p) =>
+              throttledReport(p.label ?? "parkour")
+            );
+            if (jumped) {
+              throttledReport(`follow: ${playerName} · jump to player`);
               restoreFollowMovement();
-              if (jumped) consecutiveStucks = 0;
+              consecutiveStucks = 0;
               applyFollowGoal(cur);
               await sleep(FOLLOW_TICK_MS);
               continue;
@@ -815,8 +804,8 @@ export async function runFollow(
                   throttledReport(`follow: ${playerName} · copied jump`);
                   restoreFollowMovement();
                   consecutiveStucks = 0;
-                } else if (pos.y - cur.position.y >= 2 && (await tryCommittedGapJumpToward(instance, cur, token, (p) => throttledReport(p.label ?? "parkour")))) {
-                  throttledReport(`follow: ${playerName} · gap jump`);
+                } else if (await tryJumpAcrossToPlayer(instance, cur, token, (p) => throttledReport(p.label ?? "parkour"), { force: true })) {
+                  throttledReport(`follow: ${playerName} · jump to player`);
                   restoreFollowMovement();
                   consecutiveStucks = 0;
                 } else if (enableScaffoldForStuck(bot)) {

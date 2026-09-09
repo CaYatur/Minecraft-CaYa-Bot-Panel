@@ -131,8 +131,18 @@ export function installDoorMovementAssist(bot: Bot): void {
   const onPhysicsTick = () => {
     const entity = bot.entity;
     if (!entity) return;
-    if (isParkourLocked(bot)) return;
     const now = Date.now();
+    const doorEarly = findNearbyDoor(bot, 1.85, { includeOpen: true });
+    // Pathfinder jumps on the 1-high door slab. Hold jump down while standing in a doorway,
+    // even during a mistaken parkour lock — real gap jumps are not from inside a door cell.
+    if (doorEarly && entity.onGround && Math.abs(entity.position.y - doorEarly.position.y) < 1.25) {
+      try {
+        bot.setControlState("jump", false);
+      } catch {
+        /* */
+      }
+    }
+    if (isParkourLocked(bot)) return;
     if (lastPos && entity.position.distanceTo(lastPos) >= 0.08) {
       lastPos = entity.position.clone();
       lastProgressAt = now;

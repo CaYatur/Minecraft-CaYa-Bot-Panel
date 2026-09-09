@@ -153,6 +153,22 @@ function isOpenableCell(bot: Bot, x: number, y: number, z: number): boolean {
   return false;
 }
 
+function isNearOpenable(bot: Bot, radius = 1.8): boolean {
+  const p = bot.entity?.position;
+  if (!p) return false;
+  const o = p.floored();
+  const r = Math.max(1, Math.ceil(radius));
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dy = -1; dy <= 2; dy++) {
+        if (!isOpenableCell(bot, o.x + dx, o.y + dy, o.z + dz)) continue;
+        if (Math.hypot(p.x - (o.x + dx + 0.5), p.z - (o.z + dz + 0.5)) <= radius) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Y the player would stand at in this cell, or null if nothing to land on. */
 function standYAt(bot: Bot, x: number, yHint: number, z: number, maxDown = 8): number | null {
   for (let dy = 0; dy >= -maxDown; dy--) {
@@ -421,6 +437,7 @@ export function pruneObservedJumps(list: ObservedJump[], maxAgeMs = 45_000): voi
 /** If we are standing on a takeoff the player already used, copy that jump. */
 export function findReplayJump(bot: Bot, list: ObservedJump[]): ObservedJump | null {
   if (!bot.entity?.onGround) return null;
+  if (isNearOpenable(bot)) return null;
   const p = bot.entity.position;
   let best: ObservedJump | null = null;
   let bestD = 1.75;
@@ -719,6 +736,7 @@ export async function tryCommittedGapJumpToward(
   const botY = bot.entity.position.y;
   // Player above us: do not invent an up-jump into the void under a roof.
   if (target.position.y - botY > 2.2) return false;
+  if (isNearOpenable(bot)) return false;
   const preview = findGapLanding(bot, target.position, 10);
   if (!preview || !isLongSprintGap(preview, botY)) return false;
 
@@ -761,6 +779,46 @@ export async function tryReplayObservedJump(
   );
   instance.getLogger().info("Replay player jump", `gap≈${gap} → ${lx},${ly},${lz}`);
   return executeGapJump(instance, { x: lx, y: ly, z: lz }, gap, token, report);
+}
+
+/**
+ * Player is already on the far platform. Jump there if the landing IS their
+ * block — do not wander under them or invent a side jump into the void.
+ */
+export async function tryJumpAcrossToPlayer(
+  instance: BotInstance,
+  target: { position: { x: number; y: number; z: number } },
+  token: TaskToken,
+  report?: ProgressFn,
+  opts?: { force?: boolean }
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity || instance.status !== "online") return false;
+  if (parkourLocks.has(bot)) return false;
+  const cfg = parkourFromMovement(instance.config.movement);
+  if (!cfg.enabled) return false;
+  if (isNearOpenable(bot)) return false;
+
+  const pos = bot.entity.position;
+  const tp = target.position;
+  if (tp.y - pos.y > 2.2) return false;
+  const xz = Math.hypot(tp.x - pos.x, tp.z - pos.z);
+  if (xz < 2.05 || xz > 10.5) return false;
+
+  const land = findGapLanding(bot, tp, 10);
+  if (!land) return false;
+  const nearPlayer = Math.hypot(land.x + 0.5 - tp.x, land.y - tp.y, land.z + 0.5 - tp.z);
+  if (nearPlayer > 2.8) return false;
+
+  const dir = {
+    ux: (land.x + 0.5 - pos.x) / (Math.hypot(land.x + 0.5 - pos.x, land.z + 0.5 - pos.z) || 1),
+    uz: (land.z + 0.5 - pos.z) / (Math.hypot(land.x + 0.5 - pos.x, land.z + 0.5 - pos.z) || 1)
+  };
+  const edge = distToFrontEdge(bot, dir.ux, dir.uz);
+  if (!opts?.force && edge > 2.8) return false;
+
+  instance.getLogger().info("Jump across to player", `gap=${land.gap} → ${land.x},${land.y},${land.z}`);
+  return executeGapJump(instance, land, land.gap, token, report);
 }
 
 type LadderPos = { x: number; y: number; z: number };
