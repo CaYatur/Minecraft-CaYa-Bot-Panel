@@ -229,6 +229,80 @@ function shouldToggleDoor(
   return true;
 }
 
+type DoorFail = { toggles: number; windowStart: number; until: number };
+const doorFails = new WeakMap<Bot, Map<string, DoorFail>>();
+const mazePauseUntil = new WeakMap<Bot, number>();
+
+function posKey(p: { x: number; y: number; z: number }): string {
+  return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+}
+
+function failMap(bot: Bot): Map<string, DoorFail> {
+  let m = doorFails.get(bot);
+  if (!m) {
+    m = new Map();
+    doorFails.set(bot, m);
+  }
+  return m;
+}
+
+function isDoorOnCooldown(bot: Bot, pos: { x: number; y: number; z: number }, now = Date.now()): boolean {
+  const s = failMap(bot).get(posKey(pos));
+  return Boolean(s && s.until > now);
+}
+
+function noteDoorToggle(bot: Bot, pos: { x: number; y: number; z: number }, now = Date.now()): void {
+  const m = failMap(bot);
+  const k = posKey(pos);
+  let s = m.get(k);
+  if (!s || now - s.windowStart > 4500) s = { toggles: 0, windowStart: now, until: 0 };
+  s.toggles += 1;
+  if (s.toggles >= 4) s.until = now + 12_000;
+  m.set(k, s);
+}
+
+function giveUpOnDoor(bot: Bot, pos: { x: number; y: number; z: number }, now = Date.now(), ms = 8000): void {
+  const m = failMap(bot);
+  const k = posKey(pos);
+  const s = m.get(k) ?? { toggles: 0, windowStart: now, until: 0 };
+  s.until = Math.max(s.until, now + ms);
+  m.set(k, s);
+}
+
+function goalXZ(bot: Bot): { x: number; z: number } | null {
+  try {
+    const g = bot.pathfinder.goal as
+      | { x?: number; z?: number; entity?: { position?: { x: number; z: number } } }
+      | null
+      | undefined;
+    if (!g) return null;
+    if (g.entity?.position) return { x: g.entity.position.x, z: g.entity.position.z };
+    if (typeof g.x === "number" && typeof g.z === "number") return { x: g.x, z: g.z };
+  } catch {
+    /* */
+  }
+  return null;
+}
+
+/** Skip doors that are behind us or farther from the goal than we already are (player turned back). */
+function doorIsOnTheWay(bot: Bot, door: { position: { x: number; z: number } }): boolean {
+  const p = bot.entity?.position;
+  if (!p) return false;
+  const goal = goalXZ(bot);
+  if (!goal) return true;
+  const dx = door.position.x + 0.5 - p.x;
+  const dz = door.position.z + 0.5 - p.z;
+  const gx = goal.x - p.x;
+  const gz = goal.z - p.z;
+  const distDoor = Math.hypot(dx, dz);
+  const distGoal = Math.hypot(gx, gz);
+  if (distGoal < 0.9) return false;
+  if (distDoor > 0.85 && gx * dx + gz * dz < 0) return false;
+  const distGoalFromDoor = Math.hypot(goal.x - (door.position.x + 0.5), goal.z - (door.position.z + 0.5));
+  if (distGoalFromDoor > distGoal + 2.2 && distDoor > 1.3) return false;
+  return true;
+}
+
 function doorAheadOf(bot: Bot, dist = 3.2): NonNullable<ReturnType<Bot["blockAt"]>> | null {
   const entity = bot.entity;
   if (!entity) return null;
@@ -326,15 +400,39 @@ export function installDoorMovementAssist(bot: Bot): void {
       return;
     }
 
+    if ((mazePauseUntil.get(bot) ?? 0) > now) {
+      if (nudging) {
+        nudging = false;
+        try {
+          bot.setControlState("forward", false);
+        } catch {
+          /* */
+        }
+      }
+      return;
+    }
+
     const door = findNearbyDoor(bot, 1.6, { includeOpen: true });
     if (!door) return;
     const live = bot.blockAt(door.position);
     const target = live ? resolveDoorActivateTarget(bot, live) : door;
     const name = String(target.name ?? "").toLowerCase();
     const isTrap = name.includes("trapdoor");
+    if (isDoorOnCooldown(bot, target.position, now) || !doorIsOnTheWay(bot, target)) {
+      if (nudging) {
+        nudging = false;
+        try {
+          bot.setControlState("forward", false);
+        } catch {
+          /* */
+        }
+      }
+      return;
+    }
     const travel = travelThroughDoor(bot, target, lastPath);
     if (!isTrap && now - lastActivateAt >= ACTIVATE_COOLDOWN_MS && shouldToggleDoor(bot, target, travel)) {
       lastActivateAt = now;
+      noteDoorToggle(bot, target.position, now);
       void bot.activateBlock(target).catch(() => {});
     }
 
@@ -351,6 +449,18 @@ export function installDoorMovementAssist(bot: Bot): void {
 
     const stalled = now - lastProgressAt >= STALL_MS;
     if (!stalled) return;
+    if (now - lastProgressAt >= 2800) {
+      giveUpOnDoor(bot, target.position, now, 10_000);
+      mazePauseUntil.set(bot, now + 4000);
+      lastProgressAt = now;
+      nudging = false;
+      try {
+        bot.setControlState("forward", false);
+      } catch {
+        /* */
+      }
+      return;
+    }
 
     const liveNow = bot.blockAt(target.position) ?? target;
     const slab = doorCollisionFace(liveNow);
@@ -440,8 +550,11 @@ export async function tryPassNearbyDoor(instance: BotInstance, radius = 2.8): Pr
   if (!bot || instance.status !== "online" || !bot.entity) return false;
   const door = findNearbyDoor(bot, radius, { includeOpen: true });
   if (!door) return false;
+  if (isDoorOnCooldown(bot, door.position) || !doorIsOnTheWay(bot, door)) return false;
   try {
     const travel = travelThroughDoor(bot, door, null);
+    const snagged = bot.entity.position.distanceTo(door.position.offset(0.5, 0, 0.5)) < 1.25;
+    if (!shouldToggleDoor(bot, door, travel) && !snagged) return false;
     if (shouldToggleDoor(bot, door, travel)) {
       try {
         bot.pathfinder.setGoal(null);
@@ -449,6 +562,7 @@ export async function tryPassNearbyDoor(instance: BotInstance, radius = 2.8): Pr
         /* */
       }
       await bot.lookAt(door.position.offset(0.5, 0.5, 0.5), false);
+      noteDoorToggle(bot, door.position);
       await bot.activateBlock(door);
       await sleep(180);
     }
