@@ -177,7 +177,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   bot.pathfinder.setMovements(movements);
   try {
     const pf = bot.pathfinder as unknown as { thinkTimeout?: number };
-    pf.thinkTimeout = movements.canDig ? 5_000 : 15_000;
+    pf.thinkTimeout = opts?.mode === "follow" ? 4_000 : movements.canDig ? 5_000 : 15_000;
   } catch {
     /* */
   }
@@ -551,6 +551,9 @@ export async function runFollow(
     }
   };
 
+  let followMovesOn = false;
+  let scaffoldOn = false;
+
   /** Takılınca / noPath: pathfinder'a geçici scaffold ver (config scaffoldBlocks) */
   const enableScaffoldForStuck = (bot: Bot) => {
     ensureMovement(instance, {
@@ -560,7 +563,9 @@ export async function runFollow(
       allowPlace: movementPolicy?.allowPlace === false ? false : true,
       parkour: moveCfg(instance).allowParkour !== false
     });
+    followMovesOn = true;
     if (movementPolicy?.allowPlace === false) return false;
+    scaffoldOn = true;
     // sadece sıkışınca: basamak/kule koyabilsin (sürekli açık değil)
     try {
       const mov = (bot.pathfinder as unknown as { movements?: Movements }).movements;
@@ -574,8 +579,11 @@ export async function runFollow(
   };
 
   const restoreFollowMovement = () => {
-    // normal follow: place kapalı (merdivende rastgele blok spam olmasın)
+    // setMovements resets the path — skip unless we actually changed mode (scaffold).
+    if (followMovesOn && !scaffoldOn) return;
     ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, canOpenDoors: true, allowPlace: movementPolicy?.allowPlace ?? false });
+    followMovesOn = true;
+    scaffoldOn = false;
   };
 
   const observedJumps: ObservedJump[] = [];
@@ -634,6 +642,8 @@ export async function runFollow(
         } else {
           approach = null;
         }
+        const curGoal = bot.pathfinder.goal as GoalFollowAtHeight | { entity?: Entity } | undefined;
+        if (!forceApproach && curGoal instanceof GoalFollowAtHeight && curGoal.entity === ent) return;
         bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
       };
 
@@ -748,6 +758,7 @@ export async function runFollow(
           // Already waiting on the far side: jump to their platform, do not path under them.
           if (
             bot.entity.onGround &&
+            !pfIsMoving(bot) &&
             d > holdDist + 0.8 &&
             Date.now() - lastGapAttemptAt > 900 &&
             moveCfg(instance).allowParkour !== false
