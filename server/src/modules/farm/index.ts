@@ -204,6 +204,32 @@ function isFarmlandHydrated(bot: Bot, pos: Vec3): boolean {
   return false;
 }
 
+/** Water every 9 blocks (vanilla 9×9). Never adjacent holes. */
+function hydrationLattice(c: { x: number; y: number; z: number; r: number }): Vec3[] {
+  const xs = new Set<number>();
+  const zs = new Set<number>();
+  xs.add(c.x);
+  zs.add(c.z);
+  for (let d = 9; d <= c.r + 4; d += 9) {
+    xs.add(Math.min(c.x + c.r, c.x + d));
+    xs.add(Math.max(c.x - c.r, c.x - d));
+    zs.add(Math.min(c.z + c.r, c.z + d));
+    zs.add(Math.max(c.z - c.r, c.z - d));
+  }
+  const out: Vec3[] = [];
+  for (const x of xs) {
+    for (const z of zs) {
+      out.push(new Vec3(x, c.y, z));
+    }
+  }
+  out.sort((a, b) => {
+    const da = (a.x - c.x) * (a.x - c.x) + (a.z - c.z) * (a.z - c.z);
+    const db = (b.x - c.x) * (b.x - c.x) + (b.z - c.z) * (b.z - c.z);
+    return da - db;
+  });
+  return out;
+}
+
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
   if (!bot || instance.status !== "online") throw new Error("Bot offline");
@@ -468,12 +494,25 @@ export class FarmService {
       return true;
     };
 
-    let dest: Block | null = destHint && isGood(bot.blockAt(destHint.position)) ? bot.blockAt(destHint.position) : null;
-    if (!dest) dest = bot.blockAt(new Vec3(c.x, c.y, c.z));
-    if (!isGood(dest)) {
-      dest = scanArea(bot, c, (b) => isGood(b), 8)[0] ?? null;
+    let dest: Block | null = null;
+    if (destHint) {
+      dest = bot.blockAt(destHint.position);
+      if (dest && isWaterBlockName(dest.name)) return true;
+      if (!isGood(dest)) {
+        dest = null;
+        for (let dx = -1; dx <= 1 && !dest; dx++) {
+          for (let dz = -1; dz <= 1 && !dest; dz++) {
+            const b = bot.blockAt(destHint.position.offset(dx, 0, dz));
+            if (isGood(b)) dest = b;
+          }
+        }
+      }
+      if (!dest) return false;
+    } else {
+      dest = bot.blockAt(new Vec3(c.x, c.y, c.z));
+      if (!isGood(dest)) dest = scanArea(bot, c, (b) => isGood(b), 4)[0] ?? null;
+      if (!dest) return false;
     }
-    if (!dest) return false;
     if (isWaterBlockName(dest.name)) return true;
 
     // Stand on the neighboring block, not in the hole we are about to dig.
@@ -570,7 +609,7 @@ export class FarmService {
       }
     };
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       const held = bot.inventory.items().find((i) => i.name === "water_bucket");
       if (!held) {
@@ -593,7 +632,7 @@ export class FarmService {
     return Boolean(filled && isWaterBlockName(filled.name));
   }
 
-  /** One water source hydrates a 9×9. Keep pouring until the plot is covered. */
+  /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
   private async ensurePlotHydration(
     c: { x: number; y: number; z: number; r: number },
     cells: Block[],
@@ -602,40 +641,34 @@ export class FarmService {
   ): Promise<number> {
     const bot = requireBot(this.instance);
     if (isRaining(bot)) return 0;
+    const spots = hydrationLattice(c);
     let placed = 0;
-    const maxSources = Math.min(16, Math.max(1, Math.ceil((c.r * 2 + 1) / 9) ** 2));
-    for (let n = 0; n < maxSources; n++) {
+    for (let i = 0; i < spots.length; i++) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-      const dry = cells.filter((cell) => {
+      const spot = spots[i]!;
+      const here = bot.blockAt(spot);
+      if (here && isWaterBlockName(here.name)) continue;
+      if (isFarmlandHydrated(bot, spot)) continue;
+      const coversDry = cells.some((cell) => {
+        const dx = Math.abs(cell.position.x - spot.x);
+        const dz = Math.abs(cell.position.z - spot.z);
+        if (dx > 4 || dz > 4) return false;
         const live = bot.blockAt(cell.position);
         if (!live) return false;
         if (!TILLABLE.has(live.name) && live.name !== "farmland") return false;
         return !isFarmlandHydrated(bot, live.position);
       });
-      if (!dry.length) break;
-      report({ done: n, total: maxSources, label: `water source ${placed + 1} (${dry.length} dry cells)` });
-      const ok = await this.tryPlaceWaterSource(c, token, dry[0]).catch((e) => {
+      if (!coversDry) continue;
+      report({ done: i + 1, total: spots.length, label: `water @${spot.x},${spot.z}` });
+      const hint =
+        here ??
+        cells.find((cell) => Math.abs(cell.position.x - spot.x) <= 1 && Math.abs(cell.position.z - spot.z) <= 1) ??
+        ({ position: spot } as Block);
+      const ok = await this.tryPlaceWaterSource(c, token, hint).catch((e) => {
         if (token.cancelled) throw e;
         return false;
       });
-      if (ok) {
-        placed++;
-        continue;
-      }
-      let extra = false;
-      for (const alt of dry.slice(1, 8)) {
-        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-        const altOk = await this.tryPlaceWaterSource(c, token, alt).catch((e) => {
-          if (token.cancelled) throw e;
-          return false;
-        });
-        if (altOk) {
-          placed++;
-          extra = true;
-          break;
-        }
-      }
-      if (!extra) break;
+      if (ok) placed++;
     }
     return placed;
   }
