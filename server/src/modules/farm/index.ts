@@ -524,29 +524,69 @@ export class FarmService {
     }
 
     const hole = bot.blockAt(dest.position);
-    if (!hole || (hole.name !== "air" && hole.name !== "cave_air" && !isWaterBlockName(hole.name))) {
-      return false;
-    }
-    if (isWaterBlockName(hole.name)) return true;
+    if (hole && isWaterBlockName(hole.name)) return true;
+    // Do not pour until the cell is actually air — clicking a still-solid dirt
+    // puts water on TOP of it (y+1), which is the bug.
+    if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
 
-    try {
-      // Aim into the hole (farmland Y), not at y+1 (that floats water on top).
-      await boundedOp(bot.lookAt(dest.position.offset(0.5, 0.2, 0.5), true), token, 2_000, "look into hole");
+    const floor = bot.blockAt(dest.position.offset(0, -1, 0));
+    if (!floor || floor.boundingBox !== "block") return false;
+
+    const pourIntoHole = async () => {
+      // Click the TOP face of the block under the hole → water fills dest, not y+1.
+      await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 2_000, "look hole floor");
       await sleepCancellable(80, token);
       try {
-        bot.activateItem();
+        await boundedOp(bot.activateBlock(floor), token, 1_500, "pour water in hole");
       } catch {
-        /* */
+        try {
+          bot.activateItem();
+        } catch {
+          /* */
+        }
       }
-      await sleepCancellable(250, token);
+      await sleepCancellable(200, token);
       try {
         bot.deactivateItem();
       } catch {
         /* */
       }
-    } catch (e) {
-      if (token.cancelled) throw e;
-      return false;
+    };
+
+    const scoopFloating = async () => {
+      const up = bot.blockAt(dest.position.offset(0, 1, 0));
+      if (!up || !isWaterBlockName(up.name)) return;
+      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
+      if (!empty) return;
+      try {
+        await boundedOp(bot.equip(empty, "hand"), token, 3_000, "equip bucket scoop");
+        await boundedOp(bot.lookAt(up.position.offset(0.5, 0.4, 0.5), true), token, 1_500, "look floating water");
+        await sleepCancellable(60, token);
+        bot.activateItem();
+        await sleepCancellable(200, token);
+        bot.deactivateItem();
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
+    };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      const held = bot.inventory.items().find((i) => i.name === "water_bucket");
+      if (!held) {
+        if (isCreativeMode(bot)) await creativeEnsureItem(bot, "water_bucket", 1);
+      }
+      const refill = bot.inventory.items().find((i) => i.name === "water_bucket");
+      if (!refill) return false;
+      try {
+        await boundedOp(bot.equip(refill, "hand"), token, 3_000, "equip water_bucket");
+        await pourIntoHole();
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
+      const inHole = bot.blockAt(dest.position);
+      if (inHole && isWaterBlockName(inHole.name)) return true;
+      await scoopFloating();
     }
 
     const filled = bot.blockAt(dest.position);
