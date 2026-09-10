@@ -127,40 +127,6 @@ function holdNoJump(bot: Bot): () => void {
   };
 }
 
-function useBucketOnFace(bot: Bot, block: Block, face: { x: number; y: number; z: number }) {
-  try {
-    const client = (bot as unknown as { _client?: { write: (n: string, d: unknown) => void } })._client;
-    if (!client) return;
-    const dx = 0.5 + face.x * 0.5;
-    const dy = 0.5 + face.y * 0.5;
-    const dz = 0.5 + face.z * 0.5;
-    const direction = face.y > 0 ? 1 : face.y < 0 ? 0 : face.z < 0 ? 2 : face.z > 0 ? 3 : face.x < 0 ? 4 : 5;
-    client.write("block_place", {
-      location: block.position,
-      direction,
-      hand: 0,
-      cursorX: dx,
-      cursorY: dy,
-      cursorZ: dz,
-      insideBlock: false,
-      sequence: 1,
-      worldBorderHit: false,
-      heldItem: bot.heldItem
-    });
-  } catch {
-    /* */
-  }
-  try {
-    bot.activateItem(false);
-  } catch {
-    try {
-      bot.activateItem();
-    } catch {
-      /* */
-    }
-  }
-}
-
 function farmPathOpts(extra?: { clearGoal?: boolean; timeoutMs?: number }) {
   return {
     clearGoal: extra?.clearGoal ?? true,
@@ -599,62 +565,36 @@ export class FarmService {
       }
     }
 
+    await sleepCancellable(200, token);
     const hole = bot.blockAt(dest.position);
     if (hole && isWaterBlockName(hole.name)) return true;
-    // Do not pour until the cell is actually air — clicking a still-solid dirt
-    // puts water on TOP of it (y+1), which is the bug.
     if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
 
     const floor = bot.blockAt(dest.position.offset(0, -1, 0));
     if (!floor || floor.boundingBox !== "block") return false;
 
-    const pourIntoHole = async () => {
+    const scoopAt = async (pos: Vec3) => {
+      const w = bot.blockAt(pos);
+      if (!w || !isWaterBlockName(w.name)) return;
+      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
+      if (!empty) return;
       try {
-        bot.setControlState("sneak", true);
-      } catch {
-        /* */
-      }
-      await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 1_500, "look hole floor");
-      await sleepCancellable(80, token);
-      const gp = (
-        bot as unknown as {
-          _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean; swingArm?: string }) => Promise<unknown>;
-        }
-      )._genericPlace;
-      if (typeof gp === "function") {
+        await boundedOp(bot.equip(empty, "hand"), token, 3_000, "equip bucket scoop");
+        await boundedOp(bot.lookAt(pos.offset(0.5, 0.4, 0.5), true), token, 1_200, "scoop water");
+        await sleepCancellable(50, token);
         try {
-          await boundedOp(gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }), token, 2_000, "bucket on floor");
+          bot.activateItem(false);
+        } catch {
+          bot.activateItem();
+        }
+        await sleepCancellable(200, token);
+        try {
+          bot.deactivateItem();
         } catch {
           /* */
         }
-      }
-      useBucketOnFace(bot, floor, { x: 0, y: 1, z: 0 });
-      await sleepCancellable(220, token);
-      const inHole = bot.blockAt(dest.position);
-      if (!inHole || !isWaterBlockName(inHole.name)) {
-        const wall = bot.blockAt(dest.position.offset(1, 0, 0));
-        if (wall && wall.boundingBox === "block") {
-          try {
-            await boundedOp(bot.lookAt(wall.position.offset(0, 0.5, 0.5), true), token, 1_200, "look hole wall");
-            if (typeof gp === "function") {
-              await boundedOp(gp.call(bot, wall, new Vec3(-1, 0, 0), { forceLook: true, swingArm: "right" }), token, 2_000, "bucket on wall");
-            }
-            useBucketOnFace(bot, wall, { x: -1, y: 0, z: 0 });
-            await sleepCancellable(220, token);
-          } catch (e) {
-            if (token.cancelled) throw e;
-          }
-        }
-      }
-      try {
-        bot.deactivateItem();
-      } catch {
-        /* */
-      }
-      try {
-        bot.setControlState("sneak", false);
-      } catch {
-        /* */
+      } catch (e) {
+        if (token.cancelled) throw e;
       }
     };
 
@@ -672,42 +612,49 @@ export class FarmService {
       }
     };
 
-    const scoopFloating = async () => {
-      const up = bot.blockAt(dest.position.offset(0, 1, 0));
-      if (!up || !isWaterBlockName(up.name)) return;
-      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
-      if (!empty) return;
-      try {
-        await boundedOp(bot.equip(empty, "hand"), token, 3_000, "equip bucket scoop");
-        await boundedOp(bot.lookAt(up.position.offset(0.5, 0.4, 0.5), true), token, 1_500, "look floating water");
-        await sleepCancellable(60, token);
-        bot.activateItem();
-        await sleepCancellable(200, token);
-        bot.deactivateItem();
-      } catch (e) {
-        if (token.cancelled) throw e;
-      }
-    };
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-      const held = bot.inventory.items().find((i) => i.name === "water_bucket");
-      if (!held) {
-        if (isCreativeMode(bot)) await creativeEnsureItem(bot, "water_bucket", 1);
-      }
+    // One click only: top face of the block UNDER the hole. Extra activateItem /
+    // wall clicks put a second source in the air above the hole.
+    if (bot.heldItem?.name !== "water_bucket") {
       const refill = bot.inventory.items().find((i) => i.name === "water_bucket");
       if (!refill) return false;
       try {
         await boundedOp(bot.equip(refill, "hand"), token, 3_000, "equip water_bucket");
-        await pourIntoHole();
       } catch (e) {
         if (token.cancelled) throw e;
+        return false;
       }
-      const inHole = bot.blockAt(dest.position);
-      if (inHole && isWaterBlockName(inHole.name)) return true;
-      await scoopFloating();
+    }
+    try {
+      bot.setControlState("sneak", true);
+    } catch {
+      /* */
+    }
+    const gp = (
+      bot as unknown as {
+        _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean | "ignore"; swingArm?: string }) => Promise<unknown>;
+      }
+    )._genericPlace;
+    try {
+      if (typeof gp === "function") {
+        await boundedOp(
+          gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }),
+          token,
+          2_000,
+          "water on hole floor"
+        );
+      }
+    } catch (e) {
+      if (token.cancelled) throw e;
+    }
+    await sleepCancellable(300, token);
+    try {
+      bot.setControlState("sneak", false);
+    } catch {
+      /* */
     }
 
+    await scoopAt(dest.position.offset(0, 1, 0));
+    await sleepCancellable(80, token);
     const filled = bot.blockAt(dest.position);
     if (filled && isWaterBlockName(filled.name)) return true;
     await refillHole();
