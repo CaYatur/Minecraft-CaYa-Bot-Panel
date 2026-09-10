@@ -92,6 +92,8 @@ export interface EnsureMovementOpts {
   allowPlace?: boolean;
   /** "follow": canDig=false + allowPlace=false varsayılır */
   mode?: "follow" | "goto" | "parkour";
+  /** If set, pathfinder may break only these blocks (leaves on a tree walk). Terrain stays intact. */
+  breakOnly?: (name: string) => boolean;
 }
 
 /** pathfinder eklentisini yükle + Movements'ı config'ten kur */
@@ -158,7 +160,13 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
       }
     };
   }
-  if (movements.canDig === false) {
+  const breakOnly = opts?.breakOnly;
+  if (breakOnly) {
+    movements.canDig = true;
+    for (const block of registry.blocksArray) {
+      if (!breakOnly(block.name)) movements.blocksCantBreak.add(block.id);
+    }
+  } else if (movements.canDig === false) {
     for (const block of registry.blocksArray) movements.blocksCantBreak.add(block.id);
     movements.exclusionAreasBreak.push(() => 100);
   }
@@ -178,7 +186,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   bot.pathfinder.setMovements(movements);
   try {
     const pf = bot.pathfinder as unknown as { thinkTimeout?: number };
-    pf.thinkTimeout = opts?.mode === "follow" ? 4_000 : movements.canDig ? 5_000 : 15_000;
+    pf.thinkTimeout = opts?.mode === "follow" ? 4_000 : opts?.breakOnly ? 12_000 : movements.canDig ? 5_000 : 15_000;
   } catch {
     /* */
   }
@@ -397,6 +405,8 @@ export interface GotoOptions {
   parkour?: boolean;
   /** Bu hareket for özel zaman aşımı. */
   timeoutMs?: number;
+  /** Pathfinder yalnızca bu blokları kırabilir (ağaç yürüyüşünde yaprak). */
+  breakOnly?: (name: string) => boolean;
 }
 
 export async function runGoto(
@@ -417,7 +427,8 @@ export async function runGoto(
     mode: "goto",
     canDig: options?.canDig,
     allowPlace: options?.allowPlace,
-    parkour: options?.parkour
+    parkour: options?.parkour,
+    breakOnly: options?.breakOnly
   });
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
@@ -458,7 +469,8 @@ export async function runGotoXZ(
     mode: "goto",
     canDig: options?.canDig,
     allowPlace: options?.allowPlace,
-    parkour: options?.parkour
+    parkour: options?.parkour,
+    breakOnly: options?.breakOnly
   });
   if (moveCfg(instance).humanize !== false) await sleep(40 + Math.floor(Math.random() * 90));
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");

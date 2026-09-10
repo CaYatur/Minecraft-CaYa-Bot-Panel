@@ -9,8 +9,8 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
   const bot = useAppStore((s) => s.bots[botId]);
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
-  const [woodN, setWoodN] = useState("16");
-  const [woodType, setWoodType] = useState("oak_log");
+  const [gatherN, setGatherN] = useState("16");
+  const [gatherItem, setGatherItem] = useState("oak_log");
   const [ore, setOre] = useState("iron_ore");
   const [oreN, setOreN] = useState("8");
   const [mode, setMode] = useState<"legit" | "utility">("legit");
@@ -112,27 +112,28 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           </div>
           <div className="mb-2">
             <span className="mb-1 block text-[10px] text-zinc-500">{t("gatherCraft.woodCatalog")}</span>
-            <ItemPicker version={version} kind="blocks" value={woodType} onChange={setWoodType} placeholder="oak_log…" />
+            <ItemPicker version={version} kind="blocks" value={gatherItem} onChange={setGatherItem} placeholder="oak_log, dirt, sand…" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
-              value={woodN}
-              onChange={(e) => setWoodN(e.target.value)}
+              value={gatherN}
+              onChange={(e) => setGatherN(e.target.value)}
               title={t("gatherCraft.countTitle")}
               className={`mono w-16 ${inputCls}`}
             />
             <button
               disabled={!online}
-              onClick={() =>
-                act(
-                  {
-                    type: "collect-wood",
-                    count: Number(woodN) || 16,
-                    logType: woodType.endsWith("_log") ? woodType : undefined
-                  },
-                  t("gatherCraft.collectWoodToast")
-                )
-              }
+              onClick={() => {
+                const name = gatherItem.replace(/^minecraft:/, "");
+                const count = Number(gatherN) || 16;
+                const wood = name === "log" || name.endsWith("_log") || name.endsWith("_stem");
+                void act(
+                  wood
+                    ? { type: "collect-wood", count, logType: name === "log" ? undefined : name, countMode: "add" }
+                    : { type: "collect-block", item: name, count, countMode: "add" },
+                  t("gatherCraft.collectWoodToast", { item: name })
+                );
+              }}
               className={btnAccent}
             >
               {t("gatherCraft.collectWood")}
@@ -166,7 +167,8 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
                     type: "mine",
                     ore: ore.replace(/_ore$/, "").replace(/^deepslate_/, ""),
                     count: Number(oreN) || 8,
-                    mode
+                    mode,
+                    countMode: "add"
                   },
                   t("gatherCraft.mineToast", { ore })
                 )
@@ -179,7 +181,8 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           {mode === "utility" && (
             <p className="mt-2 text-[11px] text-amber-300/90">{t("gatherCraft.utilityWarn")}</p>
           )}
-          <p className="mono mt-2 text-[10px] text-zinc-600">{t("gatherCraft.cmdGather")}</p>
+          <p className="mt-2 text-[11px] text-zinc-500">{t("gatherCraft.gatherHint")}</p>
+          <p className="mono mt-1 text-[10px] text-zinc-600">{t("gatherCraft.cmdGather")}</p>
         </div>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">

@@ -623,7 +623,7 @@ export class BotInstance extends EventEmitter {
           Number(action.count ?? 16),
           action.logType ? String(action.logType) : undefined,
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       case "collect":
       case "collect-item":
@@ -631,9 +631,9 @@ export class BotInstance extends EventEmitter {
       case "collect-block":
         return this.gather.enqueueCollectBlock(
           String(action.item ?? action.block ?? action.name ?? ""),
-          Number(action.count ?? 8),
+          Number(action.count ?? 16),
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       case "collect-drops":
       case "eşya-topla":
@@ -645,7 +645,7 @@ export class BotInstance extends EventEmitter {
           Number(action.count ?? 8),
           action.mode === "utility" ? "utility" : "legit",
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       // ---- Faz 9 craft ---------------------------------------------------------
       case "craft":
