@@ -965,6 +965,23 @@ export class FarmService {
         failed++;
         continue;
       }
+      // Drops land on the crop cell; harvest reach is ~3m so the bot is often
+      // too far for the vanilla pickup magnet (~1.3m). Step onto the cell first.
+      if (!isCreativeMode(bot)) {
+        try {
+          await farmNear(
+            this.instance,
+            cell.position.x + 0.5,
+            cell.position.y,
+            cell.position.z + 0.5,
+            0.7,
+            token
+          );
+          await sleepCancellable(400, token);
+        } catch (e) {
+          if (token.cancelled) throw e;
+        }
+      }
       // yeniden ekim (drop'lar yerdeyken bile tohum envanterde olabilir)
       if (replant) {
         let under = bot.blockAt(cell.position.offset(0, -1, 0));
@@ -983,19 +1000,18 @@ export class FarmService {
           if (res === "planted") replanted++;
         }
       }
-      // Survival: pick up drops. Creative breaking does not drop items.
-      if (!isCreativeMode(bot) && harvested % 8 === 0) {
+      if (!isCreativeMode(bot) && harvested % 4 === 0) {
         try {
-          await runSmartCollectDrops(this.instance, undefined, 6, token, () => {}, 4_000);
+          await runSmartCollectDrops(this.instance, undefined, Math.max(8, c.r + 2), token, () => {}, 6_000);
         } catch (e) {
           if (token.cancelled) throw e;
         }
       }
     }
-    // final süpürme
     if (!isCreativeMode(bot)) {
+      restoreDefaultMovement(this.instance);
       try {
-        await runSmartCollectDrops(this.instance, undefined, Math.min(c.r + 4, 12), token, () => {}, 8_000);
+        await runSmartCollectDrops(this.instance, undefined, Math.max(12, c.r + 6), token, () => {}, 20_000);
       } catch (e) {
         if (token.cancelled) throw e;
       }

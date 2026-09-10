@@ -1109,7 +1109,7 @@ export const tr: MessageTree = {
     farmStop: "Durdur",
     farmStopToast: "Tüm işler durduruldu",
     farmHint:
-      "Yarıçap bir dairedir — tarla daha büyükse sayıyı artır (varsayılan 12). Çapala: su+tarla. Ek: tohum. Hasat: olgunları kır, yeniden ek, sandığa koy (yazılı koordinat veya 64 blok içindeki en yakın, kapıdan yürüyebilmeli). Döngü tarlayı büyütmez."
+      "Yarıçap bir dairedir (varsayılan 6). Tarla büyükse sayıyı artır. Çapala: su+tarla. Ek: tohum. Hasat: olgunları kır, düşenleri üstüne giderek al, yeniden ek, sandığa koy. Döngü tarlayı büyütmez."
   },
   itemPicker: {
     placeholder: "Ara / seç…",

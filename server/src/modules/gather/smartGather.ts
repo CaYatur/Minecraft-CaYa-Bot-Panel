@@ -201,7 +201,7 @@ export async function runSmartCollectDrops(
         target.position.x,
         target.position.y,
         target.position.z,
-        1.75,
+        1,
         token,
         () => {},
         { timeoutMs: gotoTimeout, canDig: false, allowPlace: false }

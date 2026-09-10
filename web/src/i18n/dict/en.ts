@@ -1109,7 +1109,7 @@ export const en: MessageTree = {
     farmStop: "Stop",
     farmStopToast: "All work stopped",
     farmHint:
-      "Radius is a circle — raise it if the field is larger (default 12). Till: water+hoe. Plant: seeds. Harvest: break mature, replant, walk to a chest within 64 blocks (must path through the door). Loop does not expand the field."
+      "Radius is a circle (default 6). Raise it for a bigger field. Till: water+hoe. Plant: seeds. Harvest: break mature, walk onto drops, replant, chest. Loop does not expand the field."
   },
   itemPicker: {
     placeholder: "Search / select…",
