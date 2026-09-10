@@ -1089,7 +1089,13 @@ export const en: MessageTree = {
       "Items on the keepItems list are not deposited. Chest physics are verified on Paper.",
     farm: "Farming",
     farmCrop: "Crop",
-    farmRadius: "Radius",
+    farmRadius: "Area radius (1–32)",
+    farmWhere: "Where",
+    farmWhereBot: "Bot position",
+    farmWherePlayer: "Player",
+    farmWhereXyz: "Coordinates",
+    farmPlayerPlaceholder: "player name",
+    farmUseBotPos: "Use bot coords",
     farmChest: "Produce chest (x y z)",
     farmDepositNearest: "nearest chest",
     till: "Till soil",
@@ -1103,7 +1109,7 @@ export const en: MessageTree = {
     farmStop: "Stop",
     farmStopToast: "All work stopped",
     farmHint:
-      "Loop: till → harvest mature → replant → deposit produce to the chest → wait. Empty chest coords skip depositing (or tick nearest chest). Keep water within 4 blocks or farmland dries out."
+      "Default location is the bot; you can also pick a player name or x y z. Radius 1–32. In creative the bot pulls a hoe/seeds/bucket. Harvest = break mature crops (creative does not drop items). Stop is enabled only while a farm job is running."
   },
   itemPicker: {
     placeholder: "Search / select…",

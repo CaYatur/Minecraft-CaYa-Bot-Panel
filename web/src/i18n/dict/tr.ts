@@ -1089,7 +1089,13 @@ export const tr: MessageTree = {
       "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır.",
     farm: "Tarım",
     farmCrop: "Ekin",
-    farmRadius: "Yarıçap",
+    farmRadius: "Alan yarıçapı (1–32)",
+    farmWhere: "Konum",
+    farmWhereBot: "Botun yeri",
+    farmWherePlayer: "Oyuncu",
+    farmWhereXyz: "Koordinat",
+    farmPlayerPlaceholder: "oyuncu adı",
+    farmUseBotPos: "Bot konumunu yaz",
     farmChest: "Ürün sandığı (x y z)",
     farmDepositNearest: "en yakın sandığa",
     till: "Çapala",
@@ -1103,7 +1109,7 @@ export const tr: MessageTree = {
     farmStop: "Durdur",
     farmStopToast: "Tüm işler durduruldu",
     farmHint:
-      "Döngü: çapala → olgunları hasat et → yeniden ek → ürünleri sandığa bırak → bekle. Sandık koordinatı boşsa depolama atlanır (veya en yakın sandık seçeneği). Su 4 blok içinde olmalı, yoksa tarla kurur."
+      "Varsayılan konum botun durduğu yer; oyuncu adı veya x y z de seçilebilir. Yarıçap 1–32. Creative’de çapa/tohum/kova envantere alınır. Hasat = olgun ekinleri kırmak (creative’de drop olmaz). Durdur yalnızca tarım işi varken açıktır."
   },
   itemPicker: {
     placeholder: "Ara / seç…",

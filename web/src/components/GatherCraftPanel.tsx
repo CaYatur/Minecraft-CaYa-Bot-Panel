@@ -22,9 +22,45 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
   const [farmR, setFarmR] = useState("6");
   const [farmChest, setFarmChest] = useState("");
   const [farmNearest, setFarmNearest] = useState(false);
+  const [farmAt, setFarmAt] = useState<"bot" | "player" | "xyz">("bot");
+  const [farmPlayer, setFarmPlayer] = useState("");
+  const [farmX, setFarmX] = useState("");
+  const [farmY, setFarmY] = useState("");
+  const [farmZ, setFarmZ] = useState("");
 
   if (!bot) return null;
   const online = bot.status === "online";
+  const farmTypes = new Set(["till", "plant", "harvest", "farm-cycle"]);
+  const farmBusy = Boolean(
+    (bot.tasks.current && farmTypes.has(bot.tasks.current.type)) ||
+      bot.tasks.queue.some((t) => farmTypes.has(t.type))
+  );
+
+  const farmArea = (): Record<string, unknown> => {
+    const radius = Math.max(1, Math.min(32, Number(farmR) || 6));
+    const out: Record<string, unknown> = { radius };
+    if (farmAt === "player" && farmPlayer.trim()) out.player = farmPlayer.trim();
+    if (farmAt === "xyz") {
+      const x = Number(farmX);
+      const y = Number(farmY);
+      const z = Number(farmZ);
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        out.x = x;
+        out.z = z;
+        if (Number.isFinite(y)) out.y = y;
+      }
+    }
+    return out;
+  };
+
+  const fillFarmHere = () => {
+    const p = bot.runtime.position;
+    if (!p) return;
+    setFarmAt("xyz");
+    setFarmX(String(Math.floor(p.x)));
+    setFarmY(String(Math.floor(p.y)));
+    setFarmZ(String(Math.floor(p.z)));
+  };
   const version = servers.find((s) => s.id === bot.config.serverId)?.version ?? "auto";
 
   const act = async (action: Record<string, unknown>, msg?: string) => {
@@ -238,27 +274,73 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           </label>
           <label className="text-[11px] text-zinc-500">
             {t("gatherCraft.farmRadius")}
-            <input value={farmR} onChange={(e) => setFarmR(e.target.value)} className={`mono ml-1 w-12 ${inputCls}`} />
+            <input
+              value={farmR}
+              onChange={(e) => setFarmR(e.target.value)}
+              min={1}
+              max={32}
+              className={`mono ml-1 w-12 ${inputCls}`}
+              title="1–32"
+            />
           </label>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-zinc-500">{t("gatherCraft.farmWhere")}</span>
+          {(
+            [
+              ["bot", t("gatherCraft.farmWhereBot")],
+              ["player", t("gatherCraft.farmWherePlayer")],
+              ["xyz", t("gatherCraft.farmWhereXyz")]
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setFarmAt(id)}
+              className={`rounded px-2 py-0.5 text-[11px] ${
+                farmAt === id ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          {farmAt === "player" && (
+            <input
+              value={farmPlayer}
+              onChange={(e) => setFarmPlayer(e.target.value)}
+              placeholder={t("gatherCraft.farmPlayerPlaceholder")}
+              className={`w-36 ${inputCls}`}
+            />
+          )}
+          {farmAt === "xyz" && (
+            <>
+              <input value={farmX} onChange={(e) => setFarmX(e.target.value)} placeholder="x" className={`mono w-16 ${inputCls}`} />
+              <input value={farmY} onChange={(e) => setFarmY(e.target.value)} placeholder="y" className={`mono w-16 ${inputCls}`} />
+              <input value={farmZ} onChange={(e) => setFarmZ(e.target.value)} placeholder="z" className={`mono w-16 ${inputCls}`} />
+              <button type="button" disabled={!online} onClick={fillFarmHere} className={btnSecondary}>
+                {t("gatherCraft.farmUseBotPos")}
+              </button>
+            </>
+          )}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             disabled={!online}
-            onClick={() => act({ type: "till", radius: Number(farmR) || 6 }, t("gatherCraft.tillToast"))}
+            onClick={() => act({ type: "till", ...farmArea() }, t("gatherCraft.tillToast"))}
             className={btnAccent}
           >
             {t("gatherCraft.till")}
           </button>
           <button
             disabled={!online}
-            onClick={() => act({ type: "plant", crop: farmCrop, radius: Number(farmR) || 6 }, t("gatherCraft.plantToast"))}
+            onClick={() => act({ type: "plant", crop: farmCrop, ...farmArea() }, t("gatherCraft.plantToast"))}
             className={btnAccent}
           >
             {t("gatherCraft.plant")}
           </button>
           <button
             disabled={!online}
-            onClick={() => act({ type: "harvest", radius: Number(farmR) || 6 }, t("gatherCraft.harvestToast"))}
+            onClick={() => act({ type: "harvest", ...farmArea() }, t("gatherCraft.harvestToast"))}
             className={btnAccent}
           >
             {t("gatherCraft.harvest")}
@@ -284,7 +366,7 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
               const parts = farmChest.trim().split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n));
               const chest = parts.length === 3 ? { depositX: parts[0], depositY: parts[1], depositZ: parts[2] } : {};
               void act(
-                { type: "farm-cycle", crop: farmCrop, radius: Number(farmR) || 6, depositNearest: farmNearest, ...chest },
+                { type: "farm-cycle", crop: farmCrop, depositNearest: farmNearest, ...farmArea(), ...chest },
                 t("gatherCraft.farmLoopToast")
               );
             }}
@@ -292,10 +374,20 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           >
             {t("gatherCraft.farmLoop")}
           </button>
-          <button disabled={!online} onClick={() => act({ type: "reset-work" }, t("gatherCraft.farmStopToast"))} className={btnSecondary}>
+          <button
+            disabled={!online || !farmBusy}
+            onClick={() => act({ type: "reset-work" }, t("gatherCraft.farmStopToast"))}
+            className={farmBusy ? "rounded-lg bg-red-900/70 px-3 py-1.5 text-sm font-medium text-red-100 hover:bg-red-800" : btnSecondary}
+          >
             {t("gatherCraft.farmStop")}
           </button>
         </div>
+        {farmBusy && bot.tasks.current && (
+          <p className="mt-2 text-[11px] text-amber-300">
+            {bot.tasks.current.label}
+            {bot.tasks.current.progress?.label ? ` · ${bot.tasks.current.progress.label}` : ""}
+          </p>
+        )}
         <p className="mt-2 text-[11px] text-zinc-500">{t("gatherCraft.farmHint")}</p>
       </div>
     </div>

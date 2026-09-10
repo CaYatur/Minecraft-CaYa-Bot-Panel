@@ -1551,12 +1551,15 @@ function farmAreaFrom(action: Record<string, unknown>): {
   z?: number;
   radius?: number;
   maxBlocks?: number;
+  player?: string;
 } {
+  const player = action.player != null && String(action.player).trim() !== "" ? String(action.player).trim() : undefined;
   return {
     x: numOpt(action.x),
     y: numOpt(action.y),
     z: numOpt(action.z),
     radius: numOpt(action.radius),
-    maxBlocks: numOpt(action.maxBlocks ?? action.max_blocks)
+    maxBlocks: numOpt(action.maxBlocks ?? action.max_blocks),
+    player
   };
 }
