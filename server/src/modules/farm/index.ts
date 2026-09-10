@@ -108,8 +108,11 @@ function applyFarmMovement(instance: BotInstance) {
 function holdNoJump(bot: Bot): () => void {
   const tick = () => {
     try {
-      bot.setControlState("jump", false);
-      bot.setControlState("sprint", false);
+      // In a hole / falling, jump must stay available or the bot never climbs out.
+      if (bot.entity?.onGround) {
+        bot.setControlState("jump", false);
+        bot.setControlState("sprint", false);
+      }
     } catch {
       /* */
     }
@@ -122,6 +125,40 @@ function holdNoJump(bot: Bot): () => void {
       /* */
     }
   };
+}
+
+function useBucketOnFace(bot: Bot, block: Block, face: { x: number; y: number; z: number }) {
+  try {
+    const client = (bot as unknown as { _client?: { write: (n: string, d: unknown) => void } })._client;
+    if (!client) return;
+    const dx = 0.5 + face.x * 0.5;
+    const dy = 0.5 + face.y * 0.5;
+    const dz = 0.5 + face.z * 0.5;
+    const direction = face.y > 0 ? 1 : face.y < 0 ? 0 : face.z < 0 ? 2 : face.z > 0 ? 3 : face.x < 0 ? 4 : 5;
+    client.write("block_place", {
+      location: block.position,
+      direction,
+      hand: 0,
+      cursorX: dx,
+      cursorY: dy,
+      cursorZ: dz,
+      insideBlock: false,
+      sequence: 1,
+      worldBorderHit: false,
+      heldItem: bot.heldItem
+    });
+  } catch {
+    /* */
+  }
+  try {
+    bot.activateItem(false);
+  } catch {
+    try {
+      bot.activateItem();
+    } catch {
+      /* */
+    }
+  }
 }
 
 function farmPathOpts(extra?: { clearGoal?: boolean; timeoutMs?: number }) {
@@ -572,23 +609,66 @@ export class FarmService {
     if (!floor || floor.boundingBox !== "block") return false;
 
     const pourIntoHole = async () => {
-      // Click the TOP face of the block under the hole → water fills dest, not y+1.
-      await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 2_000, "look hole floor");
-      await sleepCancellable(80, token);
       try {
-        await boundedOp(bot.activateBlock(floor), token, 1_500, "pour water in hole");
+        bot.setControlState("sneak", true);
       } catch {
+        /* */
+      }
+      await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 1_500, "look hole floor");
+      await sleepCancellable(80, token);
+      const gp = (
+        bot as unknown as {
+          _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean; swingArm?: string }) => Promise<unknown>;
+        }
+      )._genericPlace;
+      if (typeof gp === "function") {
         try {
-          bot.activateItem();
+          await boundedOp(gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }), token, 2_000, "bucket on floor");
         } catch {
           /* */
         }
       }
-      await sleepCancellable(200, token);
+      useBucketOnFace(bot, floor, { x: 0, y: 1, z: 0 });
+      await sleepCancellable(220, token);
+      const inHole = bot.blockAt(dest.position);
+      if (!inHole || !isWaterBlockName(inHole.name)) {
+        const wall = bot.blockAt(dest.position.offset(1, 0, 0));
+        if (wall && wall.boundingBox === "block") {
+          try {
+            await boundedOp(bot.lookAt(wall.position.offset(0, 0.5, 0.5), true), token, 1_200, "look hole wall");
+            if (typeof gp === "function") {
+              await boundedOp(gp.call(bot, wall, new Vec3(-1, 0, 0), { forceLook: true, swingArm: "right" }), token, 2_000, "bucket on wall");
+            }
+            useBucketOnFace(bot, wall, { x: -1, y: 0, z: 0 });
+            await sleepCancellable(220, token);
+          } catch (e) {
+            if (token.cancelled) throw e;
+          }
+        }
+      }
       try {
         bot.deactivateItem();
       } catch {
         /* */
+      }
+      try {
+        bot.setControlState("sneak", false);
+      } catch {
+        /* */
+      }
+    };
+
+    const refillHole = async () => {
+      const open = bot.blockAt(dest.position);
+      if (!open || (open.name !== "air" && open.name !== "cave_air")) return;
+      if (isCreativeMode(bot)) await creativeEnsureItem(bot, "dirt", 1);
+      const dirt = bot.inventory.items().find((i) => i.name === "dirt" || i.name === "grass_block" || i.name === "coarse_dirt");
+      if (!dirt) return;
+      try {
+        await boundedOp(bot.equip(dirt, "hand"), token, 3_000, "equip dirt");
+        await boundedOp(bot.placeBlock(floor, new Vec3(0, 1, 0)), token, 2_500, "refill hole");
+      } catch (e) {
+        if (token.cancelled) throw e;
       }
     };
 
@@ -629,7 +709,9 @@ export class FarmService {
     }
 
     const filled = bot.blockAt(dest.position);
-    return Boolean(filled && isWaterBlockName(filled.name));
+    if (filled && isWaterBlockName(filled.name)) return true;
+    await refillHole();
+    return false;
   }
 
   /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
@@ -702,7 +784,11 @@ export class FarmService {
         if (token.cancelled) throw new Error(token.reason ?? "cancelled");
         const cell = cells[i]!;
         const live = bot.blockAt(cell.position);
-        if (live && !isFarmlandHydrated(bot, live.position) && !isRaining(bot)) {
+        if (!live || live.name === "air" || live.name === "cave_air" || isWaterBlockName(live.name)) {
+          failed++;
+          continue;
+        }
+        if (!isFarmlandHydrated(bot, live.position) && !isRaining(bot)) {
           failed++;
           continue;
         }
@@ -1027,8 +1113,9 @@ export class FarmService {
       report({ done: cycle, total: maxCycles || cycle + 1, label: `cycle ${cycLabel} · yield: ${totalTxt.slice(0, 60)}` });
 
       if (maxCycles && cycle >= maxCycles) break;
-      // 5) büyüme bekle (iptale 250ms içinde tepki verir)
-      await sleepCancellable(interval, token);
+      // Empty first pass (water/till failed) — do not sit 45s looking stuck.
+      const wait = totalTxt === "none yet" ? Math.min(interval, 8_000) : interval;
+      await sleepCancellable(wait, token);
     }
     } finally {
       restoreDefaultMovement(this.instance);
