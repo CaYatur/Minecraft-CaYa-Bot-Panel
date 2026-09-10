@@ -251,6 +251,59 @@ function sleepCancellable(ms: number, token: TaskToken): Promise<void> {
   });
 }
 
+/**
+ * Place a water source at an exact air cell.
+ *
+ * Mineflayer: placeBlock/activateBlock do not work with buckets (Prismarine
+ * #3731 / #3740). The server raytraces the look at a SOLID face, then
+ * activateItem's use_item packet (with yaw/pitch) places water against that
+ * face. Water at dest = floor + (0,1,0). We wait until dest is water.
+ */
+async function pourWaterIntoCoord(bot: Bot, dest: Vec3, token: TaskToken): Promise<boolean> {
+  const hole = bot.blockAt(dest);
+  const floor = bot.blockAt(dest.offset(0, -1, 0));
+  if (!floor || floor.boundingBox !== "block") return false;
+  if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
+  if (bot.heldItem?.name !== "water_bucket") return false;
+
+  await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 1_500, "look at hole floor");
+  await sleepCancellable(80, token);
+
+  const cursor = (bot as unknown as { blockAtCursor?: (max?: number) => Block | null }).blockAtCursor?.(6);
+  if (cursor && (cursor.position.x !== floor.position.x || cursor.position.y !== floor.position.y || cursor.position.z !== floor.position.z)) {
+    await boundedOp(bot.lookAt(floor.position.offset(0.5, 1.0, 0.5), true), token, 1_500, "re-aim hole floor");
+    await sleepCancellable(60, token);
+  }
+
+  try {
+    bot.activateItem(false);
+  } catch {
+    bot.activateItem();
+  }
+
+  const t0 = Date.now();
+  while (Date.now() - t0 < 2_000) {
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+    const b = bot.blockAt(dest);
+    if (b && isWaterBlockName(b.name)) {
+      try {
+        bot.deactivateItem();
+      } catch {
+        /* */
+      }
+      return true;
+    }
+    await sleepCancellable(50, token);
+  }
+  try {
+    bot.deactivateItem();
+  } catch {
+    /* */
+  }
+  const final = bot.blockAt(dest);
+  return Boolean(final && isWaterBlockName(final.name));
+}
+
 function resolveFarmAnchor(instance: BotInstance, area: FarmArea): { x: number; y: number; z: number } {
   const bot = requireBot(instance);
   if (area.player && area.player.trim()) {
@@ -570,44 +623,16 @@ export class FarmService {
     }
     if (bot.heldItem?.name !== "water_bucket") return false;
 
-    try {
-      bot.setControlState("sneak", true);
-    } catch {
-      /* */
-    }
-    // Packet says: click the UP face of the block under the hole. That is dest,
-    // not a neighbor and not y+1. Do not also activateItem (second source in air).
-    const gp = (
-      bot as unknown as {
-        _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean; swingArm?: string }) => Promise<unknown>;
-      }
-    )._genericPlace;
-    try {
-      if (typeof gp === "function") {
-        await boundedOp(
-          gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }),
-          token,
-          2_000,
-          "water into hole"
-        );
-      }
-    } catch (e) {
-      if (token.cancelled) throw e;
-    }
-    await sleepCancellable(300, token);
-    try {
-      bot.setControlState("sneak", false);
-    } catch {
-      /* */
-    }
-
-    const above = bot.blockAt(dest.position.offset(0, 1, 0));
-    if (above && isWaterBlockName(above.name)) {
+    const ok = await pourWaterIntoCoord(bot, dest.position, token);
+    if (ok) return true;
+    const floating = bot.blockAt(dest.position.offset(0, 1, 0));
+    if (floating && isWaterBlockName(floating.name)) {
+      this.log().warn("Farm water", `placed above hole at ${dest.position.x},${dest.position.y + 1},${dest.position.z} — scooping`);
       const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
       if (empty) {
         try {
           await boundedOp(bot.equip(empty, "hand"), token, 3_000, "scoop floating");
-          await boundedOp(bot.lookAt(above.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look float");
+          await boundedOp(bot.lookAt(floating.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look float");
           try {
             bot.activateItem(false);
           } catch {
@@ -620,7 +645,12 @@ export class FarmService {
       }
     }
     const filled = bot.blockAt(dest.position);
-    return Boolean(filled && isWaterBlockName(filled.name));
+    if (filled && isWaterBlockName(filled.name)) return true;
+    this.log().warn(
+      "Farm water",
+      `no water at ${dest.position.x},${dest.position.y},${dest.position.z} (still ${filled?.name ?? "?"})`
+    );
+    return false;
   }
 
   /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
