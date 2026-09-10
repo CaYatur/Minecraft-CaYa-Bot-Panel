@@ -22,7 +22,7 @@ import { FarmService } from "../modules/farm";
 import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { depositToChest, withdrawFromChest } from "../modules/inventory/chestOps";
-import { runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
+import { restoreDefaultMovement, runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
 import { SurvivalService } from "../modules/survival";
 import type {
   BotConfig,
@@ -394,6 +394,11 @@ export class BotInstance extends EventEmitter {
       }
       try {
         bot.clearControlStates();
+      } catch {
+        /* */
+      }
+      try {
+        restoreDefaultMovement(this);
       } catch {
         /* */
       }

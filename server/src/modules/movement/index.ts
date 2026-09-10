@@ -555,6 +555,15 @@ export async function runFollow(
   let followMovesOn = false;
   let scaffoldOn = false;
 
+  restoreDefaultMovement(instance);
+  ensureMovement(instance, {
+    mode: "follow",
+    canDig: movementPolicy?.canDig ?? false,
+    canOpenDoors: true,
+    allowPlace: movementPolicy?.allowPlace ?? false
+  });
+  followMovesOn = true;
+
   /** Takılınca / noPath: pathfinder'a geçici scaffold ver (config scaffoldBlocks) */
   const enableScaffoldForStuck = (bot: Bot) => {
     ensureMovement(instance, {
@@ -851,10 +860,43 @@ export async function runFollow(
   }
 }
 
+export function stopCreativeFlight(bot: Bot) {
+  try {
+    (bot as unknown as { creative?: { stopFlying?(): void } }).creative?.stopFlying?.();
+  } catch {
+    /* */
+  }
+}
+
+/** Leave farm/creative-fly settings so follow/goto can walk again. */
+export function restoreDefaultMovement(instance: BotInstance) {
+  const bot = instance.bot;
+  if (!bot) return;
+  stopCreativeFlight(bot);
+  try {
+    const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+    pf.stop?.();
+    pf.setGoal?.(null);
+  } catch {
+    /* */
+  }
+  try {
+    bot.clearControlStates();
+  } catch {
+    /* */
+  }
+  try {
+    ensureMovement(instance, { mode: "goto" });
+  } catch {
+    /* */
+  }
+}
+
 export function stopMovement(instance: BotInstance) {
   instance.tasks.cancelAll("stopped by user");
   const bot = instance.bot;
   if (!bot) return;
+  stopCreativeFlight(bot);
   try {
     const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
     pf.stop?.();
