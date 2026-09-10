@@ -1023,7 +1023,9 @@ export const en: MessageTree = {
     tabNoPos: "tab · no position",
     followWait: "Follow (wait)",
     followWaitOn: "● Follow (wait)",
-    protectTitle: "Add/remove from protect list. Details: Combat tab."
+    protectTitle: "Add/remove from protect list. Details: Combat tab.",
+    expand: "Show player list",
+    collapse: "Hide player list"
   },
   addBot: {
     title: "Add bot",

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { EV } from "../lib/events";
@@ -57,6 +58,8 @@ export function NearbyPlayers({ botId }: { botId: string }) {
   const [players, setPlayers] = useState<NearbyPlayer[]>([]);
   const [radius, setRadius] = useState(48);
   const [followDist, setFollowDist] = useState(3);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
 
   const companion = bot?.combat?.companion ?? defaultCompanion();
   const wards = protectList(companion);
@@ -64,6 +67,15 @@ export function NearbyPlayers({ botId }: { botId: string }) {
   useEffect(() => {
     setFollowDist(companion.followDistance || 3);
   }, [companion.followDistance]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
 
   const applyPlayers = (next: NearbyPlayer[]) => {
     setPlayers((prev) => (nearbyKey(prev) === nearbyKey(next) ? prev : next));
@@ -192,17 +204,25 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       : null;
 
   return (
-    <div className="flex h-44 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-      <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">
+    <div ref={boxRef} className="relative z-20 shrink-0">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-3 py-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          title={open ? t("nearby.collapse") : t("nearby.expand")}
+          className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-zinc-400 uppercase hover:text-zinc-200"
+        >
           {t("nearby.title")}
-        </span>
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
         <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
           {t("nearby.inRangeCount", { n: inRange.length })}
           {tabOnly.length ? ` · ${t("nearby.tabCount", { n: tabOnly.length })}` : ""}
         </span>
         {activeLine && (
-          <span className="rounded-full bg-indigo-950/50 px-2 py-0.5 text-[10px] text-indigo-300">{activeLine}</span>
+          <span className="truncate rounded-full bg-indigo-950/50 px-2 py-0.5 text-[10px] text-indigo-300">
+            {activeLine}
+          </span>
         )}
         <label className="ml-auto flex items-center gap-1.5 text-[10px] text-zinc-500">
           {t("nearby.listRadius")}
@@ -229,7 +249,8 @@ export function NearbyPlayers({ botId }: { botId: string }) {
         </label>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+      {open && (
+        <div className="absolute top-full right-0 left-0 z-30 mt-1 max-h-72 space-y-1.5 overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl shadow-black/40">
       {wards.length > 0 && (
         <p className="text-[10px] leading-relaxed text-zinc-500">
           {t("nearby.protectLine")} <span className="text-indigo-300">{wards.join(", ")}</span>
@@ -349,7 +370,8 @@ export function NearbyPlayers({ botId }: { botId: string }) {
             </button>
           </div>
         ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

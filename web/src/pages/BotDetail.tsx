@@ -139,8 +139,8 @@ export function BotDetail() {
   const problem = bot.runtime.kickReason || bot.runtime.lastError;
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex min-h-full flex-col gap-3 p-4">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Link to="/" className="text-zinc-500 hover:text-zinc-300">
           <ArrowLeft className="h-4 w-4" />
         </Link>
@@ -185,7 +185,7 @@ export function BotDetail() {
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{problem}</div>
       )}
 
-      <div className="grid grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:grid-cols-4">
+      <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
         <StatBar
           value={bot.runtime.health}
           max={20}
@@ -214,15 +214,15 @@ export function BotDetail() {
       </div>
 
       {/* Yetkili oyuncular — otomasyon sohbet komutları (İ3) */}
-      <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/15 px-4 py-3">
-        <div className="mb-1 flex flex-wrap items-center gap-2">
+      <div
+        className="shrink-0 rounded-xl border border-indigo-900/40 bg-indigo-950/15 px-3 py-2"
+        title={t("botDetail.authorizedHelp")}
+      >
+        <div className="flex flex-wrap items-center gap-2">
           <div className="text-xs font-semibold tracking-wide text-indigo-300/90 uppercase">
             {t("botDetail.authorized")}
           </div>
           <span className="text-[10px] text-zinc-500">{t("botDetail.authorizedHint")}</span>
-        </div>
-        <p className="mb-2 text-[11px] leading-relaxed text-zinc-500">{t("botDetail.authorizedHelp")}</p>
-        <div className="flex flex-wrap gap-2">
           <input
             value={authText}
             onChange={(e) => setAuthText(e.target.value)}
@@ -230,19 +230,19 @@ export function BotDetail() {
               if (e.key === "Enter") void saveAuthorized();
             }}
             placeholder={t("botDetail.authorizedPlaceholder")}
-            className="min-w-[14rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-indigo-500"
+            className="min-w-[12rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1 text-sm text-zinc-100 outline-none focus:border-indigo-500"
           />
           <button
             type="button"
             disabled={authSaving}
             onClick={() => void saveAuthorized()}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+            className="rounded-lg bg-indigo-600 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
           >
             {authSaving ? "…" : t("botDetail.authorizedSave")}
           </button>
         </div>
         {(bot.config.authorizedPlayers ?? []).length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1">
+          <div className="mt-1.5 flex flex-wrap gap-1">
             {(bot.config.authorizedPlayers ?? []).map((p) => (
               <span
                 key={p}
@@ -253,13 +253,13 @@ export function BotDetail() {
             ))}
           </div>
         ) : (
-          <p className="mt-2 text-[10px] text-amber-500/90">{t("botDetail.authorizedEmpty")}</p>
+          <p className="mt-1 text-[10px] text-amber-500/90">{t("botDetail.authorizedEmpty")}</p>
         )}
       </div>
 
       <NearbyPlayers botId={id} />
 
-      <div className="flex gap-1 border-b border-zinc-800">
+      <div className="flex shrink-0 gap-1 border-b border-zinc-800">
         {TABS.map((item) => (
           <button
             key={item.id}
@@ -275,15 +275,24 @@ export function BotDetail() {
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-        {tab === "chat" && <ChatPanel botId={id} />}
-        {tab === "logs" && <LogPanel botId={id} />}
-        {tab === "inventory" && <InventoryPanel botId={id} />}
-        {tab === "tasks" && <TasksPanel botId={id} />}
-        {tab === "combat" && <CombatPanel botId={id} />}
-        {tab === "survival" && <SurvivalPanel botId={id} />}
-        {tab === "work" && <GatherCraftPanel botId={id} />}
-        {tab === "build" && <BuildPanel botId={id} />}
+      <div className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {tab === "chat" || tab === "logs" ? (
+            <div className="h-full min-h-[24rem]">
+              {tab === "chat" && <ChatPanel botId={id} />}
+              {tab === "logs" && <LogPanel botId={id} />}
+            </div>
+          ) : (
+            <>
+              {tab === "inventory" && <InventoryPanel botId={id} />}
+              {tab === "tasks" && <TasksPanel botId={id} />}
+              {tab === "combat" && <CombatPanel botId={id} />}
+              {tab === "survival" && <SurvivalPanel botId={id} />}
+              {tab === "work" && <GatherCraftPanel botId={id} />}
+              {tab === "build" && <BuildPanel botId={id} />}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1023,7 +1023,9 @@ export const tr: MessageTree = {
     tabNoPos: "tab · konum yok",
     followWait: "Takip (bekle)",
     followWaitOn: "● Takip (bekle)",
-    protectTitle: "Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi."
+    protectTitle: "Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi.",
+    expand: "Oyuncu listesini göster",
+    collapse: "Listeyi gizle"
   },
   addBot: {
     title: "Bot Ekle",
