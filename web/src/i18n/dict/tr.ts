@@ -1089,7 +1089,7 @@ export const tr: MessageTree = {
       "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır.",
     farm: "Tarım",
     farmCrop: "Ekin",
-    farmRadius: "Alan yarıçapı (1–32)",
+    farmRadius: "Yarıçap (daire, 1–32 blok)",
     farmWhere: "Konum",
     farmWhereBot: "Botun yeri",
     farmWherePlayer: "Oyuncu",
@@ -1109,7 +1109,7 @@ export const tr: MessageTree = {
     farmStop: "Durdur",
     farmStopToast: "Tüm işler durduruldu",
     farmHint:
-      "Çapala: su + tarla. Ek: yalnızca tohum. Hasat: olgunları kır, yeniden ek, ürünü sandığa koy (koordinat veya en yakın). Döngü: ilk turda çapala, sonra hasat/ek/depo — yeni çimen tarlaya çevirmez."
+      "Yarıçap bir dairedir — tarla daha büyükse sayıyı artır (varsayılan 12). Çapala: su+tarla. Ek: tohum. Hasat: olgunları kır, yeniden ek, sandığa koy (yazılı koordinat veya 64 blok içindeki en yakın, kapıdan yürüyebilmeli). Döngü tarlayı büyütmez."
   },
   itemPicker: {
     placeholder: "Ara / seç…",

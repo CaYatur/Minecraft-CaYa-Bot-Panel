@@ -19,7 +19,7 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
   const [plan, setPlan] = useState<Array<{ kind: string; item: string; count: number; note?: string }>>([]);
   // Faz 19 tarım (issue #5)
   const [farmCrop, setFarmCrop] = useState("wheat_seeds");
-  const [farmR, setFarmR] = useState("6");
+  const [farmR, setFarmR] = useState("12");
   const [farmChest, setFarmChest] = useState("");
   const [farmNearest, setFarmNearest] = useState(true);
   const [farmAt, setFarmAt] = useState<"bot" | "player" | "xyz">("bot");

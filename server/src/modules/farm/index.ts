@@ -7,7 +7,7 @@ import { creativeEnsureItem, isCreativeMode } from "../build/creative";
 import { goals } from "mineflayer-pathfinder";
 import { boundedOp, digCancelable, pathNear } from "../build/place";
 import { runSmartCollectDrops } from "../gather/smartGather";
-import { depositToChest } from "../inventory/chestOps";
+import { CONTAINER_BLOCKS, depositToChest } from "../inventory/chestOps";
 import { ensureMovement, restoreDefaultMovement, stopCreativeFlight, type EnsureMovementOpts } from "../movement";
 import {
   CROPS,
@@ -1002,15 +1002,19 @@ export class FarmService {
     }
     const hasChest = opts.depositX != null && opts.depositY != null && opts.depositZ != null;
     const wantChest = hasChest || opts.depositNearest !== false;
-    if (wantChest && !isCreativeMode(bot)) {
+    let depositNote = "";
+    if (wantChest) {
+      restoreDefaultMovement(this.instance);
       try {
         await this.depositFarmProduce(opts, c.r, token, report);
+        depositNote = " Deposited to chest.";
       } catch (e) {
         if (token.cancelled) throw e;
+        depositNote = ` Chest: ${e instanceof Error ? e.message : String(e)}`;
         this.log().warn("Harvest deposit failed", e instanceof Error ? e.message : String(e));
       }
     }
-    const msg = `Harvested ${harvested} crop(s)${replant ? `, replanted ${replanted}` : ""}${failed ? ` · ${failed} failed` : ""}.`;
+    const msg = `Harvested ${harvested} crop(s)${replant ? `, replanted ${replanted}` : ""}${failed ? ` · ${failed} failed` : ""}.${depositNote}`;
     this.log().info("Harvest finished", msg);
     report({ done: cells.length, total: cells.length, label: `harvested ${harvested}` });
     return msg;
@@ -1033,18 +1037,46 @@ export class FarmService {
     const keepCounts: Record<string, number> = {};
     const keep = Math.min(64, (radius * 2 + 1) ** 2);
     for (const def of Object.values(CROPS)) keepCounts[def.seed] = keep;
-    await depositToChest(
-      this.instance,
-      {
-        x: hasChest ? opts.depositX : undefined,
-        y: hasChest ? opts.depositY : undefined,
-        z: hasChest ? opts.depositZ : undefined,
-        items: [...FARM_PRODUCE],
-        keepCounts
-      },
-      token,
-      report
-    );
+    const items = [...FARM_PRODUCE];
+    if (hasChest) {
+      await depositToChest(
+        this.instance,
+        { x: opts.depositX, y: opts.depositY, z: opts.depositZ, items, keepCounts, searchRadius: 64 },
+        token,
+        report
+      );
+      return;
+    }
+    const bot = requireBot(this.instance);
+    const positions = bot.findBlocks({
+      matching: (b) => CONTAINER_BLOCKS.has(b.name),
+      maxDistance: 64,
+      count: 12
+    });
+    if (!positions.length) {
+      throw new Error("No chest/barrel within 64 blocks (house chests count — bot must be able to walk to the door).");
+    }
+    let lastErr: unknown;
+    for (const pos of positions) {
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      report({ done: 0, total: 1, label: `chest ${pos.x},${pos.y},${pos.z}` });
+      try {
+        await depositToChest(
+          this.instance,
+          { x: pos.x, y: pos.y, z: pos.z, items, keepCounts, searchRadius: 64 },
+          token,
+          report
+        );
+        return;
+      } catch (e) {
+        lastErr = e;
+        this.log().warn(
+          "Farm deposit",
+          `chest ${pos.x},${pos.y},${pos.z} failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "No reachable chest"));
   }
 
   /**

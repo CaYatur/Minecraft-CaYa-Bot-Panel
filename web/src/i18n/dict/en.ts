@@ -1089,7 +1089,7 @@ export const en: MessageTree = {
       "Items on the keepItems list are not deposited. Chest physics are verified on Paper.",
     farm: "Farming",
     farmCrop: "Crop",
-    farmRadius: "Area radius (1–32)",
+    farmRadius: "Radius (circle, 1–32 blocks)",
     farmWhere: "Where",
     farmWhereBot: "Bot position",
     farmWherePlayer: "Player",
@@ -1109,7 +1109,7 @@ export const en: MessageTree = {
     farmStop: "Stop",
     farmStopToast: "All work stopped",
     farmHint:
-      "Till: water + hoe. Plant: seeds only. Harvest: break mature, replant, deposit to the chest (coords or nearest). Loop: till once, then harvest/plant/deposit — does not keep converting new grass."
+      "Radius is a circle — raise it if the field is larger (default 12). Till: water+hoe. Plant: seeds. Harvest: break mature, replant, walk to a chest within 64 blocks (must path through the door). Loop does not expand the field."
   },
   itemPicker: {
     placeholder: "Search / select…",
