@@ -4,6 +4,7 @@ import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { creativeEnsureItem, isCreativeMode } from "../build/creative";
+import { goals } from "mineflayer-pathfinder";
 import { boundedOp, digCancelable, pathNear } from "../build/place";
 import { runSmartCollectDrops } from "../gather/smartGather";
 import { depositToChest } from "../inventory/chestOps";
@@ -255,6 +256,62 @@ function sameCell(a: { x: number; y: number; z: number }, b: { x: number; y: num
   return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
+function holeCenterDist(bot: Bot, dest: Vec3): number {
+  return Math.hypot(bot.entity.position.x - (dest.x + 0.5), bot.entity.position.z - (dest.z + 0.5));
+}
+
+/** Adjacent rim: close enough that the look ray clears the neighbor lip into the hole. */
+async function walkToHoleRim(instance: BotInstance, dest: Vec3, token: TaskToken): Promise<boolean> {
+  const bot = applyFarmMovement(instance);
+  const dirs: [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1]
+  ];
+  const p = bot.entity.position;
+  dirs.sort((a, b) => {
+    const da = Math.hypot(p.x - (dest.x + 0.5 + a[0]), p.z - (dest.z + 0.5 + a[1]));
+    const db = Math.hypot(p.x - (dest.x + 0.5 + b[0]), p.z - (dest.z + 0.5 + b[1]));
+    return da - db;
+  });
+  let nx = 1;
+  let nz = 0;
+  for (const [dx, dz] of dirs) {
+    const b = bot.blockAt(dest.offset(dx, 0, dz));
+    if (b && b.boundingBox === "block") {
+      nx = dx;
+      nz = dz;
+      break;
+    }
+  }
+  const rimX = dest.x + 0.5 + nx * 0.92;
+  const rimZ = dest.z + 0.5 + nz * 0.92;
+  const rimY = dest.y + 1;
+  const inBand = () => {
+    const xz = holeCenterDist(bot, dest);
+    return xz >= 0.95 && xz <= 1.48 && Math.abs(bot.entity.position.y - rimY) < 1.3;
+  };
+  if (inBand()) return true;
+  try {
+    bot.pathfinder.setGoal(new goals.GoalNear(rimX, rimY, rimZ, 0.2));
+  } catch {
+    return false;
+  }
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5_000 && !token.cancelled) {
+    if (inBand()) break;
+    await sleepCancellable(50, token);
+  }
+  try {
+    bot.pathfinder.setGoal(null);
+  } catch {
+    /* */
+  }
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+  return inBand();
+}
+
 /**
  * Place a water source at an exact air cell.
  *
@@ -273,26 +330,28 @@ async function pourWaterIntoCoord(bot: Bot, dest: Vec3, token: TaskToken): Promi
   if (!floor || floor.boundingBox !== "block") return false;
   if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
   if (bot.heldItem?.name !== "water_bucket") return false;
+  const xz = holeCenterDist(bot, dest);
+  if (xz < 0.9 || xz > 1.5) return false;
 
   const px = bot.entity.position.x;
   const pz = bot.entity.position.z;
   const look = new Vec3(
-    dest.x + 0.5 + (px > dest.x + 0.5 ? -0.28 : 0.28),
-    dest.y + 0.06,
-    dest.z + 0.5 + (pz > dest.z + 0.5 ? -0.28 : 0.28)
+    dest.x + 0.5 + (px > dest.x + 0.5 ? -0.22 : 0.22),
+    dest.y + 0.05,
+    dest.z + 0.5 + (pz > dest.z + 0.5 ? -0.22 : 0.22)
   );
 
   const cursorBot = bot as unknown as { blockAtCursor?: (max?: number) => Block | null };
   let aimedFloor = false;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     await boundedOp(bot.lookAt(look, true), token, 1_500, "aim hole floor");
-    await sleepCancellable(70, token);
+    await sleepCancellable(80, token);
     const hit = cursorBot.blockAtCursor?.(5);
     if (hit && sameCell(hit.position, floor.position)) {
       aimedFloor = true;
       break;
     }
-    look.y = dest.y + 0.02;
+    look.y = Math.max(dest.y + 0.01, look.y - 0.04);
   }
   if (!aimedFloor) return false;
 
@@ -583,27 +642,15 @@ export class FarmService {
     }
     if (isWaterBlockName(dest.name)) return true;
 
-    // Stand on a neighbor, close to the hole rim (not the far side of the block).
-    const stands = [
-      dest.position.offset(1, 0, 0),
-      dest.position.offset(-1, 0, 0),
-      dest.position.offset(0, 0, 1),
-      dest.position.offset(0, 0, -1)
-    ];
-    const p = bot.entity.position;
-    stands.sort((a, b) => a.offset(0.5, 1, 0.5).distanceTo(p) - b.offset(0.5, 1, 0.5).distanceTo(p));
-    let stand = stands[0]!;
-    for (const s of stands) {
-      const b = bot.blockAt(s);
-      if (b && b.boundingBox === "block") {
-        stand = s;
-        break;
-      }
-    }
     try {
-      await farmNear(this.instance, stand.x + 0.5, dest.position.y + 1, stand.z + 0.5, 0.9, token);
+      const atRim = await walkToHoleRim(this.instance, dest.position, token);
+      if (!atRim) {
+        this.log().warn("Farm water", `could not reach hole rim at ${dest.position.x},${dest.position.z}`);
+        return false;
+      }
     } catch (e) {
       if (token.cancelled) throw e;
+      return false;
     }
 
     const live = bot.blockAt(dest.position);
@@ -636,6 +683,11 @@ export class FarmService {
     const hole = bot.blockAt(dest.position);
     if (hole && isWaterBlockName(hole.name)) return true;
     if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
+    try {
+      await walkToHoleRim(this.instance, dest.position, token);
+    } catch (e) {
+      if (token.cancelled) throw e;
+    }
 
     const floor = bot.blockAt(dest.position.offset(0, -1, 0));
     if (!floor || floor.boundingBox !== "block") return false;
