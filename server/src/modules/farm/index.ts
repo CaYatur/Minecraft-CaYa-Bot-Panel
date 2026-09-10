@@ -501,16 +501,7 @@ export class FarmService {
     if (destHint) {
       dest = bot.blockAt(destHint.position);
       if (dest && isWaterBlockName(dest.name)) return true;
-      if (!isGood(dest)) {
-        dest = null;
-        for (let dx = -1; dx <= 1 && !dest; dx++) {
-          for (let dz = -1; dz <= 1 && !dest; dz++) {
-            const b = bot.blockAt(destHint.position.offset(dx, 0, dz));
-            if (isGood(b)) dest = b;
-          }
-        }
-      }
-      if (!dest) return false;
+      if (!isGood(dest)) return false;
     } else {
       dest = bot.blockAt(new Vec3(c.x, c.y, c.z));
       if (!isGood(dest)) dest = scanArea(bot, c, (b) => isGood(b), 4)[0] ?? null;
@@ -584,39 +575,39 @@ export class FarmService {
     } catch {
       /* */
     }
-    try {
-      // Aim at the floor's top face from inside the block so the hit is UP into the hole.
-      await boundedOp(bot.lookAt(floor.position.offset(0.5, 0.92, 0.5), true), token, 1_500, "look hole floor");
-      await sleepCancellable(80, token);
-      try {
-        bot.activateItem(false);
-      } catch {
-        bot.activateItem();
+    // Packet says: click the UP face of the block under the hole. That is dest,
+    // not a neighbor and not y+1. Do not also activateItem (second source in air).
+    const gp = (
+      bot as unknown as {
+        _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean; swingArm?: string }) => Promise<unknown>;
       }
-      await sleepCancellable(350, token);
-      try {
-        bot.deactivateItem();
-      } catch {
-        /* */
+    )._genericPlace;
+    try {
+      if (typeof gp === "function") {
+        await boundedOp(
+          gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }),
+          token,
+          2_000,
+          "water into hole"
+        );
       }
     } catch (e) {
       if (token.cancelled) throw e;
     }
+    await sleepCancellable(300, token);
     try {
       bot.setControlState("sneak", false);
     } catch {
       /* */
     }
 
-    const filled = bot.blockAt(dest.position);
-    if (filled && isWaterBlockName(filled.name)) return true;
-    const floating = bot.blockAt(dest.position.offset(0, 1, 0));
-    if (floating && isWaterBlockName(floating.name)) {
+    const above = bot.blockAt(dest.position.offset(0, 1, 0));
+    if (above && isWaterBlockName(above.name)) {
       const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
       if (empty) {
         try {
           await boundedOp(bot.equip(empty, "hand"), token, 3_000, "scoop floating");
-          await boundedOp(bot.lookAt(floating.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look float");
+          await boundedOp(bot.lookAt(above.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look float");
           try {
             bot.activateItem(false);
           } catch {
@@ -628,7 +619,8 @@ export class FarmService {
         }
       }
     }
-    return Boolean(bot.blockAt(dest.position) && isWaterBlockName(bot.blockAt(dest.position)!.name));
+    const filled = bot.blockAt(dest.position);
+    return Boolean(filled && isWaterBlockName(filled.name));
   }
 
   /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
@@ -659,10 +651,7 @@ export class FarmService {
       });
       if (!coversDry) continue;
       report({ done: i + 1, total: spots.length, label: `water @${spot.x},${spot.z}` });
-      const hint =
-        here ??
-        cells.find((cell) => Math.abs(cell.position.x - spot.x) <= 1 && Math.abs(cell.position.z - spot.z) <= 1) ??
-        ({ position: spot } as Block);
+      const hint = here ?? ({ position: spot } as Block);
       const ok = await this.tryPlaceWaterSource(c, token, hint).catch((e) => {
         if (token.cancelled) throw e;
         return false;
