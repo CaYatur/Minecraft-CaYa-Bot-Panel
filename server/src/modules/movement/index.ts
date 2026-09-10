@@ -861,8 +861,27 @@ export async function runFollow(
 }
 
 export function stopCreativeFlight(bot: Bot) {
+  const phys = (bot as unknown as { physics?: { gravity?: number | null } }).physics;
+  const g = phys?.gravity;
+  // mineflayer stopFlying() assigns saved gravity; if fly never started that
+  // value is null and the bot floats through gaps (looks like a cheat).
+  if (g === 0 || g == null || (typeof g === "number" && g < 0.01)) {
+    try {
+      (bot as unknown as { creative?: { stopFlying?(): void } }).creative?.stopFlying?.();
+    } catch {
+      /* */
+    }
+    if (phys && (phys.gravity == null || phys.gravity === 0 || (typeof phys.gravity === "number" && phys.gravity < 0.01))) {
+      phys.gravity = 0.08;
+    }
+  }
   try {
-    (bot as unknown as { creative?: { stopFlying?(): void } }).creative?.stopFlying?.();
+    const v = bot.entity?.velocity;
+    if (v) {
+      v.x = 0;
+      v.y = 0;
+      v.z = 0;
+    }
   } catch {
     /* */
   }

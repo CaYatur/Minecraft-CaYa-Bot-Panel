@@ -7,7 +7,7 @@ import { creativeEnsureItem, isCreativeMode } from "../build/creative";
 import { boundedOp, digCancelable, pathNear } from "../build/place";
 import { runSmartCollectDrops } from "../gather/smartGather";
 import { depositToChest } from "../inventory/chestOps";
-import { ensureMovement, restoreDefaultMovement, type EnsureMovementOpts } from "../movement";
+import { ensureMovement, restoreDefaultMovement, stopCreativeFlight, type EnsureMovementOpts } from "../movement";
 import {
   CROPS,
   cropForSeed,
@@ -84,8 +84,10 @@ const FARM_MOVE: EnsureMovementOpts = {
 
 function applyFarmMovement(instance: BotInstance) {
   const bot = ensureMovement(instance, FARM_MOVE);
+  stopCreativeFlight(bot);
   try {
     bot.setControlState("sprint", false);
+    bot.setControlState("jump", false);
   } catch {
     /* */
   }
@@ -394,8 +396,9 @@ export class FarmService {
   }
 
   /**
-   * Pour a water source next to the plot (bucket use). Do not dig a hole —
-   * placeBlock(water_bucket) fails and leaves a pit the bot then stands in.
+   * Vanilla irrigation: stand beside a dirt cell, dig THAT cell (not the block
+   * under it), pour the bucket into the hole so water sits at farmland Y.
+   * Looking at y+1 dumps water on top of the dirt (floating source).
    */
   private async tryPlaceWaterSource(
     c: { x: number; y: number; z: number; r: number },
@@ -414,7 +417,7 @@ export class FarmService {
       if (isWaterBlockName(b.name)) return false;
       if (!TILLABLE.has(b.name) && b.name !== "farmland") return false;
       const above = bot.blockAt(b.position.offset(0, 1, 0));
-      if (above && (CROPS[above.name] || isWaterBlockName(above.name))) return false;
+      if (above && CROPS[above.name]) return false;
       return true;
     };
 
@@ -425,11 +428,16 @@ export class FarmService {
     if (!dest) return false;
     if (isWaterBlockName(dest.name)) return true;
 
-    const standX = dest.position.x + 1.5;
-    const standY = dest.position.y + 1;
-    const standZ = dest.position.z + 0.5;
+    // Stand on the neighboring block, not in the hole we are about to dig.
     try {
-      await farmNear(this.instance, standX, standY, standZ, 1.8, token);
+      await farmNear(
+        this.instance,
+        dest.position.x + 1.5,
+        dest.position.y + 1,
+        dest.position.z + 0.5,
+        1.6,
+        token
+      );
     } catch (e) {
       if (token.cancelled) throw e;
     }
@@ -437,19 +445,52 @@ export class FarmService {
     const live = bot.blockAt(dest.position);
     if (!live) return false;
     if (isWaterBlockName(live.name)) return true;
-    const above = bot.blockAt(live.position.offset(0, 1, 0));
-    if (above && isWaterBlockName(above.name)) return true;
+
+    const grass = bot.blockAt(live.position.offset(0, 1, 0));
+    if (
+      grass &&
+      (grass.name === "short_grass" || grass.name === "grass" || grass.name === "tall_grass" || grass.name === "snow")
+    ) {
+      try {
+        await digCancelable(bot, grass, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
+    }
 
     try {
       await boundedOp(bot.equip(bucket, "hand"), token, 5_000, "equip water_bucket");
-      await boundedOp(bot.lookAt(live.position.offset(0.5, 1.05, 0.5), true), token, 2_000, "look water");
+    } catch (e) {
+      if (token.cancelled) throw e;
+      return false;
+    }
+
+    const toDig = bot.blockAt(dest.position);
+    if (toDig && (TILLABLE.has(toDig.name) || toDig.name === "farmland")) {
+      try {
+        await digCancelable(bot, toDig, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+        return false;
+      }
+    }
+
+    const hole = bot.blockAt(dest.position);
+    if (!hole || (hole.name !== "air" && hole.name !== "cave_air" && !isWaterBlockName(hole.name))) {
+      return false;
+    }
+    if (isWaterBlockName(hole.name)) return true;
+
+    try {
+      // Aim into the hole (farmland Y), not at y+1 (that floats water on top).
+      await boundedOp(bot.lookAt(dest.position.offset(0.5, 0.2, 0.5), true), token, 2_000, "look into hole");
       await sleepCancellable(80, token);
       try {
         bot.activateItem();
       } catch {
         /* */
       }
-      await sleepCancellable(200, token);
+      await sleepCancellable(250, token);
       try {
         bot.deactivateItem();
       } catch {
@@ -460,11 +501,8 @@ export class FarmService {
       return false;
     }
 
-    const waterHere = bot.blockAt(dest.position);
-    const waterAbove = bot.blockAt(dest.position.offset(0, 1, 0));
-    return Boolean(
-      (waterHere && isWaterBlockName(waterHere.name)) || (waterAbove && isWaterBlockName(waterAbove.name))
-    );
+    const filled = bot.blockAt(dest.position);
+    return Boolean(filled && isWaterBlockName(filled.name));
   }
 
   // ---------------------------------------------------------------- runs
