@@ -1103,13 +1103,13 @@ export const en: MessageTree = {
     plant: "Plant",
     plantToast: "Planting queued",
     harvest: "Harvest",
-    harvestToast: "Harvest queued (mature crops + replant)",
+    harvestToast: "Harvest queued (collect + replant + chest)",
     farmLoop: "Start farm loop",
     farmLoopToast: "Continuous farm loop started — ends with Stop",
     farmStop: "Stop",
     farmStopToast: "All work stopped",
     farmHint:
-      "Default location is the bot; you can also pick a player name or x y z. Radius 1–32. In creative the bot pulls a hoe/seeds/bucket. Harvest = break mature crops (creative does not drop items). Stop is enabled only while a farm job is running."
+      "Till: water + hoe. Plant: seeds only. Harvest: break mature, replant, deposit to the chest (coords or nearest). Loop: till once, then harvest/plant/deposit — does not keep converting new grass."
   },
   itemPicker: {
     placeholder: "Search / select…",

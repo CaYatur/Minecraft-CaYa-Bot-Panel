@@ -21,7 +21,7 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
   const [farmCrop, setFarmCrop] = useState("wheat_seeds");
   const [farmR, setFarmR] = useState("6");
   const [farmChest, setFarmChest] = useState("");
-  const [farmNearest, setFarmNearest] = useState(false);
+  const [farmNearest, setFarmNearest] = useState(true);
   const [farmAt, setFarmAt] = useState<"bot" | "player" | "xyz">("bot");
   const [farmPlayer, setFarmPlayer] = useState("");
   const [farmX, setFarmX] = useState("");
@@ -35,6 +35,11 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
     (bot.tasks.current && farmTypes.has(bot.tasks.current.type)) ||
       bot.tasks.queue.some((t) => farmTypes.has(t.type))
   );
+
+  const farmChestCoords = (): Record<string, number> => {
+    const parts = farmChest.trim().split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n));
+    return parts.length === 3 ? { depositX: parts[0]!, depositY: parts[1]!, depositZ: parts[2]! } : {};
+  };
 
   const farmArea = (): Record<string, unknown> => {
     const radius = Math.max(1, Math.min(32, Number(farmR) || 6));
@@ -340,7 +345,12 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           </button>
           <button
             disabled={!online}
-            onClick={() => act({ type: "harvest", ...farmArea() }, t("gatherCraft.harvestToast"))}
+            onClick={() =>
+              act(
+                { type: "harvest", ...farmArea(), depositNearest: farmNearest, ...farmChestCoords() },
+                t("gatherCraft.harvestToast")
+              )
+            }
             className={btnAccent}
           >
             {t("gatherCraft.harvest")}
@@ -363,10 +373,14 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           <button
             disabled={!online}
             onClick={() => {
-              const parts = farmChest.trim().split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n));
-              const chest = parts.length === 3 ? { depositX: parts[0], depositY: parts[1], depositZ: parts[2] } : {};
               void act(
-                { type: "farm-cycle", crop: farmCrop, depositNearest: farmNearest, ...farmArea(), ...chest },
+                {
+                  type: "farm-cycle",
+                  crop: farmCrop,
+                  depositNearest: farmNearest,
+                  ...farmArea(),
+                  ...farmChestCoords()
+                },
                 t("gatherCraft.farmLoopToast")
               );
             }}

@@ -773,7 +773,11 @@ export class BotInstance extends EventEmitter {
       case "hasat":
         return this.farm.enqueueHarvest({
           ...farmAreaFrom(action),
-          replant: action.replant !== false && action.replant !== "false"
+          replant: action.replant !== false && action.replant !== "false",
+          depositX: numOpt(action.depositX),
+          depositY: numOpt(action.depositY),
+          depositZ: numOpt(action.depositZ),
+          depositNearest: action.depositNearest === true || action.depositNearest === "true" || (action.depositNearest !== false && action.depositNearest !== "false" && numOpt(action.depositX) == null)
         });
       case "farm-cycle":
       case "farm_cycle":

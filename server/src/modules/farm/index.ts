@@ -50,6 +50,10 @@ export interface PlantOpts extends FarmArea {
 export interface HarvestOpts extends FarmArea {
   replant?: boolean;
   maxBlocks?: number;
+  depositX?: number;
+  depositY?: number;
+  depositZ?: number;
+  depositNearest?: boolean;
 }
 
 export interface FarmCycleOpts extends FarmArea {
@@ -988,43 +992,22 @@ export class FarmService {
         }
       }
     }
-    // Same-pass repair: re-hoe dirt we trampled while walking the plot.
-    if (replant) {
-      const trampled = scanArea(
-        bot,
-        c,
-        (b, above) => TILLABLE.has(b.name) && (isAirLike(above) || above == null),
-        32
-      );
-      for (const cell of trampled) {
-        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-        applyFarmMovement(this.instance);
-        const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
-        if (d > REACH) {
-          try {
-            await farmNear(
-              this.instance,
-              cell.position.x + 0.5,
-              cell.position.y + 1,
-              cell.position.z + 0.5,
-              2.5,
-              token
-            );
-          } catch (e) {
-            if (token.cancelled) throw e;
-            continue;
-          }
-        }
-        await this.ensureHoe(token, report);
-        await this.tillCell(cell, token);
-      }
-    }
     // final süpürme
     if (!isCreativeMode(bot)) {
       try {
         await runSmartCollectDrops(this.instance, undefined, Math.min(c.r + 4, 12), token, () => {}, 8_000);
       } catch (e) {
         if (token.cancelled) throw e;
+      }
+    }
+    const hasChest = opts.depositX != null && opts.depositY != null && opts.depositZ != null;
+    const wantChest = hasChest || opts.depositNearest !== false;
+    if (wantChest && !isCreativeMode(bot)) {
+      try {
+        await this.depositFarmProduce(opts, c.r, token, report);
+      } catch (e) {
+        if (token.cancelled) throw e;
+        this.log().warn("Harvest deposit failed", e instanceof Error ? e.message : String(e));
       }
     }
     const msg = `Harvested ${harvested} crop(s)${replant ? `, replanted ${replanted}` : ""}${failed ? ` · ${failed} failed` : ""}.`;
@@ -1039,9 +1022,34 @@ export class FarmService {
     }
   }
 
+  /** Deposit produce; keep a plot's worth of each seed for replant. Default: nearest chest. */
+  private async depositFarmProduce(
+    opts: { depositX?: number; depositY?: number; depositZ?: number; depositNearest?: boolean },
+    radius: number,
+    token: TaskToken,
+    report: ProgressFn
+  ): Promise<void> {
+    const hasChest = opts.depositX != null && opts.depositY != null && opts.depositZ != null;
+    const keepCounts: Record<string, number> = {};
+    const keep = Math.min(64, (radius * 2 + 1) ** 2);
+    for (const def of Object.values(CROPS)) keepCounts[def.seed] = keep;
+    await depositToChest(
+      this.instance,
+      {
+        x: hasChest ? opts.depositX : undefined,
+        y: hasChest ? opts.depositY : undefined,
+        z: hasChest ? opts.depositZ : undefined,
+        items: [...FARM_PRODUCE],
+        keepCounts
+      },
+      token,
+      report
+    );
+  }
+
   /**
-   * Sürekli tarım döngüsü: (till) → hasat+yeniden ek → (sandığa depola) → bekle → tekrar.
-   * maxCycles verilmezse Stop/Reset/stop_all'a kadar sürer (İ6 iptal dostu).
+   * Loop the existing plot: harvest + replant + deposit. Till/water only on cycle 1.
+   * Does not convert new grass into farmland every lap.
    */
   async runFarmCycle(opts: FarmCycleOpts, token: TaskToken, report: ProgressFn): Promise<void> {
     try {
@@ -1071,8 +1079,8 @@ export class FarmService {
       };
       const before = countProduce();
 
-      // 1) toprak hazırlığı (yeni bozulan/çiğnenen hücreler dahil)
-      if (doTill) {
+      // Setup once: water + till. Later laps only harvest/replant the existing field.
+      if (doTill && cycle === 1) {
         try {
           await this.runTill({ ...opts, x: c.x, y: c.y, z: c.z, radius: c.r, maxBlocks: 96 }, token, report);
         } catch (e) {
@@ -1081,9 +1089,23 @@ export class FarmService {
         }
       }
 
-      // 2) hasat + yeniden ekim
       try {
-        await this.runHarvest({ ...opts, x: c.x, y: c.y, z: c.z, radius: c.r, replant: opts.replant !== false }, token, report);
+        await this.runHarvest(
+          {
+            ...opts,
+            x: c.x,
+            y: c.y,
+            z: c.z,
+            radius: c.r,
+            replant: opts.replant !== false,
+            depositX: opts.depositX,
+            depositY: opts.depositY,
+            depositZ: opts.depositZ,
+            depositNearest: hasChest ? false : opts.depositNearest !== false
+          },
+          token,
+          report
+        );
       } catch (e) {
         if (token.cancelled) throw e;
         this.log().warn("Farm cycle: harvest step failed", e instanceof Error ? e.message : String(e));

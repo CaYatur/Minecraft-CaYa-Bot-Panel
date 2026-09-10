@@ -1103,13 +1103,13 @@ export const tr: MessageTree = {
     plant: "Ek",
     plantToast: "Ekim kuyruğa alındı",
     harvest: "Hasat Et",
-    harvestToast: "Hasat kuyruğa alındı (olgunlar + yeniden ekim)",
+    harvestToast: "Hasat kuyruğa alındı (topla + yeniden ek + sandığa koy)",
     farmLoop: "Tarım Döngüsü Başlat",
     farmLoopToast: "Sürekli tarım döngüsü başladı — Durdur ile biter",
     farmStop: "Durdur",
     farmStopToast: "Tüm işler durduruldu",
     farmHint:
-      "Varsayılan konum botun durduğu yer; oyuncu adı veya x y z de seçilebilir. Yarıçap 1–32. Creative’de çapa/tohum/kova envantere alınır. Hasat = olgun ekinleri kırmak (creative’de drop olmaz). Durdur yalnızca tarım işi varken açıktır."
+      "Çapala: su + tarla. Ek: yalnızca tohum. Hasat: olgunları kır, yeniden ek, ürünü sandığa koy (koordinat veya en yakın). Döngü: ilk turda çapala, sonra hasat/ek/depo — yeni çimen tarlaya çevirmez."
   },
   itemPicker: {
     placeholder: "Ara / seç…",
