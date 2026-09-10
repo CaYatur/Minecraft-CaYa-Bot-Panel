@@ -548,13 +548,6 @@ export class FarmService {
       }
     }
 
-    try {
-      await boundedOp(bot.equip(bucket, "hand"), token, 5_000, "equip water_bucket");
-    } catch (e) {
-      if (token.cancelled) throw e;
-      return false;
-    }
-
     const toDig = bot.blockAt(dest.position);
     if (toDig && (TILLABLE.has(toDig.name) || toDig.name === "farmland")) {
       try {
@@ -573,92 +566,69 @@ export class FarmService {
     const floor = bot.blockAt(dest.position.offset(0, -1, 0));
     if (!floor || floor.boundingBox !== "block") return false;
 
-    const scoopAt = async (pos: Vec3) => {
-      const w = bot.blockAt(pos);
-      if (!w || !isWaterBlockName(w.name)) return;
-      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
-      if (!empty) return;
-      try {
-        await boundedOp(bot.equip(empty, "hand"), token, 3_000, "equip bucket scoop");
-        await boundedOp(bot.lookAt(pos.offset(0.5, 0.4, 0.5), true), token, 1_200, "scoop water");
-        await sleepCancellable(50, token);
-        try {
-          bot.activateItem(false);
-        } catch {
-          bot.activateItem();
-        }
-        await sleepCancellable(200, token);
-        try {
-          bot.deactivateItem();
-        } catch {
-          /* */
-        }
-      } catch (e) {
-        if (token.cancelled) throw e;
-      }
-    };
-
-    const refillHole = async () => {
-      const open = bot.blockAt(dest.position);
-      if (!open || (open.name !== "air" && open.name !== "cave_air")) return;
-      if (isCreativeMode(bot)) await creativeEnsureItem(bot, "dirt", 1);
-      const dirt = bot.inventory.items().find((i) => i.name === "dirt" || i.name === "grass_block" || i.name === "coarse_dirt");
-      if (!dirt) return;
-      try {
-        await boundedOp(bot.equip(dirt, "hand"), token, 3_000, "equip dirt");
-        await boundedOp(bot.placeBlock(floor, new Vec3(0, 1, 0)), token, 2_500, "refill hole");
-      } catch (e) {
-        if (token.cancelled) throw e;
-      }
-    };
-
-    // One click only: top face of the block UNDER the hole. Extra activateItem /
-    // wall clicks put a second source in the air above the hole.
-    if (bot.heldItem?.name !== "water_bucket") {
-      const refill = bot.inventory.items().find((i) => i.name === "water_bucket");
-      if (!refill) return false;
-      try {
-        await boundedOp(bot.equip(refill, "hand"), token, 3_000, "equip water_bucket");
-      } catch (e) {
-        if (token.cancelled) throw e;
-        return false;
-      }
+    // Dig puts dirt in the hotbar and often auto-selects it. Equip the bucket
+    // AFTER the hole exists, then click once — never placeBlock dirt here.
+    if (isCreativeMode(bot)) await creativeEnsureItem(bot, "water_bucket", 1);
+    const pourBucket = bot.inventory.items().find((i) => i.name === "water_bucket");
+    if (!pourBucket) return false;
+    try {
+      await boundedOp(bot.equip(pourBucket, "hand"), token, 4_000, "equip water_bucket after dig");
+    } catch (e) {
+      if (token.cancelled) throw e;
+      return false;
     }
+    if (bot.heldItem?.name !== "water_bucket") return false;
+
     try {
       bot.setControlState("sneak", true);
     } catch {
       /* */
     }
-    const gp = (
-      bot as unknown as {
-        _genericPlace?: (ref: Block, face: Vec3, opts: { forceLook?: boolean | "ignore"; swingArm?: string }) => Promise<unknown>;
-      }
-    )._genericPlace;
     try {
-      if (typeof gp === "function") {
-        await boundedOp(
-          gp.call(bot, floor, new Vec3(0, 1, 0), { forceLook: true, swingArm: "right" }),
-          token,
-          2_000,
-          "water on hole floor"
-        );
+      // Aim at the floor's top face from inside the block so the hit is UP into the hole.
+      await boundedOp(bot.lookAt(floor.position.offset(0.5, 0.92, 0.5), true), token, 1_500, "look hole floor");
+      await sleepCancellable(80, token);
+      try {
+        bot.activateItem(false);
+      } catch {
+        bot.activateItem();
+      }
+      await sleepCancellable(350, token);
+      try {
+        bot.deactivateItem();
+      } catch {
+        /* */
       }
     } catch (e) {
       if (token.cancelled) throw e;
     }
-    await sleepCancellable(300, token);
     try {
       bot.setControlState("sneak", false);
     } catch {
       /* */
     }
 
-    await scoopAt(dest.position.offset(0, 1, 0));
-    await sleepCancellable(80, token);
     const filled = bot.blockAt(dest.position);
     if (filled && isWaterBlockName(filled.name)) return true;
-    await refillHole();
-    return false;
+    const floating = bot.blockAt(dest.position.offset(0, 1, 0));
+    if (floating && isWaterBlockName(floating.name)) {
+      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
+      if (empty) {
+        try {
+          await boundedOp(bot.equip(empty, "hand"), token, 3_000, "scoop floating");
+          await boundedOp(bot.lookAt(floating.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look float");
+          try {
+            bot.activateItem(false);
+          } catch {
+            bot.activateItem();
+          }
+          await sleepCancellable(200, token);
+        } catch (e) {
+          if (token.cancelled) throw e;
+        }
+      }
+    }
+    return Boolean(bot.blockAt(dest.position) && isWaterBlockName(bot.blockAt(dest.position)!.name));
   }
 
   /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
