@@ -216,12 +216,16 @@ export const tr: MessageTree = {
     triggerType: "Tür",
     pattern: "Desen / komut adı",
     match: "Eşleşme",
-    matchCommand: "komut (/slash)",
+    matchCommand: "komut (öneki)",
     matchStartsWith: "ile başlar",
     matchContains: "içerir",
     matchExact: "tam eşit",
     matchRegex: "regex",
     commandPrefix: "Komut öneki",
+    commandPrefixHint:
+      "Herkese açık sohbette !gel veya .gel yazın. /gel sunucu komutudur — diğer oyuncular ve bot görmez.",
+    commandSlashWarning:
+      "\"/\" herkese açık sohbette çalışmaz (sunucu yakalar). Önek olarak ! veya . kullanın; fısıltı /msg bot !gel olur.",
     from: "Kimden",
     fromAuthorized: "Yetkililer (İ3)",
     fromAnyone: "Herkes",
@@ -327,7 +331,7 @@ export const tr: MessageTree = {
       task_failed: "Görev başarısız"
     },
     triggerHints: {
-      chat: "match=command → /gel Steve (arg0). startsWith, contains, exact, regex.",
+      chat: "match=command → !gel Steve (arg0). Herkese açık sohbette / çalışmaz. startsWith, contains, exact, regex.",
       attacked: "mob | player | all",
       player_far: "Mesafe > radius veya oyuncu görünmüyor. player boş = takip edilen (@follow)",
       follow_out_of_range:
@@ -693,6 +697,8 @@ export const tr: MessageTree = {
     scanRange: "Tarama menzili (blok)",
     fleeHealth: "Kaçış can eşiği",
     chaseDistance: "Kovalama mesafesi",
+    allowBlockBreak: "Dövüşte blok kır",
+    allowBlockPlace: "Dövüşte blok koy",
     cleaveTitle: "Ara vuruş · kenetlenmişken",
     cleaveOn: "açık",
     cleaveOff: "kapalı",
@@ -903,7 +909,7 @@ export const tr: MessageTree = {
   },
   work: {
     title: "Toplama & üretim",
-    collectWood: "Odun topla",
+    collectWood: "Topla",
     mine: "Maden",
     craft: "Üret"
   },
@@ -1017,7 +1023,9 @@ export const tr: MessageTree = {
     tabNoPos: "tab · konum yok",
     followWait: "Takip (bekle)",
     followWaitOn: "● Takip (bekle)",
-    protectTitle: "Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi."
+    protectTitle: "Koruma listesine ekle/çıkar. Detay ayar: Dövüş sekmesi.",
+    expand: "Oyuncu listesini göster",
+    collapse: "Listeyi gizle"
   },
   addBot: {
     title: "Bot Ekle",
@@ -1051,17 +1059,18 @@ export const tr: MessageTree = {
   gatherCraft: {
     offline: "Bot çevrimdışı — görevler bot online iken çalışır.",
     gather: "Toplama",
-    woodCatalog: "Ağaç / kütük (katalog)",
-    countTitle: "Adet",
-    collectWood: "Odun Topla",
-    collectWoodToast: "Odun toplama",
+    woodCatalog: "Blok / kaynak (odun, toprak, kum…)",
+    countTitle: "Eklenecek adet (mevcutun üstüne)",
+    collectWood: "Topla",
+    collectWoodToast: "Toplama: {item}",
+    gatherHint: "Sayı envanterdeki mevcut miktarın üstüne eklenir (16 varsa +16 daha toplanır). Yeraltı madeni için alttaki Maden bölümünü kullan.",
     collectDrops: "Eşya Topla",
     collectDropsToast: "Yerdeki eşya",
     oreCatalog: "Maden (katalog)",
     mine: "Maden Topla",
     mineToast: "Maden: {ore}",
     utilityWarn: "Utility mod gerçekçi değil — bilinçli açılır (panel uyarısı).",
-    cmdGather: "komut: odun [n] · maden ore n",
+    cmdGather: "komut: odun [n] · topla dirt [n] · maden ore n",
     craft: "Üret",
     craftItem: "Üretilecek eşya (katalog)",
     planPreview: "Plan Önizle",
@@ -1081,7 +1090,13 @@ export const tr: MessageTree = {
       "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır.",
     farm: "Tarım",
     farmCrop: "Ekin",
-    farmRadius: "Yarıçap",
+    farmRadius: "Yarıçap (daire, 1–32 blok)",
+    farmWhere: "Konum",
+    farmWhereBot: "Botun yeri",
+    farmWherePlayer: "Oyuncu",
+    farmWhereXyz: "Koordinat",
+    farmPlayerPlaceholder: "oyuncu adı",
+    farmUseBotPos: "Bot konumunu yaz",
     farmChest: "Ürün sandığı (x y z)",
     farmDepositNearest: "en yakın sandığa",
     till: "Çapala",
@@ -1089,13 +1104,13 @@ export const tr: MessageTree = {
     plant: "Ek",
     plantToast: "Ekim kuyruğa alındı",
     harvest: "Hasat Et",
-    harvestToast: "Hasat kuyruğa alındı (olgunlar + yeniden ekim)",
+    harvestToast: "Hasat kuyruğa alındı (topla + yeniden ek + sandığa koy)",
     farmLoop: "Tarım Döngüsü Başlat",
     farmLoopToast: "Sürekli tarım döngüsü başladı — Durdur ile biter",
     farmStop: "Durdur",
     farmStopToast: "Tüm işler durduruldu",
     farmHint:
-      "Döngü: çapala → olgunları hasat et → yeniden ek → ürünleri sandığa bırak → bekle. Sandık koordinatı boşsa depolama atlanır (veya en yakın sandık seçeneği). Su 4 blok içinde olmalı, yoksa tarla kurur."
+      "Yarıçap bir dairedir (varsayılan 6). Tarla büyükse sayıyı artır. Çapala: su+tarla. Ek: tohum. Hasat: olgunları kır, düşenleri üstüne giderek al, yeniden ek, sandığa koy. Döngü tarlayı büyütmez."
   },
   itemPicker: {
     placeholder: "Ara / seç…",

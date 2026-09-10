@@ -216,12 +216,16 @@ export const en: MessageTree = {
     triggerType: "Type",
     pattern: "Pattern / command name",
     match: "Match",
-    matchCommand: "command (/slash)",
+    matchCommand: "command (prefix)",
     matchStartsWith: "starts with",
     matchContains: "contains",
     matchExact: "exact",
     matchRegex: "regex",
     commandPrefix: "Command prefix",
+    commandPrefixHint:
+      "In public chat use !come or .come. /come is a server command — other players and the bot never see it.",
+    commandSlashWarning:
+      "\"/\" does not work in public chat (the server swallows it). Use ! or . as the prefix; whisper with /msg bot !come.",
     from: "From",
     fromAuthorized: "Authorized (I3)",
     fromAnyone: "Anyone",
@@ -327,7 +331,7 @@ export const en: MessageTree = {
       task_failed: "Task failed"
     },
     triggerHints: {
-      chat: "match=command → /come Steve (arg0). startsWith, contains, exact, regex.",
+      chat: "match=command → !come Steve (arg0). Public / does not reach the bot. startsWith, contains, exact, regex.",
       attacked: "mob | player | all",
       player_far: "Distance > radius or player not visible. empty player = follow target (@follow)",
       follow_out_of_range:
@@ -693,6 +697,8 @@ export const en: MessageTree = {
     scanRange: "Scan range (blocks)",
     fleeHealth: "Flee health threshold",
     chaseDistance: "Chase distance",
+    allowBlockBreak: "Break blocks in combat",
+    allowBlockPlace: "Place blocks in combat",
     cleaveTitle: "Cleave · while locked on",
     cleaveOn: "on",
     cleaveOff: "off",
@@ -903,7 +909,7 @@ export const en: MessageTree = {
   },
   work: {
     title: "Gather & craft",
-    collectWood: "Collect wood",
+    collectWood: "Collect",
     mine: "Mine",
     craft: "Craft"
   },
@@ -1017,7 +1023,9 @@ export const en: MessageTree = {
     tabNoPos: "tab · no position",
     followWait: "Follow (wait)",
     followWaitOn: "● Follow (wait)",
-    protectTitle: "Add/remove from protect list. Details: Combat tab."
+    protectTitle: "Add/remove from protect list. Details: Combat tab.",
+    expand: "Show player list",
+    collapse: "Hide player list"
   },
   addBot: {
     title: "Add bot",
@@ -1051,17 +1059,18 @@ export const en: MessageTree = {
   gatherCraft: {
     offline: "Bot offline — tasks run when the bot is online.",
     gather: "Gather",
-    woodCatalog: "Tree / log (catalog)",
-    countTitle: "Count",
-    collectWood: "Collect wood",
-    collectWoodToast: "Collecting wood",
+    woodCatalog: "Block / resource (wood, dirt, sand…)",
+    countTitle: "Amount to add (on top of current)",
+    collectWood: "Collect",
+    collectWoodToast: "Collecting: {item}",
+    gatherHint: "The number is added on top of what you already have (16 means +16 more). Use Mine below for underground ores.",
     collectDrops: "Pick up items",
     collectDropsToast: "Picking up drops",
     oreCatalog: "Ore (catalog)",
     mine: "Mine ore",
     mineToast: "Mining: {ore}",
     utilityWarn: "Utility mode is not realistic — enable only on purpose (panel warning).",
-    cmdGather: "cmd: wood [n] · mine ore n",
+    cmdGather: "cmd: wood [n] · collect dirt [n] · mine ore n",
     craft: "Craft",
     craftItem: "Item to craft (catalog)",
     planPreview: "Preview plan",
@@ -1081,7 +1090,13 @@ export const en: MessageTree = {
       "Items on the keepItems list are not deposited. Chest physics are verified on Paper.",
     farm: "Farming",
     farmCrop: "Crop",
-    farmRadius: "Radius",
+    farmRadius: "Radius (circle, 1–32 blocks)",
+    farmWhere: "Where",
+    farmWhereBot: "Bot position",
+    farmWherePlayer: "Player",
+    farmWhereXyz: "Coordinates",
+    farmPlayerPlaceholder: "player name",
+    farmUseBotPos: "Use bot coords",
     farmChest: "Produce chest (x y z)",
     farmDepositNearest: "nearest chest",
     till: "Till soil",
@@ -1089,13 +1104,13 @@ export const en: MessageTree = {
     plant: "Plant",
     plantToast: "Planting queued",
     harvest: "Harvest",
-    harvestToast: "Harvest queued (mature crops + replant)",
+    harvestToast: "Harvest queued (collect + replant + chest)",
     farmLoop: "Start farm loop",
     farmLoopToast: "Continuous farm loop started — ends with Stop",
     farmStop: "Stop",
     farmStopToast: "All work stopped",
     farmHint:
-      "Loop: till → harvest mature → replant → deposit produce to the chest → wait. Empty chest coords skip depositing (or tick nearest chest). Keep water within 4 blocks or farmland dries out."
+      "Radius is a circle (default 6). Raise it for a bigger field. Till: water+hoe. Plant: seeds. Harvest: break mature, walk onto drops, replant, chest. Loop does not expand the field."
   },
   itemPicker: {
     placeholder: "Search / select…",

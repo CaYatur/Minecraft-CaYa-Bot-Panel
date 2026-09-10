@@ -2,6 +2,7 @@ import type { Bot } from "mineflayer";
 import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
 import type { CountMode } from "./index";
+import { boundedOp, digCancelable } from "../build/place";
 import { runGoto } from "../movement";
 import { ringSearch } from "./ringSearch";
 
@@ -86,16 +87,55 @@ function totalInventoryCount(bot: Bot): number {
   return bot.inventory.items().reduce((sum, item) => sum + item.count, 0);
 }
 
-function droppedItemName(entity: unknown): string | null {
+function isItemEntity(entity: { name?: string } | null | undefined): boolean {
+  const n = (entity?.name ?? "").toLowerCase();
+  return n === "item" || n === "items" || n === "item_stack";
+}
+
+function droppedItemName(entity: unknown, bot?: Bot): string | null {
   const e = entity as {
     getDroppedItem?: () => { name?: string } | null;
     metadata?: unknown[];
+    metadataKeys?: Record<string, number>;
   };
   try {
-    return e.getDroppedItem?.()?.name ?? null;
+    const n = e.getDroppedItem?.()?.name;
+    if (n) return n;
+  } catch {
+    /* 1.20.5+ fromNotch can throw — fall through to metadata */
+  }
+  const meta = e.metadata;
+  if (!Array.isArray(meta) || !bot) return null;
+  const ix = e.metadataKeys?.item ?? 8;
+  const slot = meta[ix];
+  if (slot && typeof slot === "object" && "name" in slot && typeof (slot as { name?: unknown }).name === "string") {
+    return (slot as { name: string }).name;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Item = require("prismarine-item")(bot.version) as {
+      fromNotch: (n: unknown) => { name?: string } | null;
+    };
+    const parsed = Item.fromNotch(slot);
+    return parsed?.name ?? null;
   } catch {
     return null;
   }
+}
+
+/** diamond from diamond_ore, oak_log from oak_log, unknown name → keep (don't skip). */
+function dropMatchesRequested(dropName: string | null, requested: string | undefined): boolean {
+  if (!requested) return true;
+  if (!dropName) return true;
+  const f = requested.replace(/^minecraft:/, "").toLowerCase();
+  const d = dropName.toLowerCase();
+  if (d === f) return true;
+  if (d.includes(f) || f.includes(d)) return true;
+  for (const [item, blocks] of Object.entries(DROP_SOURCE_BLOCKS)) {
+    if (d === item && blocks.includes(f)) return true;
+    if (f === item && blocks.includes(d)) return true;
+  }
+  return false;
 }
 
 function entityExists(bot: Bot, id: number | undefined): boolean {
@@ -124,10 +164,10 @@ export async function runSmartCollectDrops(
 
   while (!token.cancelled && Date.now() - startedAt < maxDurationMs) {
     const drops = (Object.values(bot.entities) as DropEntityLike[]).filter((entity) => {
-      if (!entity || entity.name !== "item") return false;
+      if (!entity || !isItemEntity(entity)) return false;
       if (bot.entity.position.distanceTo(entity.position) > radius) return false;
-      const name = droppedItemName(entity)?.toLowerCase();
-      if (normalizedFilter && name && !name.includes(normalizedFilter)) return false;
+      const name = droppedItemName(entity, bot);
+      if (!dropMatchesRequested(name, normalizedFilter)) return false;
       if ((failures.get(entity.id) ?? 0) >= 3) return false;
       return true;
     });
@@ -146,7 +186,7 @@ export async function runSmartCollectDrops(
 
     const target = drops[0]!;
     const beforeAll = totalInventoryCount(bot);
-    const targetName = droppedItemName(target);
+    const targetName = droppedItemName(target, bot);
     const beforeNamed = targetName ? countNamed(bot, [targetName]) : beforeAll;
     report({
       done: verified,
@@ -154,15 +194,18 @@ export async function runSmartCollectDrops(
       label: `Ground items: ${targetName ?? "item"}`
     });
 
+    const dist = bot.entity.position.distanceTo(target.position);
+    const gotoTimeout = Math.max(4_000, Math.min(8_000, 2_500 + dist * 400));
     try {
       await runGoto(
         instance,
         target.position.x,
         target.position.y,
         target.position.z,
-        0.65,
+        1,
         token,
-        () => {}
+        () => {},
+        { timeoutMs: gotoTimeout, canDig: false, allowPlace: false }
       );
     } catch {
       failures.set(target.id, (failures.get(target.id) ?? 0) + 1);
@@ -170,7 +213,7 @@ export async function runSmartCollectDrops(
       continue;
     }
 
-    const waitUntil = Date.now() + 1_600;
+    const waitUntil = Date.now() + 2_400;
     let picked = false;
     while (!token.cancelled && Date.now() < waitUntil) {
       const afterAll = totalInventoryCount(bot);
@@ -194,9 +237,10 @@ export async function runSmartCollectDrops(
           target.position.x + 0.35,
           target.position.y,
           target.position.z + 0.35,
-          0.55,
+          2,
           token,
-          () => {}
+          () => {},
+          { timeoutMs: 3_500, canDig: false, allowPlace: false }
         );
       } catch {
         // best effort
@@ -217,7 +261,7 @@ export async function collectDropsAfterDig(
 ): Promise<void> {
   await sleep(120);
   try {
-    await runSmartCollectDrops(instance, filter, 7, token, () => {}, 3_200);
+    await runSmartCollectDrops(instance, filter, 8, token, () => {}, 14_000);
   } catch {
     // Kazma işlemini yalnızca pickup best-effort hatası yüzünden failed sayma.
   }
@@ -276,7 +320,7 @@ export async function runSmartCollectBlock(
   amount: number,
   token: TaskToken,
   report: ProgressFn,
-  countMode: CountMode = "target"
+  countMode: CountMode = "add"
 ): Promise<void> {
   const bot = requireBot(instance);
   const requested = name.replace(/^minecraft:/, "");
@@ -315,15 +359,6 @@ export async function runSmartCollectBlock(
     return;
   }
 
-  if (requested.includes("_ore") || requested === "ancient_debris" || requested.startsWith("raw_")) {
-    const ore = requested
-      .replace(/^deepslate_/, "")
-      .replace(/_ore$/, "")
-      .replace(/^raw_/, "");
-    await instance.gather.runMine(ore, target, "legit", token, report, "target");
-    return;
-  }
-
   if (instance.craft.canCraft(requested) || isLikelyCraftedItem(requested)) {
     try {
       await instance.craft.runCraftInline(requested, target, token, report);
@@ -354,32 +389,63 @@ async function runDirectWorldGather(
   let got = countHave();
   report({ done: Math.min(got, target), total: target, label: `${requested} ${got}/${target}` });
   let noProgress = 0;
+  const skipped = new Set<string>();
 
   while (got < target && !token.cancelled) {
-    let block = bot.findBlock({ matching: (b) => matcher(b.name), maxDistance: 32 });
+    let block = bot.findBlock({
+      matching: (b) => matcher(b.name) && !skipped.has(`${Math.floor(b.position.x)},${Math.floor(b.position.y)},${Math.floor(b.position.z)}`),
+      maxDistance: 32
+    });
     if (!block) {
       const found = await ringSearch(instance, token, report, {
         step: RAW_GATHERABLE.has(requested) ? 24 : 28,
         maxRadius: RAW_GATHERABLE.has(requested) ? 96 : 112,
+        surfaceTravel: true,
+        movement: { canDig: false, allowPlace: false, parkour: true, timeoutMs: 45_000 },
         probe: (probeBot) =>
-          Boolean(probeBot.findBlock({ matching: (candidate) => matcher(candidate.name), maxDistance: 20 }))
+          Boolean(
+            probeBot.findBlock({
+              matching: (candidate) =>
+                matcher(candidate.name) &&
+                !skipped.has(
+                  `${Math.floor(candidate.position.x)},${Math.floor(candidate.position.y)},${Math.floor(candidate.position.z)}`
+                ),
+              maxDistance: 20
+            })
+          )
       });
-      if (!found) throw new Error(`${requested} not found (area search exhausted)`);
-      block = bot.findBlock({ matching: (b) => matcher(b.name), maxDistance: 32 });
+      if (!found) throw new Error(`${requested} not found nearby (use Mine for underground ores)`);
+      block = bot.findBlock({
+        matching: (b) => matcher(b.name) && !skipped.has(`${Math.floor(b.position.x)},${Math.floor(b.position.y)},${Math.floor(b.position.z)}`),
+        maxDistance: 32
+      });
     }
     if (!block) continue;
 
+    const key = `${Math.floor(block.position.x)},${Math.floor(block.position.y)},${Math.floor(block.position.z)}`;
     const before = got;
-    // Mevcut GatherService'in safe tool/path/dig akışını kullmainbilmek for
-    // tek targetli bir blok toplama yerine doğrudan kazma API'si yok; aynı dosyadaki
-    // digBlock bu çağrıdan sonra drop pickup ile yamalanır. Burada blok yakınına gideriz.
-    await runGoto(instance, block.position.x, block.position.y, block.position.z, 3, token, () => {});
+    const feetY = Math.floor(bot.entity.position.y);
+    const standY = Math.abs(block.position.y - feetY) <= 2 ? block.position.y : feetY;
+    try {
+      await runGoto(instance, block.position.x, standY, block.position.z, 3, token, () => {}, {
+        canDig: false,
+        allowPlace: false,
+        parkour: true,
+        timeoutMs: 30_000
+      });
+    } catch {
+      skipped.add(key);
+      noProgress++;
+      if (noProgress >= 8) throw new Error(`${requested}: no reachable block nearby`);
+      continue;
+    }
     if (token.cancelled) throw new Error(token.reason ?? "cancelled");
 
     const live = bot.blockAt(block.position);
     if (!live || !matcher(live.name) || !bot.canDigBlock(live)) {
+      skipped.add(key);
       noProgress++;
-      if (noProgress >= 5) throw new Error(`${requested}: no diggable target found`);
+      if (noProgress >= 8) throw new Error(`${requested}: no diggable target found`);
       continue;
     }
 
@@ -396,11 +462,20 @@ async function runDirectWorldGather(
       } catch {
         // optional plugin
       }
-      await bot.dig(live);
+      const wait = typeof bot.digTime === "function" ? bot.digTime(live) : 1_000;
+      const ms = Math.max(3_000, Math.min(12_000, (Number.isFinite(wait) ? wait : 1_000) + 3_500));
+      await boundedOp(digCancelable(bot, live, token), token, ms, `dig ${live.name}`, () => {
+        try {
+          (bot as unknown as { stopDigging?(): void }).stopDigging?.();
+        } catch {
+          /* */
+        }
+      });
       await collectDropsAfterDig(instance, requested, token);
     } catch (error) {
+      skipped.add(key);
       noProgress++;
-      if (noProgress >= 5) {
+      if (noProgress >= 8) {
         throw new Error(
           `${requested} could not dig: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -411,7 +486,7 @@ async function runDirectWorldGather(
     got = countHave();
     noProgress = got > before ? 0 : noProgress + 1;
     report({ done: Math.min(got, target), total: target, label: `${requested} ${got}/${target}` });
-    if (noProgress >= 5) throw new Error(`${requested}: dug but drop did not enter inventory`);
+    if (noProgress >= 8) throw new Error(`${requested}: dug but drop did not enter inventory`);
   }
 
   if (token.cancelled) throw new Error(token.reason ?? "cancelled");

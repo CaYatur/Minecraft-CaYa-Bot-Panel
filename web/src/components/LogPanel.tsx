@@ -38,7 +38,7 @@ export function LogPanel({ botId }: { botId?: string }) {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-1.5 border-b border-zinc-800 pb-2">
         {ALL_LEVELS.map((lv) => (
           <button
@@ -60,7 +60,7 @@ export function LogPanel({ botId }: { botId?: string }) {
           const el = listRef.current;
           if (el) stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
         }}
-        className="mono flex-1 space-y-0.5 overflow-y-auto py-2 text-xs"
+        className="mono min-h-0 flex-1 space-y-0.5 overflow-y-auto py-2 text-xs"
       >
         {visible.length === 0 && <div className="py-8 text-center text-zinc-600">{t("logs.empty")}</div>}
         {visible.map((l, i) => (

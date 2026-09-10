@@ -3,6 +3,7 @@ import type { Item } from "prismarine-item";
 import type { BotInstance } from "../../core/BotInstance";
 import { isHostileMob } from "../combat/mobs";
 import { v3 } from "../build/vec3util";
+import { isParkourLocked } from "../movement/parkour";
 
 /** Düşüş kurtarma yöntemi (öncelik skoru yüksek = tercih) */
 export type FallMethod =
@@ -328,7 +329,7 @@ export class FallGuardService {
       return;
     }
 
-    if (shouldIgnoreFall(bot)) {
+    if (shouldIgnoreFall(bot) || isParkourLocked(bot)) {
       if (this.state.falling || this.fallPeakY != null) {
         this.fallPeakY = null;
         this.state = idleState();

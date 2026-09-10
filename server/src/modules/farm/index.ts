@@ -4,9 +4,11 @@ import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
 import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import { creativeEnsureItem, isCreativeMode } from "../build/creative";
+import { goals } from "mineflayer-pathfinder";
 import { boundedOp, digCancelable, pathNear } from "../build/place";
 import { runSmartCollectDrops } from "../gather/smartGather";
-import { depositToChest } from "../inventory/chestOps";
+import { CONTAINER_BLOCKS, depositToChest } from "../inventory/chestOps";
+import { ensureMovement, restoreDefaultMovement, stopCreativeFlight, type EnsureMovementOpts } from "../movement";
 import {
   CROPS,
   cropForSeed,
@@ -29,8 +31,10 @@ export interface FarmArea {
   x?: number;
   y?: number;
   z?: number;
-  /** yarıçap 1–16 (default 6) */
+  /** yarıçap 1–32 (default 6) */
   radius?: number;
+  /** named player — farm around that player's current position */
+  player?: string;
 }
 
 export interface TillOpts extends FarmArea {
@@ -46,6 +50,10 @@ export interface PlantOpts extends FarmArea {
 export interface HarvestOpts extends FarmArea {
   replant?: boolean;
   maxBlocks?: number;
+  depositX?: number;
+  depositY?: number;
+  depositZ?: number;
+  depositNearest?: boolean;
 }
 
 export interface FarmCycleOpts extends FarmArea {
@@ -66,8 +74,169 @@ export interface FarmCycleOpts extends FarmArea {
   maxCycles?: number;
 }
 
-const REACH = 4.2;
-const AREA_MAX_R = 16;
+const REACH = 3.2;
+const WALK_RANGE = 2.1;
+const AREA_MAX_R = 32;
+
+/** No sprint/parkour on farmland — jumping tramples crops (issue #17). */
+const FARM_MOVE: EnsureMovementOpts = {
+  allowSprintNow: false,
+  parkour: false,
+  canDig: false,
+  allowPlace: false,
+  canOpenDoors: true
+};
+
+function applyFarmMovement(instance: BotInstance) {
+  const bot = ensureMovement(instance, FARM_MOVE);
+  stopCreativeFlight(bot);
+  try {
+    const mov = (bot.pathfinder as unknown as { movements?: { getMoveJumpUp?: unknown; getMoveParkourForward?: unknown; allowParkour?: boolean; allowSprinting?: boolean } }).movements;
+    if (mov) {
+      mov.getMoveJumpUp = () => {};
+      mov.getMoveParkourForward = () => {};
+      mov.allowParkour = false;
+      mov.allowSprinting = false;
+    }
+  } catch {
+    /* */
+  }
+  try {
+    bot.setControlState("sprint", false);
+    bot.setControlState("jump", false);
+  } catch {
+    /* */
+  }
+  return bot;
+}
+
+function holdNoJump(bot: Bot): () => void {
+  const tick = () => {
+    try {
+      // In a hole / falling, jump must stay available or the bot never climbs out.
+      if (bot.entity?.onGround) {
+        bot.setControlState("jump", false);
+        bot.setControlState("sprint", false);
+      }
+    } catch {
+      /* */
+    }
+  };
+  bot.on("physicTick", tick);
+  return () => {
+    try {
+      bot.removeListener("physicTick", tick);
+    } catch {
+      /* */
+    }
+  };
+}
+
+function farmPathOpts(extra?: { clearGoal?: boolean; timeoutMs?: number }) {
+  return {
+    clearGoal: extra?.clearGoal ?? true,
+    timeoutMs: extra?.timeoutMs ?? 5_000,
+    movement: FARM_MOVE
+  };
+}
+
+async function farmNear(
+  instance: BotInstance,
+  x: number,
+  y: number,
+  z: number,
+  range: number,
+  token: TaskToken
+) {
+  const bot = requireBot(instance);
+  const d0 = bot.entity.position.distanceTo({ x, y, z } as never);
+  if (d0 <= range + 0.45) return;
+  await pathNear(instance, x, y, z, range, token, farmPathOpts({ timeoutMs: 5_000 }));
+}
+
+function cellDist(bot: Bot, block: Block): number {
+  return bot.entity.position.distanceTo(block.position.offset(0.5, 1, 0.5));
+}
+
+/** Walk row-by-row so the bot actually moves across the plot instead of spinning in place. */
+function sortWalkOrder(bot: Bot, cells: Block[]): Block[] {
+  return [...cells].sort((a, b) => {
+    const ay = a.position.y;
+    const by = b.position.y;
+    if (ay !== by) return ay - by;
+    const az = a.position.z;
+    const bz = b.position.z;
+    if (az !== bz) return az - bz;
+    return (az & 1) === 0 ? a.position.x - b.position.x : b.position.x - a.position.x;
+  });
+}
+
+async function walkToCell(instance: BotInstance, cell: Block, token: TaskToken): Promise<boolean> {
+  const bot = requireBot(instance);
+  try {
+    bot.setControlState("jump", false);
+    bot.setControlState("sprint", false);
+  } catch {
+    /* */
+  }
+  if (cellDist(bot, cell) <= REACH) return true;
+  await farmNear(instance, cell.position.x + 0.5, cell.position.y + 1, cell.position.z + 0.5, WALK_RANGE, token);
+  try {
+    bot.setControlState("jump", false);
+  } catch {
+    /* */
+  }
+  return cellDist(bot, cell) <= REACH + 0.4;
+}
+
+function isWaterBlockName(name: string): boolean {
+  return name === "water" || name === "flowing_water";
+}
+
+function isRaining(bot: Bot): boolean {
+  const b = bot as Bot & { isRaining?: boolean; rainState?: number };
+  return Boolean(b.isRaining) || (b.rainState ?? 0) > 0;
+}
+
+/** Vanilla: water within 4 blocks horizontally (square), same Y or one above. */
+function isFarmlandHydrated(bot: Bot, pos: Vec3): boolean {
+  if (isRaining(bot)) return true;
+  for (let dx = -4; dx <= 4; dx++) {
+    for (let dz = -4; dz <= 4; dz++) {
+      for (const dy of [0, 1]) {
+        const b = bot.blockAt(pos.offset(dx, dy, dz));
+        if (b && isWaterBlockName(b.name)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Water every 9 blocks (vanilla 9×9). Never adjacent holes. */
+function hydrationLattice(c: { x: number; y: number; z: number; r: number }): Vec3[] {
+  const xs = new Set<number>();
+  const zs = new Set<number>();
+  xs.add(c.x);
+  zs.add(c.z);
+  for (let d = 9; d <= c.r + 4; d += 9) {
+    xs.add(Math.min(c.x + c.r, c.x + d));
+    xs.add(Math.max(c.x - c.r, c.x - d));
+    zs.add(Math.min(c.z + c.r, c.z + d));
+    zs.add(Math.max(c.z - c.r, c.z - d));
+  }
+  const out: Vec3[] = [];
+  for (const x of xs) {
+    for (const z of zs) {
+      out.push(new Vec3(x, c.y, z));
+    }
+  }
+  out.sort((a, b) => {
+    const da = (a.x - c.x) * (a.x - c.x) + (a.z - c.z) * (a.z - c.z);
+    const db = (b.x - c.x) * (b.x - c.x) + (b.z - c.z) * (b.z - c.z);
+    return da - db;
+  });
+  return out;
+}
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
@@ -87,18 +256,191 @@ function sleepCancellable(ms: number, token: TaskToken): Promise<void> {
   });
 }
 
+function sameCell(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) {
+  return a.x === b.x && a.y === b.y && a.z === b.z;
+}
+
+function holeCenterDist(bot: Bot, dest: Vec3): number {
+  return Math.hypot(bot.entity.position.x - (dest.x + 0.5), bot.entity.position.z - (dest.z + 0.5));
+}
+
+/** Adjacent rim: close enough that the look ray clears the neighbor lip into the hole. */
+async function walkToHoleRim(instance: BotInstance, dest: Vec3, token: TaskToken): Promise<boolean> {
+  const bot = applyFarmMovement(instance);
+  const dirs: [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1]
+  ];
+  const p = bot.entity.position;
+  dirs.sort((a, b) => {
+    const da = Math.hypot(p.x - (dest.x + 0.5 + a[0]), p.z - (dest.z + 0.5 + a[1]));
+    const db = Math.hypot(p.x - (dest.x + 0.5 + b[0]), p.z - (dest.z + 0.5 + b[1]));
+    return da - db;
+  });
+  let nx = 1;
+  let nz = 0;
+  for (const [dx, dz] of dirs) {
+    const b = bot.blockAt(dest.offset(dx, 0, dz));
+    if (b && b.boundingBox === "block") {
+      nx = dx;
+      nz = dz;
+      break;
+    }
+  }
+  const rimX = dest.x + 0.5 + nx * 0.92;
+  const rimZ = dest.z + 0.5 + nz * 0.92;
+  const rimY = dest.y + 1;
+  const inBand = () => {
+    const xz = holeCenterDist(bot, dest);
+    return xz >= 0.95 && xz <= 1.48 && Math.abs(bot.entity.position.y - rimY) < 1.3;
+  };
+  if (inBand()) return true;
+  try {
+    bot.pathfinder.setGoal(new goals.GoalNear(rimX, rimY, rimZ, 0.2));
+  } catch {
+    return false;
+  }
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5_000 && !token.cancelled) {
+    if (inBand()) break;
+    await sleepCancellable(50, token);
+  }
+  try {
+    bot.pathfinder.setGoal(null);
+  } catch {
+    /* */
+  }
+  if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+  return inBand();
+}
+
+/**
+ * Place a water source at an exact air cell.
+ *
+ * Mineflayer: placeBlock/activateBlock do not work with buckets (Prismarine
+ * #3731 / #3740). The server raytraces the look at a SOLID face, then
+ * activateItem's use_item packet (with yaw/pitch) places water against that
+ * face. Water at dest = floor + (0,1,0). We wait until dest is water.
+ *
+ * Standing on the neighbor and looking at the floor center often hits the
+ * neighbor's TOP (dest.y+1) — water on the adjacent upper block. Aim into
+ * the hole, far side of the floor, and refuse to pour unless the cursor is the floor.
+ */
+async function pourWaterIntoCoord(bot: Bot, dest: Vec3, token: TaskToken): Promise<boolean> {
+  const hole = bot.blockAt(dest);
+  const floor = bot.blockAt(dest.offset(0, -1, 0));
+  if (!floor || floor.boundingBox !== "block") return false;
+  if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
+  if (bot.heldItem?.name !== "water_bucket") return false;
+  const xz = holeCenterDist(bot, dest);
+  if (xz < 0.9 || xz > 1.5) return false;
+
+  const px = bot.entity.position.x;
+  const pz = bot.entity.position.z;
+  const look = new Vec3(
+    dest.x + 0.5 + (px > dest.x + 0.5 ? -0.22 : 0.22),
+    dest.y + 0.05,
+    dest.z + 0.5 + (pz > dest.z + 0.5 ? -0.22 : 0.22)
+  );
+
+  const cursorBot = bot as unknown as { blockAtCursor?: (max?: number) => Block | null };
+  let aimedFloor = false;
+  for (let i = 0; i < 5; i++) {
+    await boundedOp(bot.lookAt(look, true), token, 1_500, "aim hole floor");
+    await sleepCancellable(80, token);
+    const hit = cursorBot.blockAtCursor?.(5);
+    if (hit && sameCell(hit.position, floor.position)) {
+      aimedFloor = true;
+      break;
+    }
+    look.y = Math.max(dest.y + 0.01, look.y - 0.04);
+  }
+  if (!aimedFloor) return false;
+
+  try {
+    bot.activateItem(false);
+  } catch {
+    bot.activateItem();
+  }
+
+  const t0 = Date.now();
+  while (Date.now() - t0 < 2_000) {
+    if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+    const b = bot.blockAt(dest);
+    if (b && isWaterBlockName(b.name)) {
+      try {
+        bot.deactivateItem();
+      } catch {
+        /* */
+      }
+      return true;
+    }
+    await sleepCancellable(50, token);
+  }
+  try {
+    bot.deactivateItem();
+  } catch {
+    /* */
+  }
+  const final = bot.blockAt(dest);
+  return Boolean(final && isWaterBlockName(final.name));
+}
+
+function resolveFarmAnchor(instance: BotInstance, area: FarmArea): { x: number; y: number; z: number } {
+  const bot = requireBot(instance);
+  if (area.player && area.player.trim()) {
+    const want = area.player.trim().toLowerCase();
+    const hit = Object.entries(bot.players ?? {}).find(([n]) => n.toLowerCase() === want);
+    const pos = hit?.[1]?.entity?.position;
+    if (!pos) {
+      throw new Error(`Player "${area.player}" is not in range (no entity). Stand nearby or use coordinates.`);
+    }
+    return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) };
+  }
+  if (area.x != null && area.z != null) {
+    return {
+      x: Math.floor(area.x),
+      y: Math.floor(area.y ?? bot.entity.position.y),
+      z: Math.floor(area.z)
+    };
+  }
+  const p = bot.entity.position;
+  return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+}
+
+/** If the bot is flying (creative) or standing on a slab, snap to the dirt/farmland layer. */
+function snapFarmY(bot: Bot, x: number, y: number, z: number): number {
+  const start = Math.floor(y);
+  for (let dy = 0; dy <= 32; dy++) {
+    for (const y2 of dy === 0 ? [start] : [start - dy, start + dy]) {
+      const b = bot.blockAt(new Vec3(x, y2, z));
+      if (!b) continue;
+      if (TILLABLE.has(b.name) || b.name === "farmland" || CROPS[b.name]) return y2;
+    }
+  }
+  for (let y2 = start; y2 >= start - 48; y2--) {
+    const b = bot.blockAt(new Vec3(x, y2, z));
+    if (!b) continue;
+    if (b.name === "air" || b.name === "cave_air" || isWaterBlockName(b.name)) continue;
+    if (b.boundingBox === "block") return y2;
+  }
+  return start;
+}
+
 function areaCenter(instance: BotInstance, area: FarmArea): { x: number; y: number; z: number; r: number } {
   const bot = requireBot(instance);
-  const p = bot.entity.position;
+  const a = resolveFarmAnchor(instance, area);
   return {
-    x: Math.floor(area.x ?? p.x),
-    y: Math.floor(area.y ?? p.y),
-    z: Math.floor(area.z ?? p.z),
+    x: a.x,
+    y: snapFarmY(bot, a.x, a.y, a.z),
+    z: a.z,
     r: Math.max(1, Math.min(AREA_MAX_R, Math.floor(area.radius ?? 6)))
   };
 }
 
-/** alan tarama — merkez etrafında r yarıçap, y ±2 katman */
+/** alan tarama — merkez etrafında r yarıçap, y ±6 katman (creative uçuş payı) */
 function scanArea(
   bot: Bot,
   c: { x: number; y: number; z: number; r: number },
@@ -106,7 +448,7 @@ function scanArea(
   max: number
 ): Block[] {
   const out: Block[] = [];
-  for (let dy = 2; dy >= -2; dy--) {
+  for (let dy = 6; dy >= -6; dy--) {
     for (let dx = -c.r; dx <= c.r; dx++) {
       for (let dz = -c.r; dz <= c.r; dz++) {
         if (dx * dx + dz * dz > c.r * c.r + 1) continue;
@@ -220,8 +562,19 @@ export class FarmService {
         }
       }
       try {
-        await boundedOp(bot.lookAt(block.position.offset(0.5, 1, 0.5), true), token, 2_000, "look");
-        await boundedOp(bot.activateBlock(cur), token, 4_000, "till (use hoe)");
+        const live = bot.blockAt(block.position);
+        if (!live || live.name === "farmland") return live?.name === "farmland" ? "tilled" : "failed";
+        await boundedOp(bot.lookAt(live.position.offset(0.5, 1, 0.5), true), token, 1_500, "look");
+        await boundedOp(bot.activateBlock(live), token, 2_000, "till (use hoe)");
+        const afterUse = bot.blockAt(block.position);
+        if (afterUse?.name !== "farmland") {
+          try {
+            bot.activateItem();
+          } catch {
+            /* */
+          }
+          await sleepCancellable(120, token);
+        }
       } catch (e) {
         if (token.cancelled) throw e;
         return "failed";
@@ -235,125 +588,351 @@ export class FarmService {
   /** farmland üstüne tohum ek */
   private async plantCell(farmland: Block, seed: string, token: TaskToken): Promise<"planted" | "failed"> {
     const bot = requireBot(this.instance);
+    const live = bot.blockAt(farmland.position);
+    const above0 = live ? bot.blockAt(live.position.offset(0, 1, 0)) : null;
+    if (above0 && CROPS[above0.name]) return "planted";
+    if (!live || live.name !== "farmland") return "failed";
+    if (!isAirLike(above0) && above0) return "failed";
     const item = bot.inventory.items().find((i) => i.name === seed);
     if (!item) return "failed";
     try {
-      await boundedOp(bot.equip(item, "hand"), token, 5_000, "equip seeds");
-      await boundedOp(bot.lookAt(farmland.position.offset(0.5, 1, 0.5), true), token, 2_000, "look");
-      await boundedOp(bot.placeBlock(farmland, new Vec3(0, 1, 0)), token, 4_000, `plant ${seed}`);
+      await boundedOp(bot.equip(item, "hand"), token, 3_000, "equip seeds");
+      await boundedOp(bot.lookAt(live.position.offset(0.5, 1, 0.5), true), token, 1_200, "look");
+      await boundedOp(bot.placeBlock(live, new Vec3(0, 1, 0)), token, 2_000, `plant ${seed}`);
     } catch (e) {
       if (token.cancelled) throw e;
-      // placeBlock bazen blok güncellemesini kaçırır — dünyadan doğrula
     }
-    await sleepCancellable(120, token);
+    await sleepCancellable(80, token);
     const above = bot.blockAt(farmland.position.offset(0, 1, 0));
     return above && CROPS[above.name] ? "planted" : "failed";
+  }
+
+  /**
+   * Vanilla irrigation: stand beside a dirt cell, dig THAT cell (not the block
+   * under it), pour the bucket into the hole so water sits at farmland Y.
+   * Looking at y+1 dumps water on top of the dirt (floating source).
+   */
+  private async tryPlaceWaterSource(
+    c: { x: number; y: number; z: number; r: number },
+    token: TaskToken,
+    destHint?: Block
+  ): Promise<boolean> {
+    const bot = requireBot(this.instance);
+    if (this.instance.config.inventory.bannedItems.includes("water_bucket")) return false;
+    if (isCreativeMode(bot)) {
+      await creativeEnsureItem(bot, "water_bucket", 1);
+    }
+    const bucket = bot.inventory.items().find((i) => i.name === "water_bucket");
+    if (!bucket) return false;
+
+    const isGood = (b: Block | null): b is Block => {
+      if (!b) return false;
+      if (isWaterBlockName(b.name)) return false;
+      if (!TILLABLE.has(b.name) && b.name !== "farmland") return false;
+      const above = bot.blockAt(b.position.offset(0, 1, 0));
+      if (above && CROPS[above.name]) return false;
+      return true;
+    };
+
+    let dest: Block | null = null;
+    if (destHint) {
+      dest = bot.blockAt(destHint.position);
+      if (dest && isWaterBlockName(dest.name)) return true;
+      if (!isGood(dest)) return false;
+    } else {
+      dest = bot.blockAt(new Vec3(c.x, c.y, c.z));
+      if (!isGood(dest)) dest = scanArea(bot, c, (b) => isGood(b), 4)[0] ?? null;
+      if (!dest) return false;
+    }
+    if (isWaterBlockName(dest.name)) return true;
+
+    try {
+      const atRim = await walkToHoleRim(this.instance, dest.position, token);
+      if (!atRim) {
+        this.log().warn("Farm water", `could not reach hole rim at ${dest.position.x},${dest.position.z}`);
+        return false;
+      }
+    } catch (e) {
+      if (token.cancelled) throw e;
+      return false;
+    }
+
+    const live = bot.blockAt(dest.position);
+    if (!live) return false;
+    if (isWaterBlockName(live.name)) return true;
+
+    const grass = bot.blockAt(live.position.offset(0, 1, 0));
+    if (
+      grass &&
+      (grass.name === "short_grass" || grass.name === "grass" || grass.name === "tall_grass" || grass.name === "snow")
+    ) {
+      try {
+        await digCancelable(bot, grass, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
+    }
+
+    const toDig = bot.blockAt(dest.position);
+    if (toDig && (TILLABLE.has(toDig.name) || toDig.name === "farmland")) {
+      try {
+        await digCancelable(bot, toDig, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+        return false;
+      }
+    }
+
+    await sleepCancellable(200, token);
+    const hole = bot.blockAt(dest.position);
+    if (hole && isWaterBlockName(hole.name)) return true;
+    if (!hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
+    try {
+      await walkToHoleRim(this.instance, dest.position, token);
+    } catch (e) {
+      if (token.cancelled) throw e;
+    }
+
+    const floor = bot.blockAt(dest.position.offset(0, -1, 0));
+    if (!floor || floor.boundingBox !== "block") return false;
+
+    // Dig puts dirt in the hotbar and often auto-selects it. Equip the bucket
+    // AFTER the hole exists, then click once — never placeBlock dirt here.
+    if (isCreativeMode(bot)) await creativeEnsureItem(bot, "water_bucket", 1);
+    const pourBucket = bot.inventory.items().find((i) => i.name === "water_bucket");
+    if (!pourBucket) return false;
+    try {
+      await boundedOp(bot.equip(pourBucket, "hand"), token, 4_000, "equip water_bucket after dig");
+    } catch (e) {
+      if (token.cancelled) throw e;
+      return false;
+    }
+    if (bot.heldItem?.name !== "water_bucket") return false;
+
+    const ok = await pourWaterIntoCoord(bot, dest.position, token);
+    if (ok) return true;
+    const scoopOffsets: [number, number, number][] = [
+      [0, 1, 0],
+      [1, 1, 0],
+      [-1, 1, 0],
+      [0, 1, 1],
+      [0, 1, -1]
+    ];
+    for (const [dx, dy, dz] of scoopOffsets) {
+      const w = bot.blockAt(dest.position.offset(dx, dy, dz));
+      if (!w || !isWaterBlockName(w.name)) continue;
+      this.log().warn("Farm water", `misplaced at ${w.position.x},${w.position.y},${w.position.z} — scooping`);
+      const empty = bot.inventory.items().find((i) => i.name === "bucket" || i.name === "water_bucket");
+      if (!empty) break;
+      try {
+        await boundedOp(bot.equip(empty, "hand"), token, 3_000, "scoop misplaced");
+        await boundedOp(bot.lookAt(w.position.offset(0.5, 0.4, 0.5), true), token, 1_200, "look misplaced");
+        try {
+          bot.activateItem(false);
+        } catch {
+          bot.activateItem();
+        }
+        await sleepCancellable(200, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
+    }
+    const filled = bot.blockAt(dest.position);
+    if (filled && isWaterBlockName(filled.name)) return true;
+    this.log().warn(
+      "Farm water",
+      `no water at ${dest.position.x},${dest.position.y},${dest.position.z} (still ${filled?.name ?? "?"})`
+    );
+    return false;
+  }
+
+  /** One water source hydrates a 9×9. Place at lattice points ~9 apart, never a row of holes. */
+  private async ensurePlotHydration(
+    c: { x: number; y: number; z: number; r: number },
+    cells: Block[],
+    token: TaskToken,
+    report: ProgressFn
+  ): Promise<number> {
+    const bot = requireBot(this.instance);
+    if (isRaining(bot)) return 0;
+    const spots = hydrationLattice(c);
+    let placed = 0;
+    for (let i = 0; i < spots.length; i++) {
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      const spot = spots[i]!;
+      const here = bot.blockAt(spot);
+      if (here && isWaterBlockName(here.name)) continue;
+      if (isFarmlandHydrated(bot, spot)) continue;
+      const coversDry = cells.some((cell) => {
+        const dx = Math.abs(cell.position.x - spot.x);
+        const dz = Math.abs(cell.position.z - spot.z);
+        if (dx > 4 || dz > 4) return false;
+        const live = bot.blockAt(cell.position);
+        if (!live) return false;
+        if (!TILLABLE.has(live.name) && live.name !== "farmland") return false;
+        return !isFarmlandHydrated(bot, live.position);
+      });
+      if (!coversDry) continue;
+      report({ done: i + 1, total: spots.length, label: `water @${spot.x},${spot.z}` });
+      const hint = here ?? ({ position: spot } as Block);
+      const ok = await this.tryPlaceWaterSource(c, token, hint).catch((e) => {
+        if (token.cancelled) throw e;
+        return false;
+      });
+      if (ok) placed++;
+    }
+    return placed;
   }
 
   // ---------------------------------------------------------------- runs
 
   /** çapalama koşusu: alandaki tüm uygun toprakları farmland yap */
   async runTill(opts: TillOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
-    const c = areaCenter(this.instance, opts);
-    const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
-    const cells = scanArea(bot, c, (b, above) => TILLABLE.has(b.name) && (isAirLike(above) || above == null), max);
-    if (!cells.length) {
-      return `No tillable soil (dirt/grass/dirt_path) within r=${c.r} of ${c.x},${c.y},${c.z}.`;
-    }
-    const hoeName = await this.ensureHoe(token, report);
-    let tilled = 0;
-    let failed = 0;
-    for (let i = 0; i < cells.length; i++) {
-      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-      const cell = cells[i]!;
-      report({ done: i, total: cells.length, label: `till ${cell.position.x},${cell.position.y},${cell.position.z}` });
-      const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
-      if (d > REACH) {
+    try {
+      const bot = applyFarmMovement(this.instance);
+      const c = areaCenter(this.instance, opts);
+      const max = Math.max(1, Math.min(1024, opts.maxBlocks ?? (2 * c.r + 1) ** 2));
+      const cells = sortWalkOrder(
+        bot,
+        scanArea(bot, c, (b, above) => TILLABLE.has(b.name) && (isAirLike(above) || above == null), max)
+      );
+      if (!cells.length) {
+        return `No tillable soil (dirt/grass/dirt_path) within r=${c.r} of ${c.x},${c.y},${c.z}.`;
+      }
+
+      const releaseJump = holdNoJump(bot);
+      let hydroNote = "";
+      try {
+      const waters = await this.ensurePlotHydration(c, cells, token, report);
+      hydroNote = waters ? ` Placed ${waters} water source(s).` : "";
+
+      const hoeName = await this.ensureHoe(token, report);
+      let tilled = 0;
+      let failed = 0;
+      for (let i = 0; i < cells.length; i++) {
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+        const cell = cells[i]!;
+        const live = bot.blockAt(cell.position);
+        if (!live || live.name === "air" || live.name === "cave_air" || isWaterBlockName(live.name)) {
+          failed++;
+          continue;
+        }
+        if (!isFarmlandHydrated(bot, live.position) && !isRaining(bot)) {
+          failed++;
+          continue;
+        }
+        report({ done: i + 1, total: cells.length, label: `till ${cell.position.x},${cell.position.z}  (${tilled} ok)` });
         try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y + 1, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
+          const reached = await walkToCell(this.instance, cell, token);
+          if (!reached) {
+            failed++;
+            continue;
+          }
         } catch (e) {
           if (token.cancelled) throw e;
           failed++;
           continue;
         }
+        const held = bot.heldItem?.name ?? "";
+        if (!held.endsWith("_hoe")) await this.ensureHoe(token, report);
+        const res = await this.tillCell(cell, token);
+        if (res === "tilled") tilled++;
+        else failed++;
       }
-      // çapa elde kalsın (yol sırasında değişmiş olabilir)
-      const held = bot.heldItem?.name ?? "";
-      if (!held.endsWith("_hoe")) await this.ensureHoe(token, report);
-      const res = await this.tillCell(cell, token);
-      if (res === "tilled") tilled++;
-      else failed++;
+      const msg = `Tilled ${tilled}/${cells.length} block(s) with ${hoeName}${failed ? ` · ${failed} failed/skipped` : ""}.${hydroNote}`;
+      this.log().info("Till finished", msg);
+      report({ done: cells.length, total: cells.length, label: `tilled ${tilled}` });
+      return msg;
+      } finally {
+        releaseJump();
+      }
+    } finally {
+      restoreDefaultMovement(this.instance);
     }
-    const hydro = this.hydrationWarning(bot, c);
-    const msg = `Tilled ${tilled}/${cells.length} block(s) with ${hoeName}${failed ? ` · ${failed} failed/skipped` : ""}.${hydro}`;
-    this.log().info("Till finished", msg);
-    report({ done: cells.length, total: cells.length, label: `tilled ${tilled}` });
-    return msg;
-  }
-
-  /** alandaki farmland'lerin 4 blok içinde su var mı — yoksa uyarı metni */
-  private hydrationWarning(bot: Bot, c: { x: number; y: number; z: number; r: number }): string {
-    const water = bot.findBlock({
-      matching: (b) => b.name === "water",
-      maxDistance: c.r + 6,
-      point: new Vec3(c.x, c.y, c.z)
-    });
-    return water ? "" : " WARNING: no water nearby — dry farmland reverts to dirt (place water within 4 blocks).";
   }
 
   /** ekim koşusu */
   async runPlant(opts: PlantOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
+    try {
+    const bot = applyFarmMovement(this.instance);
     const c = areaCenter(this.instance, opts);
     const seed = seedForCrop(opts.crop ?? "wheat_seeds");
-    const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
-    const cells = scanArea(bot, c, (b, above) => isPlantableFarmland(b, above), max);
+    const max = Math.max(1, Math.min(1024, opts.maxBlocks ?? (2 * c.r + 1) ** 2));
+    const cells = sortWalkOrder(
+      bot,
+      scanArea(bot, c, (b, above) => isPlantableFarmland(b, above), max)
+    );
     if (!cells.length) return `No empty farmland within r=${c.r} — till first (till_soil).`;
 
     const have = await this.ensureSeeds(seed, token);
     if (have <= 0) {
+      if (isCreativeMode(bot)) {
+        await creativeEnsureItem(bot, seed, 16);
+      }
+    }
+    if (bot.inventory.items().reduce((s, i) => s + (i.name === seed ? i.count : 0), 0) <= 0) {
       return `No ${seed} in inventory — harvest/collect some first (grass drops wheat_seeds; crops drop their own seeds).`;
     }
+    const releaseJump = holdNoJump(bot);
     let planted = 0;
     let failed = 0;
+    let consecutiveFail = 0;
+    try {
     for (let i = 0; i < cells.length; i++) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
-      if (!bot.inventory.items().some((it) => it.name === seed)) break; // tohum bitti
+      if (!bot.inventory.items().some((it) => it.name === seed)) break;
       const cell = cells[i]!;
-      report({ done: i, total: cells.length, label: `plant ${seed} @${cell.position.x},${cell.position.z}` });
-      const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
-      if (d > REACH) {
-        try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y + 1, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
-        } catch (e) {
-          if (token.cancelled) throw e;
+      const live = bot.blockAt(cell.position);
+      const above = live ? bot.blockAt(live.position.offset(0, 1, 0)) : null;
+      if (!live || !isPlantableFarmland(live, above)) continue;
+      report({ done: planted + failed, total: cells.length, label: `plant ${seed} @${cell.position.x},${cell.position.z}` });
+      try {
+        const reached = await walkToCell(this.instance, cell, token);
+        if (!reached) {
           failed++;
+          consecutiveFail++;
+          if (consecutiveFail >= 5) break;
           continue;
         }
+      } catch (e) {
+        if (token.cancelled) throw e;
+        failed++;
+        consecutiveFail++;
+        if (consecutiveFail >= 5) break;
+        continue;
       }
       const res = await this.plantCell(cell, seed, token);
-      if (res === "planted") planted++;
-      else failed++;
+      if (res === "planted") {
+        planted++;
+        consecutiveFail = 0;
+      } else {
+        failed++;
+        consecutiveFail++;
+        const still = scanArea(bot, c, (b, a) => isPlantableFarmland(b, a), 8);
+        if (!still.length || consecutiveFail >= 5) break;
+      }
+    }
+    } finally {
+      releaseJump();
     }
     const msg = `Planted ${planted} ${seed}${failed ? ` · ${failed} failed` : ""}${planted < cells.length && !bot.inventory.items().some((it) => it.name === seed) ? " · ran out of seeds" : ""}.`;
     this.log().info("Plant finished", msg);
     report({ done: cells.length, total: cells.length, label: `planted ${planted}` });
     return msg;
+    } finally {
+      restoreDefaultMovement(this.instance);
+    }
   }
 
   /** hasat koşusu (olgun ekinler; opsiyonel yeniden ekim) */
   async runHarvest(opts: HarvestOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
+    try {
+    const bot = applyFarmMovement(this.instance);
+    const releaseJump = holdNoJump(bot);
+    try {
     const c = areaCenter(this.instance, opts);
     const replant = opts.replant !== false;
-    const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
+    const max = Math.max(1, Math.min(1024, opts.maxBlocks ?? (2 * c.r + 1) ** 2));
     const cells = scanArea(bot, c, (b) => isMatureCrop(b), max);
     if (!cells.length) return `No mature crops within r=${c.r} of ${c.x},${c.y},${c.z} — they may still be growing.`;
 
@@ -364,19 +943,17 @@ export class FarmService {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       const cell = cells[i]!;
       const cropName = cell.name;
-      report({ done: i, total: cells.length, label: `harvest ${cropName} @${cell.position.x},${cell.position.z}` });
-      const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 0.5, 0.5));
-      if (d > REACH) {
-        try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
-        } catch (e) {
-          if (token.cancelled) throw e;
+      report({ done: i + 1, total: cells.length, label: `harvest ${cropName} @${cell.position.x},${cell.position.z}` });
+      try {
+        const reached = await walkToCell(this.instance, cell, token);
+        if (!reached) {
           failed++;
           continue;
         }
+      } catch (e) {
+        if (token.cancelled) throw e;
+        failed++;
+        continue;
       }
       const live = bot.blockAt(cell.position);
       if (!live || !isMatureCrop(live)) continue; // biri önce kırdı
@@ -388,10 +965,32 @@ export class FarmService {
         failed++;
         continue;
       }
+      // Drops land on the crop cell; harvest reach is ~3m so the bot is often
+      // too far for the vanilla pickup magnet (~1.3m). Step onto the cell first.
+      if (!isCreativeMode(bot)) {
+        try {
+          await farmNear(
+            this.instance,
+            cell.position.x + 0.5,
+            cell.position.y,
+            cell.position.z + 0.5,
+            0.7,
+            token
+          );
+          await sleepCancellable(400, token);
+        } catch (e) {
+          if (token.cancelled) throw e;
+        }
+      }
       // yeniden ekim (drop'lar yerdeyken bile tohum envanterde olabilir)
       if (replant) {
-        const under = bot.blockAt(cell.position.offset(0, -1, 0));
+        let under = bot.blockAt(cell.position.offset(0, -1, 0));
         const seed = cropForSeed(cropName);
+        if (under && TILLABLE.has(under.name)) {
+          await this.ensureHoe(token, report);
+          await this.tillCell(under, token);
+          under = bot.blockAt(under.position);
+        }
         if (under && under.name === "farmland" && seed) {
           await this.ensureSeeds(seed, token);
           const res = await this.plantCell(under, seed, token).catch((e) => {
@@ -401,33 +1000,107 @@ export class FarmService {
           if (res === "planted") replanted++;
         }
       }
-      // her 8 hasatta bir hızlı yer süpürme (drop kaybolmasın)
-      if (harvested % 8 === 0) {
+      if (!isCreativeMode(bot) && harvested % 4 === 0) {
         try {
-          await runSmartCollectDrops(this.instance, undefined, 6, token, () => {}, 4_000);
+          await runSmartCollectDrops(this.instance, undefined, Math.max(8, c.r + 2), token, () => {}, 6_000);
         } catch (e) {
           if (token.cancelled) throw e;
         }
       }
     }
-    // final süpürme
-    try {
-      await runSmartCollectDrops(this.instance, undefined, Math.min(c.r + 4, 12), token, () => {}, 8_000);
-    } catch (e) {
-      if (token.cancelled) throw e;
+    if (!isCreativeMode(bot)) {
+      restoreDefaultMovement(this.instance);
+      try {
+        await runSmartCollectDrops(this.instance, undefined, Math.max(12, c.r + 6), token, () => {}, 20_000);
+      } catch (e) {
+        if (token.cancelled) throw e;
+      }
     }
-    const msg = `Harvested ${harvested} crop(s)${replant ? `, replanted ${replanted}` : ""}${failed ? ` · ${failed} failed` : ""}.`;
+    const hasChest = opts.depositX != null && opts.depositY != null && opts.depositZ != null;
+    const wantChest = hasChest || opts.depositNearest !== false;
+    let depositNote = "";
+    if (wantChest) {
+      restoreDefaultMovement(this.instance);
+      try {
+        await this.depositFarmProduce(opts, c.r, token, report);
+        depositNote = " Deposited to chest.";
+      } catch (e) {
+        if (token.cancelled) throw e;
+        depositNote = ` Chest: ${e instanceof Error ? e.message : String(e)}`;
+        this.log().warn("Harvest deposit failed", e instanceof Error ? e.message : String(e));
+      }
+    }
+    const msg = `Harvested ${harvested} crop(s)${replant ? `, replanted ${replanted}` : ""}${failed ? ` · ${failed} failed` : ""}.${depositNote}`;
     this.log().info("Harvest finished", msg);
     report({ done: cells.length, total: cells.length, label: `harvested ${harvested}` });
     return msg;
+    } finally {
+      releaseJump();
+    }
+    } finally {
+      restoreDefaultMovement(this.instance);
+    }
+  }
+
+  /** Deposit produce; keep a plot's worth of each seed for replant. Default: nearest chest. */
+  private async depositFarmProduce(
+    opts: { depositX?: number; depositY?: number; depositZ?: number; depositNearest?: boolean },
+    radius: number,
+    token: TaskToken,
+    report: ProgressFn
+  ): Promise<void> {
+    const hasChest = opts.depositX != null && opts.depositY != null && opts.depositZ != null;
+    const keepCounts: Record<string, number> = {};
+    const keep = Math.min(64, (radius * 2 + 1) ** 2);
+    for (const def of Object.values(CROPS)) keepCounts[def.seed] = keep;
+    const items = [...FARM_PRODUCE];
+    if (hasChest) {
+      await depositToChest(
+        this.instance,
+        { x: opts.depositX, y: opts.depositY, z: opts.depositZ, items, keepCounts, searchRadius: 64 },
+        token,
+        report
+      );
+      return;
+    }
+    const bot = requireBot(this.instance);
+    const positions = bot.findBlocks({
+      matching: (b) => CONTAINER_BLOCKS.has(b.name),
+      maxDistance: 64,
+      count: 12
+    });
+    if (!positions.length) {
+      throw new Error("No chest/barrel within 64 blocks (house chests count — bot must be able to walk to the door).");
+    }
+    let lastErr: unknown;
+    for (const pos of positions) {
+      if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      report({ done: 0, total: 1, label: `chest ${pos.x},${pos.y},${pos.z}` });
+      try {
+        await depositToChest(
+          this.instance,
+          { x: pos.x, y: pos.y, z: pos.z, items, keepCounts, searchRadius: 64 },
+          token,
+          report
+        );
+        return;
+      } catch (e) {
+        lastErr = e;
+        this.log().warn(
+          "Farm deposit",
+          `chest ${pos.x},${pos.y},${pos.z} failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "No reachable chest"));
   }
 
   /**
-   * Sürekli tarım döngüsü: (till) → hasat+yeniden ek → (sandığa depola) → bekle → tekrar.
-   * maxCycles verilmezse Stop/Reset/stop_all'a kadar sürer (İ6 iptal dostu).
+   * Loop the existing plot: harvest + replant + deposit. Till/water only on cycle 1.
+   * Does not convert new grass into farmland every lap.
    */
   async runFarmCycle(opts: FarmCycleOpts, token: TaskToken, report: ProgressFn): Promise<void> {
-    const c = areaCenter(this.instance, opts);
+    try {
     const seed = seedForCrop(opts.crop ?? "wheat_seeds");
     const interval = Math.max(10, Math.min(3600, opts.intervalSec ?? 45)) * 1000;
     const maxCycles = Math.max(0, Math.floor(opts.maxCycles ?? 0));
@@ -438,6 +1111,8 @@ export class FarmService {
     let cycle = 0;
     for (;;) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      applyFarmMovement(this.instance);
+      const c = areaCenter(this.instance, opts);
       cycle++;
       const cycLabel = maxCycles ? `${cycle}/${maxCycles}` : `${cycle}`;
       report({ done: cycle - 1, total: maxCycles || cycle, label: `farm cycle ${cycLabel}` });
@@ -452,8 +1127,8 @@ export class FarmService {
       };
       const before = countProduce();
 
-      // 1) toprak hazırlığı (yeni bozulan/çiğnenen hücreler dahil)
-      if (doTill) {
+      // Setup once: water + till. Later laps only harvest/replant the existing field.
+      if (doTill && cycle === 1) {
         try {
           await this.runTill({ ...opts, x: c.x, y: c.y, z: c.z, radius: c.r, maxBlocks: 96 }, token, report);
         } catch (e) {
@@ -462,9 +1137,23 @@ export class FarmService {
         }
       }
 
-      // 2) hasat + yeniden ekim
       try {
-        await this.runHarvest({ ...opts, x: c.x, y: c.y, z: c.z, radius: c.r, replant: opts.replant !== false }, token, report);
+        await this.runHarvest(
+          {
+            ...opts,
+            x: c.x,
+            y: c.y,
+            z: c.z,
+            radius: c.r,
+            replant: opts.replant !== false,
+            depositX: opts.depositX,
+            depositY: opts.depositY,
+            depositZ: opts.depositZ,
+            depositNearest: hasChest ? false : opts.depositNearest !== false
+          },
+          token,
+          report
+        );
       } catch (e) {
         if (token.cancelled) throw e;
         this.log().warn("Farm cycle: harvest step failed", e instanceof Error ? e.message : String(e));
@@ -505,7 +1194,7 @@ export class FarmService {
             report
           );
           // sandık başından tarlaya dön
-          await pathNear(this.instance, c.x + 0.5, c.y, c.z + 0.5, 3, token, { clearGoal: true, timeoutMs: 20_000 }).catch((e) => {
+          await farmNear(this.instance, c.x + 0.5, c.y, c.z + 0.5, 3, token).catch((e) => {
             if (token.cancelled) throw e;
           });
         } catch (e) {
@@ -519,8 +1208,12 @@ export class FarmService {
       report({ done: cycle, total: maxCycles || cycle + 1, label: `cycle ${cycLabel} · yield: ${totalTxt.slice(0, 60)}` });
 
       if (maxCycles && cycle >= maxCycles) break;
-      // 5) büyüme bekle (iptale 250ms içinde tepki verir)
-      await sleepCancellable(interval, token);
+      // Empty first pass (water/till failed) — do not sit 45s looking stuck.
+      const wait = totalTxt === "none yet" ? Math.min(interval, 8_000) : interval;
+      await sleepCancellable(wait, token);
+    }
+    } finally {
+      restoreDefaultMovement(this.instance);
     }
   }
 

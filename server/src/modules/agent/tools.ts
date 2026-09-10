@@ -578,15 +578,16 @@ const flyTo: AgentToolDef = {
 
 const collectWood: AgentToolDef = {
   name: "collect_wood",
-  description: "Chop trees until the bot has N logs in inventory (searches in expanding rings if none nearby, replants saplings). Async task.",
+  description: "Chop trees and ADD N logs on top of current inventory (default +16). Searches in expanding rings if none nearby, replants saplings. Async task.",
   category: "gather",
-  inputSchema: S.obj({ count: S.num("target log count (default 16)"), log_type: S.str("optional log type, e.g. oak_log") }),
+  inputSchema: S.obj({ count: S.num("logs to add (default 16)"), log_type: S.str("optional log type, e.g. oak_log") }),
   async execute(ctx, args) {
     requireOnline(ctx);
     const task = ctx.inst.enqueueAction({
       type: "collect-wood",
       count: aNum(args, "count", 16, 1, 512),
-      logType: args.log_type ? normName(String(args.log_type)) : undefined
+      logType: args.log_type ? normName(String(args.log_type)) : undefined,
+      countMode: "add"
     });
     return taskReply(task);
   }
@@ -595,12 +596,12 @@ const collectWood: AgentToolDef = {
 const mineOre: AgentToolDef = {
   name: "mine_ore",
   description:
-    "Mine an ore/block until the bot has N of it. Default legit mode (proper tool, realistic, avoids lava). utility=true uses fast non-realistic tunneling — only works when the panel's utility mode allows it. e.g. ore=iron, coal, copper, diamond. Async task.",
+    "Mine an ore and ADD N to inventory (default +8). Default legit mode (proper tool, realistic, avoids lava). utility=true uses fast non-realistic tunneling — only when the panel's utility mode allows it. e.g. ore=iron, coal, copper, diamond. Async task.",
   category: "gather",
   inputSchema: S.obj(
     {
       ore: S.str("ore name, e.g. iron / coal / diamond / stone"),
-      count: S.num("target count (default 8)"),
+      count: S.num("amount to add (default 8)"),
       utility: S.bool("fast non-realistic mining (needs utility mode enabled in panel)")
     },
     ["ore"]
@@ -615,7 +616,8 @@ const mineOre: AgentToolDef = {
       type: "mine",
       ore: normName(aStr(args, "ore")),
       count: aNum(args, "count", 8, 1, 256),
-      mode
+      mode,
+      countMode: "add"
     });
     const note = wantUtility && !utilityAllowed ? "Utility mining is disabled in the panel — fell back to legit mode." : `Mode: ${mode}.`;
     return taskReply(task, note);
@@ -624,12 +626,18 @@ const mineOre: AgentToolDef = {
 
 const collectBlocks: AgentToolDef = {
   name: "collect_blocks",
-  description: "Collect a specific block type (dig + pick up) until the bot has N, searching in expanding rings. e.g. sand, dirt, cobblestone. Async task.",
+  description:
+    "Find a block around the bot (surface search, not underground mining) and ADD N to inventory. e.g. sand, dirt, cobblestone, oak_log. Use mine_ore for ores. Async task.",
   category: "gather",
-  inputSchema: S.obj({ block: S.str("block/item name"), count: S.num("target count (default 8)") }, ["block"]),
+  inputSchema: S.obj({ block: S.str("block/item name"), count: S.num("amount to add (default 16)") }, ["block"]),
   async execute(ctx, args) {
     requireOnline(ctx);
-    const task = ctx.inst.enqueueAction({ type: "collect", item: normName(aStr(args, "block")), count: aNum(args, "count", 8, 1, 512) });
+    const task = ctx.inst.enqueueAction({
+      type: "collect",
+      item: normName(aStr(args, "block")),
+      count: aNum(args, "count", 16, 1, 512),
+      countMode: "add"
+    });
     return taskReply(task);
   }
 };

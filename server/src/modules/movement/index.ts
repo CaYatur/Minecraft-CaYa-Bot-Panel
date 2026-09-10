@@ -3,10 +3,29 @@ import { Movements, goals, pathfinder } from "mineflayer-pathfinder";
 import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
-import type { TaskToken, ProgressFn } from "../../core/TaskQueue";
+import { isTokenAborted, type TaskToken, type ProgressFn } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
+import {
+  installDoorMovementAssist,
+  isWoodenOpenableBlock,
+  patchMovementsForDoors,
+  tryPassNearbyDoor
+} from "./doors";
 import { easeLookAt, entityLookPoint, stepLookAtEntity } from "./look";
+import {
+  findElevatedApproach,
+  findReplayJump,
+  GoalFollowAtHeight,
+  isParkourLocked,
+  pruneObservedJumps,
+  pushObservedJump,
+  tryJumpAcrossToPlayer,
+  tryReplayObservedJump,
+  type ObservedJump
+} from "./parkour";
 import { installWaterMovementAssist } from "./water";
+
+export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
 
 /**
  * HAREKET ÇEKİRDEĞİ — tek altın kural (TODO §12'ye de yazıldı):
@@ -35,6 +54,16 @@ function moveCfg(instance: BotInstance): MovementConfig {
   return instance.config.movement;
 }
 
+/** How far we may drop without dying. Config is a floor; health raises it. */
+function smartMaxDropDown(bot: Bot, cfg: MovementConfig): number {
+  const hp = Math.max(0, bot.health ?? 20);
+  const keepHp = 4; // never plan a fall that leaves us under 2 hearts
+  const affordableDmg = Math.max(0, Math.floor(hp - keepHp));
+  const byHealth = 3 + affordableDmg;
+  const configured = Math.max(2, cfg.maxDrop ?? 3);
+  return Math.max(configured, Math.min(10, byHealth));
+}
+
 /** İnsanî dönüş hızı (°/tick) — sadece DURURKEN yapılan bakışlarda kullanılır */
 function turnSpeed(instance: BotInstance): number {
   const c = moveCfg(instance);
@@ -52,7 +81,7 @@ function pfIsMoving(bot: Bot): boolean {
 
 export interface EnsureMovementOpts {
   allowSprintNow?: boolean;
-  /** true → parkur zorla açık (config'i ezer) */
+  /** true/false overrides config; omit to use config.allowParkour */
   parkour?: boolean;
   /** takip for canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
   canDig?: boolean;
@@ -63,6 +92,8 @@ export interface EnsureMovementOpts {
   allowPlace?: boolean;
   /** "follow": canDig=false + allowPlace=false varsayılır */
   mode?: "follow" | "goto" | "parkour";
+  /** If set, pathfinder may break only these blocks (leaves on a tree walk). Terrain stays intact. */
+  breakOnly?: (name: string) => boolean;
 }
 
 /** pathfinder eklentisini yükle + Movements'ı config'ten kur */
@@ -72,6 +103,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
+  installDoorMovementAssist(bot);
 
   const cfg = moveCfg(instance);
   const movements = new Movements(bot);
@@ -82,10 +114,12 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   movements.allowSprinting = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   // Parkur: pathfinder'ın YERLEŞİK parkuru (1-4 blok boşluk + sprint jump) — merdiven
   // tırmanışı zaten doğal yetenek, ayrı bayrak gerekmez.
-  movements.allowParkour = opts?.parkour === true ? true : cfg.allowParkour !== false;
+  // parkour: false must actually disable it (farm tilling tramples on sprint-jumps).
+  movements.allowParkour = opts?.parkour !== undefined ? opts.parkour : cfg.allowParkour !== false;
   movements.allow1by1towers = Boolean(cfg.allowTower);
-  // DOĞRU özellik adı maxDropDown'dur ("maxDrop" pathfinder'da YOK — eski kod sessizce no-op'tu)
-  movements.maxDropDown = Math.max(2, Math.min(6, cfg.maxDrop ?? 4));
+  // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
+  // Take the short drop if it will not kill; walk around only when lethal.
+  movements.maxDropDown = smartMaxDropDown(bot, cfg);
   const canOpenDoors = opts?.canOpenDoors !== false;
   if ("canOpenDoors" in movements) {
     (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = canOpenDoors;
@@ -96,8 +130,43 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
       const openable = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
       if (openable) movements.openable.add(block.id);
     }
+    // Pathfinder always safeOrBreaks the HEAD cell (upper door half) before
+    // useOne on the feet cell. Without this, canDig=false yields no path and
+    // canDig=true queues the door to be broken (issue #11 / Mindcraft patch).
+    const origSafe = (movements as unknown as { safeOrBreak: (block: { name?: string }, toBreak?: unknown[]) => number })
+      .safeOrBreak.bind(movements);
+    (movements as unknown as { safeOrBreak: (block: { name?: string }, toBreak?: unknown[]) => number }).safeOrBreak = (
+      block,
+      toBreak
+    ) => {
+      if (isWoodenOpenableBlock(block)) return 0;
+      return origSafe(block, toBreak);
+    };
+    patchMovementsForDoors(bot, movements);
+    const origForward = movements.getMoveForward.bind(movements);
+    movements.getMoveForward = (node, dir, neighbors) => {
+      const before = neighbors.length;
+      origForward(node, dir, neighbors);
+      for (let i = before; i < neighbors.length; i++) {
+        const move = neighbors[i] as { toPlace?: Array<{ x: number; y: number; z: number; useOne?: boolean }> };
+        if (!move.toPlace?.length) continue;
+        // Pathfinder's useOne click can leave `placing=true` forever. We open
+        // doors ourselves and walk the cell center (doors.ts).
+        move.toPlace = move.toPlace.filter((p) => {
+          if (!p.useOne) return true;
+          const b = bot.blockAt(new Vec3(p.x, p.y, p.z));
+          return !isWoodenOpenableBlock(b);
+        });
+      }
+    };
   }
-  if (movements.canDig === false) {
+  const breakOnly = opts?.breakOnly;
+  if (breakOnly) {
+    movements.canDig = true;
+    for (const block of registry.blocksArray) {
+      if (!breakOnly(block.name)) movements.blocksCantBreak.add(block.id);
+    }
+  } else if (movements.canDig === false) {
     for (const block of registry.blocksArray) movements.blocksCantBreak.add(block.id);
     movements.exclusionAreasBreak.push(() => 100);
   }
@@ -115,44 +184,13 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   }
 
   bot.pathfinder.setMovements(movements);
-  return bot;
-}
-
-
-export async function tryOpenNearbyDoor(instance: BotInstance, radius = 2.8): Promise<boolean> {
-  const bot = requireBot(instance);
-  const base = bot.entity.position;
-  let best: ReturnType<Bot["blockAt"]> = null;
-  let bestDistance = radius + 0.001;
-  const reach = Math.max(1, Math.ceil(radius));
-  for (let dx = -reach; dx <= reach; dx++) {
-    for (let dz = -reach; dz <= reach; dz++) {
-      for (let dy = -1; dy <= 2; dy++) {
-        const block = bot.blockAt(base.floored().offset(dx, dy, dz));
-        if (!block) continue;
-        const name = block.name.toLowerCase();
-        const isDoor = (name.endsWith("_door") || name.endsWith("_fence_gate") || name.endsWith("_trapdoor")) && !name.includes("iron_");
-        if (!isDoor) continue;
-        const props = typeof block.getProperties === "function" ? block.getProperties() as Record<string, unknown> : {};
-        if (props.open === true) continue;
-        const distance = base.distanceTo(block.position.offset(0.5, 0.5, 0.5));
-        if (distance < bestDistance) {
-          best = block;
-          bestDistance = distance;
-        }
-      }
-    }
-  }
-  if (!best) return false;
   try {
-    bot.pathfinder.setGoal(null);
-    await bot.lookAt(best.position.offset(0.5, 0.5, 0.5), false);
-    await bot.activateBlock(best);
-    await sleep(180);
-    return true;
+    const pf = bot.pathfinder as unknown as { thinkTimeout?: number };
+    pf.thinkTimeout = opts?.mode === "follow" ? 4_000 : opts?.breakOnly ? 12_000 : movements.canDig ? 5_000 : 15_000;
   } catch {
-    return false;
+    /* */
   }
+  return bot;
 }
 
 // ---- merdiven atlayış asisti (takip) ----------------------------------------------
@@ -256,6 +294,7 @@ function pathfinderGoal(
 ): Promise<void> {
   const bot = requireBot(instance);
   const timeoutMs = opts?.timeoutMs ?? GOTO_TIMEOUT_MS;
+  const epoch = instance.controlEpoch;
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -299,7 +338,7 @@ function pathfinderGoal(
 
     const watch = setInterval(() => {
       if (settled) return;
-      if (token.cancelled) {
+      if (isTokenAborted(token) || instance.controlEpoch !== epoch) {
         finish(() => {
           stopGoal();
           reject(new Error(token.reason ?? "Task cancelled."));
@@ -321,6 +360,15 @@ function pathfinderGoal(
           stuckRetried = true;
           lastMoveAt = Date.now();
           opts?.onStuckRetry?.();
+          void tryPassNearbyDoor(instance).then((passed) => {
+            if (settled) return;
+            try {
+              bot.pathfinder.setGoal(goal);
+            } catch {
+              /* */
+            }
+            void passed;
+          });
           try {
             bot.pathfinder.setGoal(goal); // recompute from scratch
           } catch {
@@ -357,6 +405,8 @@ export interface GotoOptions {
   parkour?: boolean;
   /** Bu hareket for özel zaman aşımı. */
   timeoutMs?: number;
+  /** Pathfinder yalnızca bu blokları kırabilir (ağaç yürüyüşünde yaprak). */
+  breakOnly?: (name: string) => boolean;
 }
 
 export async function runGoto(
@@ -377,7 +427,8 @@ export async function runGoto(
     mode: "goto",
     canDig: options?.canDig,
     allowPlace: options?.allowPlace,
-    parkour: options?.parkour
+    parkour: options?.parkour,
+    breakOnly: options?.breakOnly
   });
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
@@ -418,7 +469,8 @@ export async function runGotoXZ(
     mode: "goto",
     canDig: options?.canDig,
     allowPlace: options?.allowPlace,
-    parkour: options?.parkour
+    parkour: options?.parkour,
+    breakOnly: options?.breakOnly
   });
   if (moveCfg(instance).humanize !== false) await sleep(40 + Math.floor(Math.random() * 90));
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
@@ -512,6 +564,18 @@ export async function runFollow(
     }
   };
 
+  let followMovesOn = false;
+  let scaffoldOn = false;
+
+  restoreDefaultMovement(instance);
+  ensureMovement(instance, {
+    mode: "follow",
+    canDig: movementPolicy?.canDig ?? false,
+    canOpenDoors: true,
+    allowPlace: movementPolicy?.allowPlace ?? false
+  });
+  followMovesOn = true;
+
   /** Takılınca / noPath: pathfinder'a geçici scaffold ver (config scaffoldBlocks) */
   const enableScaffoldForStuck = (bot: Bot) => {
     ensureMovement(instance, {
@@ -521,7 +585,9 @@ export async function runFollow(
       allowPlace: movementPolicy?.allowPlace === false ? false : true,
       parkour: moveCfg(instance).allowParkour !== false
     });
+    followMovesOn = true;
     if (movementPolicy?.allowPlace === false) return false;
+    scaffoldOn = true;
     // sadece sıkışınca: basamak/kule koyabilsin (sürekli açık değil)
     try {
       const mov = (bot.pathfinder as unknown as { movements?: Movements }).movements;
@@ -535,9 +601,16 @@ export async function runFollow(
   };
 
   const restoreFollowMovement = () => {
-    // normal follow: place kapalı (merdivende rastgele blok spam olmasın)
+    // setMovements resets the path — skip unless we actually changed mode (scaffold).
+    if (followMovesOn && !scaffoldOn) return;
     ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, canOpenDoors: true, allowPlace: movementPolicy?.allowPlace ?? false });
+    followMovesOn = true;
+    scaffoldOn = false;
   };
+
+  const observedJumps: ObservedJump[] = [];
+  let jumpTakeoff: { x: number; y: number; z: number } | null = null;
+  let prevPlayerGround = true;
 
   try {
     while (!token.cancelled) {
@@ -553,32 +626,85 @@ export async function runFollow(
       }
 
       restoreFollowMovement();
-      try {
-        bot.pathfinder.setGoal(new goals.GoalFollow(tracked, holdDist), true);
-      } catch {
-        /* pathfinder bir tık sonra hazır olabilir */
-      }
 
-      // iç döngü: goal churn yok. Takılınca: 1) rota tazele 2) merdiven hop
-      // 3) hâlâ gidilemiyorsa scaffold ile yeniden path (blok koyarak geç)
       let lastPos = bot.entity.position.clone();
       let lastMoveAt = Date.now();
       let consecutiveStucks = 0;
       let lastHopAt = 0;
-      let scaffoldUntil = 0; // scaffold may stay open until this time
+      let scaffoldUntil = 0;
       let lastNoPathAt = 0;
+      let lastGapAttemptAt = 0;
+      let lastApproachScan = 0;
+      let approach: { x: number; y: number; z: number } | null = null;
+
+      const applyFollowGoal = (ent: Entity, forceApproach = false) => {
+        const botPos = bot.entity?.position;
+        const botY = botPos?.y ?? 0;
+        const dy = ent.position.y - botY;
+        const xz = botPos ? Math.hypot(ent.position.x - botPos.x, ent.position.z - botPos.z) : 99;
+        if (dy >= 2.5 && xz < 14) {
+          if (forceApproach || !approach || Date.now() - lastApproachScan > 10_000) {
+            lastApproachScan = Date.now();
+            approach = findElevatedApproach(bot, ent.position);
+          }
+          if (approach) {
+            const dAp = Math.hypot(
+              (bot.entity?.position.x ?? 0) - (approach.x + 0.5),
+              (bot.entity?.position.z ?? 0) - (approach.z + 0.5)
+            );
+            const yAp = Math.abs((bot.entity?.position.y ?? 0) - approach.y);
+            if (dAp < 1.7 && yAp < 1.6) {
+              approach = null;
+              bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+              return;
+            }
+            bot.pathfinder.setGoal(new goals.GoalNear(approach.x, approach.y, approach.z, 1), false);
+            return;
+          }
+        } else {
+          approach = null;
+        }
+        const curGoal = bot.pathfinder.goal as GoalFollowAtHeight | { entity?: Entity } | undefined;
+        if (!forceApproach && curGoal instanceof GoalFollowAtHeight && curGoal.entity === ent) return;
+        bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+      };
+
+      try {
+        applyFollowGoal(tracked);
+      } catch {
+        /* */
+      }
 
       const onPath = (result: { status: string }) => {
         if (result.status !== "noPath") return;
+        if (isParkourLocked(bot)) return;
         if (Date.now() - lastNoPathAt < 4000) return;
         lastNoPathAt = Date.now();
         const live = bot.players[playerName]?.entity;
         if (!live || !bot.entity) return;
         void (async () => {
-          if (await tryOpenNearbyDoor(instance)) {
-            throttledReport(`follow: ${playerName} · door opened`);
+          if (isParkourLocked(bot)) return;
+          if (await tryPassNearbyDoor(instance)) {
+            throttledReport(`follow: ${playerName} · door passed`);
             restoreFollowMovement();
-            try { bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true); } catch { /* */ }
+            applyFollowGoal(live);
+            return;
+          }
+          const replay = findReplayJump(bot, observedJumps);
+          if (replay) {
+            lastGapAttemptAt = Date.now();
+            if (await tryReplayObservedJump(instance, replay, token, (p) => throttledReport(p.label ?? "parkour"))) {
+              throttledReport(`follow: ${playerName} · copied jump`);
+              restoreFollowMovement();
+              applyFollowGoal(live);
+              return;
+            }
+          }
+          lastGapAttemptAt = Date.now();
+          if (await tryJumpAcrossToPlayer(instance, live, token, (p) => throttledReport(p.label ?? "parkour"), { force: true })) {
+            throttledReport(`follow: ${playerName} · jump to player`);
+            restoreFollowMovement();
+            applyFollowGoal(live);
             return;
           }
           if (enableScaffoldForStuck(bot)) {
@@ -587,20 +713,21 @@ export async function runFollow(
           } else {
             throttledReport(`follow: ${playerName} · no reachable natural path`);
           }
+          applyFollowGoal(live, true);
         })();
-        try {
-          bot.pathfinder.setGoal(new goals.GoalFollow(live, holdDist), true);
-        } catch {
-          /* */
-        }
       };
       bot.on("path_update", onPath);
 
       try {
-        while (!token.cancelled && instance.status === "online") {
+        const followEpoch = instance.controlEpoch;
+        while (!isTokenAborted(token) && instance.controlEpoch === followEpoch && instance.status === "online") {
           if ((bot.health ?? 0) <= 0 || !bot.entity) {
             clearGoal(bot);
             throw new Error("Bot died — follow stopped.");
+          }
+          if (isParkourLocked(bot)) {
+            await sleep(40);
+            continue;
           }
           const cur = bot.players[playerName]?.entity ?? null;
           if (!cur || cur !== tracked) {
@@ -608,7 +735,20 @@ export async function runFollow(
             break;
           }
 
-          // insanî bakış: SADECE dururken
+          pruneObservedJumps(observedJumps);
+          const playerGround = cur.onGround !== false;
+          if (prevPlayerGround && !playerGround) {
+            jumpTakeoff = { x: cur.position.x, y: cur.position.y, z: cur.position.z };
+          } else if (!prevPlayerGround && playerGround && jumpTakeoff) {
+            pushObservedJump(observedJumps, jumpTakeoff, {
+              x: cur.position.x,
+              y: cur.position.y,
+              z: cur.position.z
+            });
+            jumpTakeoff = null;
+          }
+          prevPlayerGround = playerGround;
+
           if (!pfIsMoving(bot) && bot.entity.onGround) {
             try {
               await stepLookAtEntity(bot, cur, turnSpeed(instance));
@@ -620,7 +760,45 @@ export async function runFollow(
           const d = bot.entity.position.distanceTo(cur.position);
           const pos = bot.entity.position;
 
-          // ilerlediyse scaffold penceresi bitsin → normal takip
+          if (bot.entity.onGround && Date.now() - lastGapAttemptAt > 700) {
+            const replay = findReplayJump(bot, observedJumps);
+            if (replay) {
+              lastGapAttemptAt = Date.now();
+              throttledReport(`follow: ${playerName} · copying jump`);
+              clearGoal(bot);
+              const jumped = await tryReplayObservedJump(instance, replay, token, (p) =>
+                throttledReport(p.label ?? "parkour")
+              );
+              restoreFollowMovement();
+              if (jumped) consecutiveStucks = 0;
+              applyFollowGoal(cur);
+              await sleep(FOLLOW_TICK_MS);
+              continue;
+            }
+          }
+
+          // Already waiting on the far side: jump to their platform, do not path under them.
+          if (
+            bot.entity.onGround &&
+            !pfIsMoving(bot) &&
+            d > holdDist + 0.8 &&
+            Date.now() - lastGapAttemptAt > 900 &&
+            moveCfg(instance).allowParkour !== false
+          ) {
+            lastGapAttemptAt = Date.now();
+            const jumped = await tryJumpAcrossToPlayer(instance, cur, token, (p) =>
+              throttledReport(p.label ?? "parkour")
+            );
+            if (jumped) {
+              throttledReport(`follow: ${playerName} · jump to player`);
+              restoreFollowMovement();
+              consecutiveStucks = 0;
+              applyFollowGoal(cur);
+              await sleep(FOLLOW_TICK_MS);
+              continue;
+            }
+          }
+
           if (pos.distanceTo(lastPos) > 0.35) {
             lastPos = pos.clone();
             lastMoveAt = Date.now();
@@ -628,11 +806,7 @@ export async function runFollow(
             if (scaffoldUntil > 0 && Date.now() > scaffoldUntil) {
               scaffoldUntil = 0;
               restoreFollowMovement();
-              try {
-                bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
-              } catch {
-                /* */
-              }
+              applyFollowGoal(cur);
             }
           } else if (d > holdDist + 0.6 && Date.now() - lastMoveAt > FOLLOW_STUCK_MS) {
             lastMoveAt = Date.now();
@@ -651,37 +825,35 @@ export async function runFollow(
               } catch {
                 /* */
               }
-            } else if (consecutiveStucks >= 2 && !onLadderNow(bot)) {
-              const openedDoor = await tryOpenNearbyDoor(instance);
+            } else if (consecutiveStucks >= 2 && !onLadderNow(bot) && !isParkourLocked(bot)) {
+              const openedDoor = await tryPassNearbyDoor(instance);
               if (openedDoor) {
-                throttledReport(`follow: ${playerName} · door opened`);
+                throttledReport(`follow: ${playerName} · door passed`);
                 restoreFollowMovement();
                 consecutiveStucks = 0;
-              } else if (enableScaffoldForStuck(bot)) {
-                throttledReport(`follow: ${playerName} · stuck — bridging…`);
-                scaffoldUntil = Date.now() + 25_000;
               } else {
-                throttledReport(`follow: ${playerName} · inaccessible point skipped`);
-              }
-              try {
-                bot.pathfinder.setGoal(null);
-              } catch {
-                /* */
+                const replay = findReplayJump(bot, observedJumps);
+                lastGapAttemptAt = Date.now();
+                if (replay && (await tryReplayObservedJump(instance, replay, token, (p) => throttledReport(p.label ?? "parkour")))) {
+                  throttledReport(`follow: ${playerName} · copied jump`);
+                  restoreFollowMovement();
+                  consecutiveStucks = 0;
+                } else if (await tryJumpAcrossToPlayer(instance, cur, token, (p) => throttledReport(p.label ?? "parkour"), { force: true })) {
+                  throttledReport(`follow: ${playerName} · jump to player`);
+                  restoreFollowMovement();
+                  consecutiveStucks = 0;
+                } else if (enableScaffoldForStuck(bot)) {
+                  throttledReport(`follow: ${playerName} · stuck — bridging…`);
+                  scaffoldUntil = Date.now() + 25_000;
+                } else {
+                  throttledReport(`follow: ${playerName} · inaccessible point skipped`);
+                }
               }
             } else {
-              throttledReport(`follow: ${playerName} · stuck — refreshing path`);
-              try {
-                bot.pathfinder.setGoal(null);
-              } catch {
-                /* */
-              }
+              throttledReport(`follow: ${playerName} · stuck — holding route`);
             }
 
-            try {
-              bot.pathfinder.setGoal(new goals.GoalFollow(cur, holdDist), true);
-            } catch {
-              /* */
-            }
+            applyFollowGoal(cur, consecutiveStucks >= 2);
           }
 
           throttledReport(`follow: ${playerName} · ${Math.round(d)}m (target ${holdDist}m)`);
@@ -700,10 +872,62 @@ export async function runFollow(
   }
 }
 
+export function stopCreativeFlight(bot: Bot) {
+  const phys = (bot as unknown as { physics?: { gravity?: number | null } }).physics;
+  const g = phys?.gravity;
+  // mineflayer stopFlying() assigns saved gravity; if fly never started that
+  // value is null and the bot floats through gaps (looks like a cheat).
+  if (g === 0 || g == null || (typeof g === "number" && g < 0.01)) {
+    try {
+      (bot as unknown as { creative?: { stopFlying?(): void } }).creative?.stopFlying?.();
+    } catch {
+      /* */
+    }
+    if (phys && (phys.gravity == null || phys.gravity === 0 || (typeof phys.gravity === "number" && phys.gravity < 0.01))) {
+      phys.gravity = 0.08;
+    }
+  }
+  try {
+    const v = bot.entity?.velocity;
+    if (v) {
+      v.x = 0;
+      v.y = 0;
+      v.z = 0;
+    }
+  } catch {
+    /* */
+  }
+}
+
+/** Leave farm/creative-fly settings so follow/goto can walk again. */
+export function restoreDefaultMovement(instance: BotInstance) {
+  const bot = instance.bot;
+  if (!bot) return;
+  stopCreativeFlight(bot);
+  try {
+    const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+    pf.stop?.();
+    pf.setGoal?.(null);
+  } catch {
+    /* */
+  }
+  try {
+    bot.clearControlStates();
+  } catch {
+    /* */
+  }
+  try {
+    ensureMovement(instance, { mode: "goto" });
+  } catch {
+    /* */
+  }
+}
+
 export function stopMovement(instance: BotInstance) {
   instance.tasks.cancelAll("stopped by user");
   const bot = instance.bot;
   if (!bot) return;
+  stopCreativeFlight(bot);
   try {
     const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
     pf.stop?.();
@@ -722,7 +946,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Deneysel el-yapımı parkur SADECE açık "parkour-goto" aksiyonuyla erişilir —
-// normal goto/follow akışına otomatik karışmaz (güvenilirlik for ayrıştırıldı).
+function followGoal(entity: Entity, range: number) {
+  return new GoalFollowAtHeight(entity, range);
+}
+
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";
 export { stepLookAtEntity, easeLookAt, stepLookAt, entityLookPoint } from "./look";

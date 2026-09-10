@@ -70,7 +70,7 @@ export interface RuleTrigger {
   pattern?: string;
   /**
    * exact | contains | regex | startsWith | command
-   * command: "/gel Steve" → pattern "gel", arg0=Steve (prefix varsayılan /)
+   * command: "!gel Steve" → pattern "gel", arg0=Steve (prefix default "!")
    */
   match?: "exact" | "contains" | "regex" | "startsWith" | "command";
   /** authorized | anyone | isim listesi */
@@ -86,7 +86,7 @@ export interface RuleTrigger {
   /** attacked: mob | player | all */
   source?: "mob" | "player" | "all";
   taskType?: string;
-  /** slash komut öneki (varsayılan "/") — "!gel" for "!" */
+  /** Public-chat command prefix (default "!"). "/" never reaches other players. */
   commandPrefix?: string;
 }
 
@@ -784,7 +784,7 @@ export class RuleEngine {
     const lower = raw.toLowerCase();
 
     if (mode === "command") {
-      const prefix = tr.commandPrefix ?? "/";
+      const prefix = tr.commandPrefix ?? "!";
       if (!raw.startsWith(prefix)) return null;
       const body = raw.slice(prefix.length).trim();
       if (!body) return null;
@@ -1932,7 +1932,7 @@ export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: str
     type: "chat",
     label: "Chat / command",
     fields: ["pattern", "match", "from", "player", "commandPrefix"],
-    hint: "match=command → /come Steve (arg0). startsWith, contains, exact, regex."
+    hint: "match=command → !come Steve (arg0). Public chat cannot use / (server command). startsWith, contains, exact, regex."
   },
   { type: "attacked", label: "Bot was attacked", fields: ["source", "player"], hint: "mob | player | all" },
   { type: "player_nearby", label: "Player nearby", fields: ["radius", "player", "from"] },

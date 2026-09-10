@@ -128,7 +128,7 @@ export function Automations() {
   const [match, setMatch] = useState("command");
   const [from, setFrom] = useState("authorized");
   const [player, setPlayer] = useState("");
-  const [commandPrefix, setCommandPrefix] = useState("/");
+  const [commandPrefix, setCommandPrefix] = useState("!");
   const [threshold, setThreshold] = useState(10);
   const [everyMs, setEveryMs] = useState(60_000);
   const [radius, setRadius] = useState(16);
@@ -249,7 +249,7 @@ export function Automations() {
       trigger.match = match;
       trigger.from = from === "list" && player ? [player] : from;
       if (player && from !== "list") trigger.player = player;
-      if (match === "command") trigger.commandPrefix = commandPrefix || "/";
+      if (match === "command") trigger.commandPrefix = commandPrefix || "!";
     }
     if (triggerType === "attacked") {
       trigger.source = source;
@@ -444,7 +444,7 @@ export function Automations() {
       setFrom(String(fr ?? "authorized"));
       setPlayer(String(tr.player ?? ""));
     }
-    setCommandPrefix(String(tr.commandPrefix ?? "/"));
+    setCommandPrefix(String(tr.commandPrefix ?? "!"));
     setThreshold(Number(tr.threshold ?? 10));
     setEveryMs(Number(tr.everyMs ?? 60_000));
     setRadius(Number(tr.radius ?? 16));
@@ -756,7 +756,7 @@ export function Automations() {
 
   const summaryTrigger = () => {
     if (triggerType === "chat") {
-      if (match === "command") return `${commandPrefix || "/"}${pattern}`;
+      if (match === "command") return `${commandPrefix || "!"}${pattern}`;
       return `"${pattern}" (${match})`;
     }
     if (triggerType === "item_gained")
@@ -1024,14 +1024,22 @@ export function Automations() {
                     </select>
                   </label>
                   {match === "command" && (
-                    <label className="flex flex-col gap-1 text-sm">
+                    <label className="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-1">
                       <span className="text-zinc-400">{t("automations.commandPrefix")}</span>
                       <input
                         value={commandPrefix}
                         onChange={(e) => setCommandPrefix(e.target.value)}
-                        placeholder="/"
+                        placeholder="!"
                         className={fieldCls}
                       />
+                      <span className="text-[10px] leading-relaxed text-zinc-500">
+                        {t("automations.commandPrefixHint")}
+                      </span>
+                      {commandPrefix.trim() === "/" && (
+                        <span className="text-[10px] leading-relaxed text-amber-400/90">
+                          {t("automations.commandSlashWarning")}
+                        </span>
+                      )}
                     </label>
                   )}
                   <label className="flex flex-col gap-1 text-sm">
