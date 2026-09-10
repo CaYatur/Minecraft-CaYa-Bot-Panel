@@ -81,7 +81,7 @@ function pfIsMoving(bot: Bot): boolean {
 
 export interface EnsureMovementOpts {
   allowSprintNow?: boolean;
-  /** true → parkur zorla açık (config'i ezer) */
+  /** true/false overrides config; omit to use config.allowParkour */
   parkour?: boolean;
   /** takip for canDig kapatılır (başkasının parkurunu/haritasını kazmasın) */
   canDig?: boolean;
@@ -112,7 +112,8 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   movements.allowSprinting = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   // Parkur: pathfinder'ın YERLEŞİK parkuru (1-4 blok boşluk + sprint jump) — merdiven
   // tırmanışı zaten doğal yetenek, ayrı bayrak gerekmez.
-  movements.allowParkour = opts?.parkour === true ? true : cfg.allowParkour !== false;
+  // parkour: false must actually disable it (farm tilling tramples on sprint-jumps).
+  movements.allowParkour = opts?.parkour !== undefined ? opts.parkour : cfg.allowParkour !== false;
   movements.allow1by1towers = Boolean(cfg.allowTower);
   // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
   // Take the short drop if it will not kill; walk around only when lethal.

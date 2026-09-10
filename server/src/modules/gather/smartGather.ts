@@ -86,16 +86,55 @@ function totalInventoryCount(bot: Bot): number {
   return bot.inventory.items().reduce((sum, item) => sum + item.count, 0);
 }
 
-function droppedItemName(entity: unknown): string | null {
+function isItemEntity(entity: { name?: string } | null | undefined): boolean {
+  const n = (entity?.name ?? "").toLowerCase();
+  return n === "item" || n === "items" || n === "item_stack";
+}
+
+function droppedItemName(entity: unknown, bot?: Bot): string | null {
   const e = entity as {
     getDroppedItem?: () => { name?: string } | null;
     metadata?: unknown[];
+    metadataKeys?: Record<string, number>;
   };
   try {
-    return e.getDroppedItem?.()?.name ?? null;
+    const n = e.getDroppedItem?.()?.name;
+    if (n) return n;
+  } catch {
+    /* 1.20.5+ fromNotch can throw — fall through to metadata */
+  }
+  const meta = e.metadata;
+  if (!Array.isArray(meta) || !bot) return null;
+  const ix = e.metadataKeys?.item ?? 8;
+  const slot = meta[ix];
+  if (slot && typeof slot === "object" && "name" in slot && typeof (slot as { name?: unknown }).name === "string") {
+    return (slot as { name: string }).name;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Item = require("prismarine-item")(bot.version) as {
+      fromNotch: (n: unknown) => { name?: string } | null;
+    };
+    const parsed = Item.fromNotch(slot);
+    return parsed?.name ?? null;
   } catch {
     return null;
   }
+}
+
+/** diamond from diamond_ore, oak_log from oak_log, unknown name → keep (don't skip). */
+function dropMatchesRequested(dropName: string | null, requested: string | undefined): boolean {
+  if (!requested) return true;
+  if (!dropName) return true;
+  const f = requested.replace(/^minecraft:/, "").toLowerCase();
+  const d = dropName.toLowerCase();
+  if (d === f) return true;
+  if (d.includes(f) || f.includes(d)) return true;
+  for (const [item, blocks] of Object.entries(DROP_SOURCE_BLOCKS)) {
+    if (d === item && blocks.includes(f)) return true;
+    if (f === item && blocks.includes(d)) return true;
+  }
+  return false;
 }
 
 function entityExists(bot: Bot, id: number | undefined): boolean {
@@ -124,10 +163,10 @@ export async function runSmartCollectDrops(
 
   while (!token.cancelled && Date.now() - startedAt < maxDurationMs) {
     const drops = (Object.values(bot.entities) as DropEntityLike[]).filter((entity) => {
-      if (!entity || entity.name !== "item") return false;
+      if (!entity || !isItemEntity(entity)) return false;
       if (bot.entity.position.distanceTo(entity.position) > radius) return false;
-      const name = droppedItemName(entity)?.toLowerCase();
-      if (normalizedFilter && name && !name.includes(normalizedFilter)) return false;
+      const name = droppedItemName(entity, bot);
+      if (!dropMatchesRequested(name, normalizedFilter)) return false;
       if ((failures.get(entity.id) ?? 0) >= 3) return false;
       return true;
     });
@@ -146,7 +185,7 @@ export async function runSmartCollectDrops(
 
     const target = drops[0]!;
     const beforeAll = totalInventoryCount(bot);
-    const targetName = droppedItemName(target);
+    const targetName = droppedItemName(target, bot);
     const beforeNamed = targetName ? countNamed(bot, [targetName]) : beforeAll;
     report({
       done: verified,
@@ -154,15 +193,18 @@ export async function runSmartCollectDrops(
       label: `Ground items: ${targetName ?? "item"}`
     });
 
+    const dist = bot.entity.position.distanceTo(target.position);
+    const gotoTimeout = Math.max(4_000, Math.min(8_000, 2_500 + dist * 400));
     try {
       await runGoto(
         instance,
         target.position.x,
         target.position.y,
         target.position.z,
-        0.65,
+        1.75,
         token,
-        () => {}
+        () => {},
+        { timeoutMs: gotoTimeout, canDig: false, allowPlace: false }
       );
     } catch {
       failures.set(target.id, (failures.get(target.id) ?? 0) + 1);
@@ -170,7 +212,7 @@ export async function runSmartCollectDrops(
       continue;
     }
 
-    const waitUntil = Date.now() + 1_600;
+    const waitUntil = Date.now() + 2_400;
     let picked = false;
     while (!token.cancelled && Date.now() < waitUntil) {
       const afterAll = totalInventoryCount(bot);
@@ -194,9 +236,10 @@ export async function runSmartCollectDrops(
           target.position.x + 0.35,
           target.position.y,
           target.position.z + 0.35,
-          0.55,
+          2,
           token,
-          () => {}
+          () => {},
+          { timeoutMs: 3_500, canDig: false, allowPlace: false }
         );
       } catch {
         // best effort
@@ -217,7 +260,7 @@ export async function collectDropsAfterDig(
 ): Promise<void> {
   await sleep(120);
   try {
-    await runSmartCollectDrops(instance, filter, 7, token, () => {}, 3_200);
+    await runSmartCollectDrops(instance, filter, 8, token, () => {}, 14_000);
   } catch {
     // Kazma işlemini yalnızca pickup best-effort hatası yüzünden failed sayma.
   }

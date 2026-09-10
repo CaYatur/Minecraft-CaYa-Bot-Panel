@@ -43,10 +43,17 @@ function protectList(c: CompanionState): string[] {
   return [];
 }
 
+function nearbyKey(list: NearbyPlayer[]): string {
+  return list
+    .map((p) => `${p.username}:${p.hasEntity ? p.distance?.toFixed(1) ?? "" : "t"}`)
+    .join("|");
+}
+
 export function NearbyPlayers({ botId }: { botId: string }) {
   const { t } = useI18n();
   const bot = useAppStore((s) => s.bots[botId]);
   const toast = useAppStore((s) => s.toast);
+  const socketConnected = useAppStore((s) => s.connected);
   const [players, setPlayers] = useState<NearbyPlayer[]>([]);
   const [radius, setRadius] = useState(48);
   const [followDist, setFollowDist] = useState(3);
@@ -58,9 +65,13 @@ export function NearbyPlayers({ botId }: { botId: string }) {
     setFollowDist(companion.followDistance || 3);
   }, [companion.followDistance]);
 
+  const applyPlayers = (next: NearbyPlayer[]) => {
+    setPlayers((prev) => (nearbyKey(prev) === nearbyKey(next) ? prev : next));
+  };
+
   useEffect(() => {
     const onNearby = (p: { botId: string; players: NearbyPlayer[] }) => {
-      if (p.botId === botId) setPlayers(p.players ?? []);
+      if (p.botId === botId) applyPlayers(p.players ?? []);
     };
     socket.on(EV.BOT_NEARBY, onNearby);
     return () => {
@@ -68,6 +79,8 @@ export function NearbyPlayers({ botId }: { botId: string }) {
     };
   }, [botId]);
 
+  // Socket already pushes nearby at ~1 Hz. HTTP is first paint + reconnect only —
+  // a 2s poll on top of the socket is what flickered the card (issue #13).
   useEffect(() => {
     if (!bot || bot.status !== "online") {
       setPlayers([]);
@@ -78,17 +91,22 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       api
         .get<{ players: NearbyPlayer[] }>(`/api/bots/${botId}/nearby?radius=${radius}`)
         .then((r) => {
-          if (!cancelled) setPlayers(r.players ?? []);
+          if (!cancelled) applyPlayers(r.players ?? []);
         })
         .catch(() => {});
     };
     pull();
+    if (socketConnected) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const tmr = setInterval(pull, 2000);
     return () => {
       cancelled = true;
       clearInterval(tmr);
     };
-  }, [botId, bot?.status, radius]);
+  }, [botId, bot?.status, radius, socketConnected]);
 
   const act = async (action: Record<string, unknown>, msg?: string) => {
     try {
@@ -174,8 +192,8 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       : null;
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+    <div className="flex h-44 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+      <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2">
         <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">
           {t("nearby.title")}
         </span>
@@ -211,8 +229,9 @@ export function NearbyPlayers({ botId }: { botId: string }) {
         </label>
       </div>
 
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
       {wards.length > 0 && (
-        <p className="mb-2 text-[10px] leading-relaxed text-zinc-500">
+        <p className="text-[10px] leading-relaxed text-zinc-500">
           {t("nearby.protectLine")} <span className="text-indigo-300">{wards.join(", ")}</span>
           {companion.followPlayer ? (
             <>
@@ -231,8 +250,6 @@ export function NearbyPlayers({ botId }: { botId: string }) {
       {online && inRange.length === 0 && tabOnly.length === 0 && (
         <p className="text-xs text-zinc-600 italic">{t("nearby.emptyInRange")}</p>
       )}
-
-      <div className="max-h-64 space-y-1.5 overflow-y-auto">
         {inRange.map((p) => {
           const fOn = isFollow(p.username);
           const aOn = isAttack(p.username);

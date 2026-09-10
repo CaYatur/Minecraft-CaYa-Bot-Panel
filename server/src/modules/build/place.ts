@@ -4,7 +4,7 @@ import type { Vec3 } from "vec3";
 import { goals } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import { isTokenAborted, type TaskToken } from "../../core/TaskQueue";
-import { ensureMovement } from "../movement";
+import { ensureMovement, type EnsureMovementOpts } from "../movement";
 import {
   dist3,
   facesLikeStairs,
@@ -215,9 +215,14 @@ export async function pathNear(
   z: number,
   range: number,
   token: TaskToken,
-  opts?: { clearGoal?: boolean; timeoutMs?: number; onTick?: () => void | Promise<void> }
+  opts?: {
+    clearGoal?: boolean;
+    timeoutMs?: number;
+    onTick?: () => void | Promise<void>;
+    movement?: EnsureMovementOpts;
+  }
 ) {
-  const bot = ensureMovement(instance);
+  const bot = ensureMovement(instance, opts?.movement);
   if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   if (dist3(bot, x, y, z) <= range + 0.5) return;
 

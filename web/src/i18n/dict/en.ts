@@ -216,12 +216,16 @@ export const en: MessageTree = {
     triggerType: "Type",
     pattern: "Pattern / command name",
     match: "Match",
-    matchCommand: "command (/slash)",
+    matchCommand: "command (prefix)",
     matchStartsWith: "starts with",
     matchContains: "contains",
     matchExact: "exact",
     matchRegex: "regex",
     commandPrefix: "Command prefix",
+    commandPrefixHint:
+      "In public chat use !come or .come. /come is a server command — other players and the bot never see it.",
+    commandSlashWarning:
+      "\"/\" does not work in public chat (the server swallows it). Use ! or . as the prefix; whisper with /msg bot !come.",
     from: "From",
     fromAuthorized: "Authorized (I3)",
     fromAnyone: "Anyone",
@@ -327,7 +331,7 @@ export const en: MessageTree = {
       task_failed: "Task failed"
     },
     triggerHints: {
-      chat: "match=command → /come Steve (arg0). startsWith, contains, exact, regex.",
+      chat: "match=command → !come Steve (arg0). Public / does not reach the bot. startsWith, contains, exact, regex.",
       attacked: "mob | player | all",
       player_far: "Distance > radius or player not visible. empty player = follow target (@follow)",
       follow_out_of_range:

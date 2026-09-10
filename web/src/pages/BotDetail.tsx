@@ -275,7 +275,7 @@ export function BotDetail() {
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
         {tab === "chat" && <ChatPanel botId={id} />}
         {tab === "logs" && <LogPanel botId={id} />}
         {tab === "inventory" && <InventoryPanel botId={id} />}

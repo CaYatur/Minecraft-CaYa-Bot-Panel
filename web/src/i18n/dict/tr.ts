@@ -216,12 +216,16 @@ export const tr: MessageTree = {
     triggerType: "Tür",
     pattern: "Desen / komut adı",
     match: "Eşleşme",
-    matchCommand: "komut (/slash)",
+    matchCommand: "komut (öneki)",
     matchStartsWith: "ile başlar",
     matchContains: "içerir",
     matchExact: "tam eşit",
     matchRegex: "regex",
     commandPrefix: "Komut öneki",
+    commandPrefixHint:
+      "Herkese açık sohbette !gel veya .gel yazın. /gel sunucu komutudur — diğer oyuncular ve bot görmez.",
+    commandSlashWarning:
+      "\"/\" herkese açık sohbette çalışmaz (sunucu yakalar). Önek olarak ! veya . kullanın; fısıltı /msg bot !gel olur.",
     from: "Kimden",
     fromAuthorized: "Yetkililer (İ3)",
     fromAnyone: "Herkes",
@@ -327,7 +331,7 @@ export const tr: MessageTree = {
       task_failed: "Görev başarısız"
     },
     triggerHints: {
-      chat: "match=command → /gel Steve (arg0). startsWith, contains, exact, regex.",
+      chat: "match=command → !gel Steve (arg0). Herkese açık sohbette / çalışmaz. startsWith, contains, exact, regex.",
       attacked: "mob | player | all",
       player_far: "Mesafe > radius veya oyuncu görünmüyor. player boş = takip edilen (@follow)",
       follow_out_of_range:

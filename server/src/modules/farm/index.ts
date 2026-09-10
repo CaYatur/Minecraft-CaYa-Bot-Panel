@@ -7,6 +7,7 @@ import { creativeEnsureItem, isCreativeMode } from "../build/creative";
 import { boundedOp, digCancelable, pathNear } from "../build/place";
 import { runSmartCollectDrops } from "../gather/smartGather";
 import { depositToChest } from "../inventory/chestOps";
+import { ensureMovement, type EnsureMovementOpts } from "../movement";
 import {
   CROPS,
   cropForSeed,
@@ -68,6 +69,56 @@ export interface FarmCycleOpts extends FarmArea {
 
 const REACH = 4.2;
 const AREA_MAX_R = 16;
+
+/** No sprint/parkour on farmland — jumping tramples crops (issue #17). */
+const FARM_MOVE: EnsureMovementOpts = {
+  allowSprintNow: false,
+  parkour: false,
+  canDig: false,
+  allowPlace: false,
+  canOpenDoors: true
+};
+
+function applyFarmMovement(instance: BotInstance) {
+  const bot = ensureMovement(instance, FARM_MOVE);
+  try {
+    bot.setControlState("sprint", false);
+  } catch {
+    /* */
+  }
+  return bot;
+}
+
+function farmPathOpts(extra?: { clearGoal?: boolean; timeoutMs?: number }) {
+  return {
+    clearGoal: extra?.clearGoal ?? true,
+    timeoutMs: extra?.timeoutMs ?? 8_000,
+    movement: FARM_MOVE
+  };
+}
+
+function isWaterBlockName(name: string): boolean {
+  return name === "water" || name === "flowing_water";
+}
+
+function isRaining(bot: Bot): boolean {
+  const b = bot as Bot & { isRaining?: boolean; rainState?: number };
+  return Boolean(b.isRaining) || (b.rainState ?? 0) > 0;
+}
+
+/** Vanilla: water within 4 blocks horizontally (square), same Y or one above. */
+function isFarmlandHydrated(bot: Bot, pos: Vec3): boolean {
+  if (isRaining(bot)) return true;
+  for (let dx = -4; dx <= 4; dx++) {
+    for (let dz = -4; dz <= 4; dz++) {
+      for (const dy of [0, 1]) {
+        const b = bot.blockAt(pos.offset(dx, dy, dz));
+        if (b && isWaterBlockName(b.name)) return true;
+      }
+    }
+  }
+  return false;
+}
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
@@ -250,31 +301,139 @@ export class FarmService {
     return above && CROPS[above.name] ? "planted" : "failed";
   }
 
+  /**
+   * Place a water source in the plot (dig a 1-block hole at/near center) so
+   * farmland stays hydrated. No-op if no water_bucket or a crop occupies the cell.
+   */
+  private async tryPlaceWaterSource(
+    c: { x: number; y: number; z: number; r: number },
+    token: TaskToken
+  ): Promise<boolean> {
+    const bot = requireBot(this.instance);
+    if (this.instance.config.inventory.bannedItems.includes("water_bucket")) return false;
+    const bucket = bot.inventory.items().find((i) => i.name === "water_bucket");
+    if (!bucket) return false;
+
+    const isGood = (b: Block | null): b is Block => {
+      if (!b) return false;
+      if (isWaterBlockName(b.name)) return false;
+      if (!TILLABLE.has(b.name) && b.name !== "farmland") return false;
+      const above = bot.blockAt(b.position.offset(0, 1, 0));
+      if (above && CROPS[above.name]) return false;
+      return true;
+    };
+
+    let dest: Block | null = bot.blockAt(new Vec3(c.x, c.y, c.z));
+    if (!isGood(dest)) {
+      dest = scanArea(bot, c, (b, above) => isGood(b) && !(above && CROPS[above.name]), 8)[0] ?? null;
+    }
+    if (!dest) return false;
+
+    applyFarmMovement(this.instance);
+    const d = bot.entity.position.distanceTo(dest.position.offset(0.5, 1, 0.5));
+    if (d > REACH) {
+      await pathNear(
+        this.instance,
+        dest.position.x + 0.5,
+        dest.position.y + 1,
+        dest.position.z + 0.5,
+        2.5,
+        token,
+        farmPathOpts()
+      );
+    }
+
+    const live = bot.blockAt(dest.position);
+    if (!live) return false;
+    if (isWaterBlockName(live.name)) return true;
+
+    const above = bot.blockAt(live.position.offset(0, 1, 0));
+    if (
+      above &&
+      (above.name === "short_grass" ||
+        above.name === "grass" ||
+        above.name === "tall_grass" ||
+        above.name === "snow")
+    ) {
+      try {
+        await digCancelable(bot, above, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+        return false;
+      }
+    }
+
+    if (TILLABLE.has(live.name) || live.name === "farmland") {
+      try {
+        await digCancelable(bot, live, token);
+      } catch (e) {
+        if (token.cancelled) throw e;
+        return false;
+      }
+    }
+
+    const hole = bot.blockAt(dest.position);
+    const below = bot.blockAt(dest.position.offset(0, -1, 0));
+    if (!below || !hole || (hole.name !== "air" && hole.name !== "cave_air")) return false;
+
+    try {
+      await boundedOp(bot.equip(bucket, "hand"), token, 5_000, "equip water_bucket");
+      await boundedOp(bot.placeBlock(below, new Vec3(0, 1, 0)), token, 4_000, "place water source");
+    } catch (e) {
+      if (token.cancelled) throw e;
+      return false;
+    }
+    await sleepCancellable(150, token);
+    const placed = bot.blockAt(dest.position);
+    return Boolean(placed && isWaterBlockName(placed.name));
+  }
+
   // ---------------------------------------------------------------- runs
 
   /** çapalama koşusu: alandaki tüm uygun toprakları farmland yap */
   async runTill(opts: TillOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
+    const bot = applyFarmMovement(this.instance);
     const c = areaCenter(this.instance, opts);
     const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
     const cells = scanArea(bot, c, (b, above) => TILLABLE.has(b.name) && (isAirLike(above) || above == null), max);
     if (!cells.length) {
       return `No tillable soil (dirt/grass/dirt_path) within r=${c.r} of ${c.x},${c.y},${c.z}.`;
     }
+
+    let hydroNote = "";
+    const anyHydrated = cells.some((cell) => isFarmlandHydrated(bot, cell.position));
+    if (!anyHydrated && !isRaining(bot)) {
+      const placed = await this.tryPlaceWaterSource(c, token).catch((e) => {
+        if (token.cancelled) throw e;
+        return false;
+      });
+      hydroNote = placed ? " Placed a water source in the plot." : "";
+    }
+
     const hoeName = await this.ensureHoe(token, report);
     let tilled = 0;
     let failed = 0;
+    let skippedDry = 0;
     for (let i = 0; i < cells.length; i++) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
       const cell = cells[i]!;
+      if (!isFarmlandHydrated(bot, cell.position)) {
+        skippedDry++;
+        continue;
+      }
       report({ done: i, total: cells.length, label: `till ${cell.position.x},${cell.position.y},${cell.position.z}` });
       const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
       if (d > REACH) {
         try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y + 1, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
+          await pathNear(
+            this.instance,
+            cell.position.x + 0.5,
+            cell.position.y + 1,
+            cell.position.z + 0.5,
+            2.5,
+            token,
+            farmPathOpts()
+          );
         } catch (e) {
           if (token.cancelled) throw e;
           failed++;
@@ -288,26 +447,22 @@ export class FarmService {
       if (res === "tilled") tilled++;
       else failed++;
     }
-    const hydro = this.hydrationWarning(bot, c);
-    const msg = `Tilled ${tilled}/${cells.length} block(s) with ${hoeName}${failed ? ` · ${failed} failed/skipped` : ""}.${hydro}`;
+    if (tilled === 0 && skippedDry === cells.length) {
+      const msg =
+        "No hydrated soil to till — place water within 4 blocks (or give the bot a water_bucket). Dry farmland reverts to dirt.";
+      this.log().warn("Till skipped", msg);
+      return msg;
+    }
+    const dryBit = skippedDry ? ` · ${skippedDry} skipped (no water within 4)` : "";
+    const msg = `Tilled ${tilled}/${cells.length} block(s) with ${hoeName}${failed ? ` · ${failed} failed/skipped` : ""}${dryBit}.${hydroNote}`;
     this.log().info("Till finished", msg);
     report({ done: cells.length, total: cells.length, label: `tilled ${tilled}` });
     return msg;
   }
 
-  /** alandaki farmland'lerin 4 blok içinde su var mı — yoksa uyarı metni */
-  private hydrationWarning(bot: Bot, c: { x: number; y: number; z: number; r: number }): string {
-    const water = bot.findBlock({
-      matching: (b) => b.name === "water",
-      maxDistance: c.r + 6,
-      point: new Vec3(c.x, c.y, c.z)
-    });
-    return water ? "" : " WARNING: no water nearby — dry farmland reverts to dirt (place water within 4 blocks).";
-  }
-
   /** ekim koşusu */
   async runPlant(opts: PlantOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
+    const bot = applyFarmMovement(this.instance);
     const c = areaCenter(this.instance, opts);
     const seed = seedForCrop(opts.crop ?? "wheat_seeds");
     const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
@@ -328,10 +483,15 @@ export class FarmService {
       const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
       if (d > REACH) {
         try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y + 1, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
+          await pathNear(
+            this.instance,
+            cell.position.x + 0.5,
+            cell.position.y + 1,
+            cell.position.z + 0.5,
+            2.5,
+            token,
+            farmPathOpts()
+          );
         } catch (e) {
           if (token.cancelled) throw e;
           failed++;
@@ -350,7 +510,7 @@ export class FarmService {
 
   /** hasat koşusu (olgun ekinler; opsiyonel yeniden ekim) */
   async runHarvest(opts: HarvestOpts, token: TaskToken, report: ProgressFn): Promise<string> {
-    const bot = requireBot(this.instance);
+    const bot = applyFarmMovement(this.instance);
     const c = areaCenter(this.instance, opts);
     const replant = opts.replant !== false;
     const max = Math.max(1, Math.min(256, opts.maxBlocks ?? 128));
@@ -368,10 +528,15 @@ export class FarmService {
       const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 0.5, 0.5));
       if (d > REACH) {
         try {
-          await pathNear(this.instance, cell.position.x + 0.5, cell.position.y, cell.position.z + 0.5, 2.5, token, {
-            clearGoal: true,
-            timeoutMs: 8_000
-          });
+          await pathNear(
+            this.instance,
+            cell.position.x + 0.5,
+            cell.position.y,
+            cell.position.z + 0.5,
+            2.5,
+            token,
+            farmPathOpts()
+          );
         } catch (e) {
           if (token.cancelled) throw e;
           failed++;
@@ -390,8 +555,13 @@ export class FarmService {
       }
       // yeniden ekim (drop'lar yerdeyken bile tohum envanterde olabilir)
       if (replant) {
-        const under = bot.blockAt(cell.position.offset(0, -1, 0));
+        let under = bot.blockAt(cell.position.offset(0, -1, 0));
         const seed = cropForSeed(cropName);
+        if (under && TILLABLE.has(under.name) && isFarmlandHydrated(bot, under.position)) {
+          await this.ensureHoe(token, report);
+          await this.tillCell(under, token);
+          under = bot.blockAt(under.position);
+        }
         if (under && under.name === "farmland" && seed) {
           await this.ensureSeeds(seed, token);
           const res = await this.plantCell(under, seed, token).catch((e) => {
@@ -408,6 +578,39 @@ export class FarmService {
         } catch (e) {
           if (token.cancelled) throw e;
         }
+      }
+    }
+    // Same-pass repair: re-hoe dirt we trampled while walking the plot.
+    if (replant) {
+      const trampled = scanArea(
+        bot,
+        c,
+        (b, above) => TILLABLE.has(b.name) && (isAirLike(above) || above == null),
+        32
+      );
+      for (const cell of trampled) {
+        if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+        if (!isFarmlandHydrated(bot, cell.position)) continue;
+        applyFarmMovement(this.instance);
+        const d = bot.entity.position.distanceTo(cell.position.offset(0.5, 1, 0.5));
+        if (d > REACH) {
+          try {
+            await pathNear(
+              this.instance,
+              cell.position.x + 0.5,
+              cell.position.y + 1,
+              cell.position.z + 0.5,
+              2.5,
+              token,
+              farmPathOpts()
+            );
+          } catch (e) {
+            if (token.cancelled) throw e;
+            continue;
+          }
+        }
+        await this.ensureHoe(token, report);
+        await this.tillCell(cell, token);
       }
     }
     // final süpürme
@@ -438,6 +641,7 @@ export class FarmService {
     let cycle = 0;
     for (;;) {
       if (token.cancelled) throw new Error(token.reason ?? "cancelled");
+      applyFarmMovement(this.instance);
       cycle++;
       const cycLabel = maxCycles ? `${cycle}/${maxCycles}` : `${cycle}`;
       report({ done: cycle - 1, total: maxCycles || cycle, label: `farm cycle ${cycLabel}` });
@@ -505,7 +709,7 @@ export class FarmService {
             report
           );
           // sandık başından tarlaya dön
-          await pathNear(this.instance, c.x + 0.5, c.y, c.z + 0.5, 3, token, { clearGoal: true, timeoutMs: 20_000 }).catch((e) => {
+          await pathNear(this.instance, c.x + 0.5, c.y, c.z + 0.5, 3, token, farmPathOpts({ timeoutMs: 20_000 })).catch((e) => {
             if (token.cancelled) throw e;
           });
         } catch (e) {
