@@ -243,6 +243,28 @@ export class BotManager extends EventEmitter {
     };
   }
 
+  /** Unregister a remembered chest (does not break the in-world block). */
+  forgetChest(chestId: string, botId?: string) {
+    const row = this.worldMemory.removeChest(chestId);
+    if (!row) throw new PanelError("Chest not found in world memory.", 404);
+    if (botId) {
+      const inst = this.mustGet(botId);
+      if (inst.config.serverId !== row.serverId) {
+        throw new PanelError("This chest belongs to a different server profile.", 400);
+      }
+    }
+    for (const bot of this.bots.values()) {
+      if (bot.config.serverId !== row.serverId) continue;
+      try {
+        bot.build.stock.remove(row.x, row.y, row.z, row.dimension);
+      } catch {
+        /* stock ledger is optional */
+      }
+    }
+    this.emit("changed");
+    return row;
+  }
+
   // ---- waypoints (değişiklikler "changed" ile panellere yayınlanır) -------------
 
   createWaypoint(serverId: string, input: { name: string; x: number; y: number; z: number; dimension?: string; note?: string }): Waypoint {

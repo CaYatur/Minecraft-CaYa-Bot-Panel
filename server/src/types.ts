@@ -131,6 +131,8 @@ export interface CombatRuntime {
 
 export interface MovementConfig {
   canDig: boolean;
+  /** Pathfinder may place scaffold/towers. Independent of combat. Default true (goto). */
+  allowPlace?: boolean;
   allowSprint: boolean;
   allowParkour: boolean;
   /** sacrificial blocks the bot may place to cross obstacles */
@@ -505,6 +507,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     chat: { minMessageIntervalMs: 1500 },
     movement: {
       canDig: true,
+      allowPlace: true,
       allowSprint: true,
       allowParkour: true,
       scaffoldBlocks: ["dirt", "cobblestone", "netherrack"],

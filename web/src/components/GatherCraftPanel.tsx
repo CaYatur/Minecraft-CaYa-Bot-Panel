@@ -3,6 +3,7 @@ import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
 import { ItemPicker } from "./ItemPicker";
+import { RememberedChests } from "./RememberedChests";
 
 export function GatherCraftPanel({ botId }: { botId: string }) {
   const { t } = useI18n();
@@ -261,6 +262,7 @@ export function GatherCraftPanel({ botId }: { botId: string }) {
           </button>
         </div>
         <p className="mt-2 text-[11px] text-zinc-500">{t("gatherCraft.keepItemsHint")}</p>
+        <RememberedChests botId={botId} />
       </div>
 
       {/* Faz 19 tarım (issue #5): çapala → ek → hasat → sandığa depola döngüsü */}

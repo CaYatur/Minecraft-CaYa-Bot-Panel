@@ -6,7 +6,7 @@ import {
   type AppLocale,
   type LocalePreference
 } from "../i18n";
-import type { BotSnapshot, ChatEntry, LogEntry, McpStatusPayload, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
+import type { BotSnapshot, ChatEntry, ChestMemory, LogEntry, McpStatusPayload, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
 
 const CHAT_CAP = 500;
 const LOG_CAP = 1000;
@@ -28,6 +28,7 @@ interface AppState {
   supportedVersions: string[];
   bots: Record<string, BotSnapshot>;
   waypoints: Record<string, Waypoint[]>;
+  worldMemory: { chests: ChestMemory[]; ores: unknown[] };
   chat: Record<string, ChatEntry[]>;
   chatQueue: Record<string, number>;
   logs: LogEntry[];
@@ -62,6 +63,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   supportedVersions: [],
   bots: {},
   waypoints: {},
+  worldMemory: { chests: [], ores: [] },
   chat: {},
   chatQueue: {},
   logs: [],
@@ -86,6 +88,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         bots,
         chat,
         waypoints: s.waypoints ?? {},
+        worldMemory: {
+          chests: s.worldMemory?.chests ?? [],
+          ores: s.worldMemory?.ores ?? []
+        },
         snapshotLoaded: true
       };
     }),

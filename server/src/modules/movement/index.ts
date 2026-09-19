@@ -17,6 +17,8 @@ import {
   findReplayJump,
   GoalFollowAtHeight,
   isParkourLocked,
+  isTurningLadder,
+  patchMovementsForTurningLadders,
   pruneObservedJumps,
   pushObservedJump,
   tryJumpAcrossToPlayer,
@@ -109,14 +111,18 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   const movements = new Movements(bot);
   const registry = bot.registry;
 
+  // Survival place/break toggles are a hard kill-switch (combat flags stay separate).
+  const survivalDig = cfg.canDig !== false;
+  const survivalPlace = cfg.allowPlace !== false;
   const digDefault = opts?.mode === "follow" ? false : Boolean(cfg.canDig);
-  movements.canDig = opts?.canDig !== undefined ? opts.canDig : digDefault;
+  movements.canDig =
+    !survivalDig && !opts?.breakOnly ? false : opts?.canDig !== undefined ? opts.canDig : digDefault;
   movements.allowSprinting = opts?.allowSprintNow !== undefined ? opts.allowSprintNow : cfg.allowSprint !== false;
   // Parkur: pathfinder'ın YERLEŞİK parkuru (1-4 blok boşluk + sprint jump) — merdiven
   // tırmanışı zaten doğal yetenek, ayrı bayrak gerekmez.
   // parkour: false must actually disable it (farm tilling tramples on sprint-jumps).
   movements.allowParkour = opts?.parkour !== undefined ? opts.parkour : cfg.allowParkour !== false;
-  movements.allow1by1towers = Boolean(cfg.allowTower);
+  movements.allow1by1towers = survivalPlace && Boolean(cfg.allowTower);
   // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
   // Take the short drop if it will not kill; walk around only when lethal.
   movements.maxDropDown = smartMaxDropDown(bot, cfg);
@@ -173,9 +179,14 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
 
   // DİKKAT: Movements yapıcısı scafoldingBlocks'u KENDİLİĞİNDEN doldurur (dirt/cobble).
   // Placeme istenmiyorsa listeyi BOŞALTMAK şart — atlamak yetmez.
-  const placeAllowed = opts?.allowPlace !== undefined ? opts.allowPlace : opts?.mode !== "follow";
+  const placeAllowed = !survivalPlace
+    ? false
+    : opts?.allowPlace !== undefined
+      ? opts.allowPlace
+      : opts?.mode !== "follow";
   if (!placeAllowed) {
     movements.scafoldingBlocks = [];
+    movements.allow1by1towers = false;
   } else {
     const ids = (cfg.scaffoldBlocks ?? [])
       .map((name) => registry?.itemsByName?.[name]?.id)
@@ -183,6 +194,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
     if (ids.length > 0) movements.scafoldingBlocks = ids;
   }
 
+  patchMovementsForTurningLadders(movements);
   bot.pathfinder.setMovements(movements);
   try {
     const pf = bot.pathfinder as unknown as { thinkTimeout?: number };
@@ -812,7 +824,11 @@ export async function runFollow(
             lastMoveAt = Date.now();
             consecutiveStucks++;
 
-            if (
+            if (consecutiveStucks >= 2 && onLadderNow(bot) && isTurningLadder(bot)) {
+              throttledReport(`follow: ${playerName} · turning ladder`);
+              consecutiveStucks = 0;
+              applyFollowGoal(cur, true);
+            } else if (
               consecutiveStucks >= 2 &&
               Date.now() - lastHopAt > LADDER_HOP_COOLDOWN_MS &&
               onLadderNow(bot)

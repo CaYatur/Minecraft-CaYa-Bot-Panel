@@ -896,6 +896,10 @@ export const tr: MessageTree = {
     scanRadius: "Tarama yarıçapı",
     mlgIndependentNote: "MLG su geri alma bundan ayrıdır",
     mlgIndependentDesc: "— bu kapalı olsa bile düşüşte dökülen MLG suyu (Yaşam → MLG malzeme geri al) alınır. Bu seçenek sadece boş gezerken kaynak doldurmak içindir.",
+    pathBreakBlocks: "Yolda blok kır",
+    pathPlaceBlocks: "Yolda blok koy (iskele / kule)",
+    pathBreakPlaceHint:
+      "Dövüş ayarlarından ayrıdır. Kapalıyken tavan/engel kırılmaz ve iskele konmaz; mümkünse açık yol seçilir. Açıkken bile kırmak/koymak yürümeye göre pahalıdır.",
     parkourTitle: "Gelişmiş parkur",
     pathfinderParkour: "Pathfinder parkour (2 blok boşluk + sprint)",
     ladderParkour: "Merdiven / vine parkuru",
@@ -1088,6 +1092,12 @@ export const tr: MessageTree = {
     fetchPlayerPrompt: "Kime (oyuncu)?",
     keepItemsHint:
       "keepItems listesindeki eşyalar depoya bırakılmaz. Sandık fiziği Paper sunucuda doğrulanır.",
+    rememberedChests: "Kayıtlı sandıklar",
+    noRememberedChests: "Kayıtlı sandık yok. Bot bir sandık açınca veya Depoları işaretle ile eklenir.",
+    forgetChest: "Unut",
+    forgetChestHint: "Kayıttan siler; dünyadaki sandığa dokunmaz.",
+    forgetChestToast: "Sandık unutuldu ({pos})",
+    chestStock: "{kinds} tür · {total} adet",
     farm: "Tarım",
     farmCrop: "Ekin",
     farmRadius: "Yarıçap (daire, 1–32 blok)",

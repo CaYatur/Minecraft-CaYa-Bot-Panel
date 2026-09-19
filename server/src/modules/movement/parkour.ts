@@ -54,15 +54,18 @@ function ensureParkourBot(instance: BotInstance): Bot {
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   const cfg = instance.config.movement;
   const movements = new Movements(bot);
-  movements.canDig = Boolean(cfg.canDig);
+  const placeOk = cfg.allowPlace !== false;
+  movements.canDig = cfg.canDig !== false;
   movements.allowSprinting = cfg.parkourSprint !== false && cfg.allowSprint !== false;
   movements.allowParkour = cfg.allowParkour !== false;
-  movements.allow1by1towers = Boolean(cfg.allowTower);
+  movements.allow1by1towers = placeOk && Boolean(cfg.allowTower);
+  if (!placeOk) movements.scafoldingBlocks = [];
   try {
     (movements as { maxDropDown?: number }).maxDropDown = Math.max(cfg.maxDrop ?? 3, Math.min(8, (cfg.parkourMaxGap ?? 3) + 2));
   } catch {
     /* */
   }
+  patchMovementsForTurningLadders(movements);
   bot.pathfinder.setMovements(movements);
   return bot;
 }
@@ -232,6 +235,170 @@ function isLadder(bot: Bot, x: number, y: number, z: number): boolean {
   return n === "ladder" || n === "vine" || n.includes("vine") || n === "scaffolding" || n === "twisting_vines" || n === "weeping_vines";
 }
 
+const CARDINAL_XZ = [
+  { x: 1, z: 0 },
+  { x: -1, z: 0 },
+  { x: 0, z: 1 },
+  { x: 0, z: -1 }
+];
+
+type PathNode = { x: number; y: number; z: number };
+
+function ladderFacingVec(bot: Bot, x: number, y: number, z: number): { x: number; z: number } | null {
+  const b = bot.blockAt(v3(x, y, z));
+  if (!b) return null;
+  let face = "";
+  try {
+    face = String((b as { getProperties?: () => { facing?: string } }).getProperties?.()?.facing ?? "").toLowerCase();
+  } catch {
+    face = "";
+  }
+  if (face === "north") return { x: 0, z: -1 };
+  if (face === "south") return { x: 0, z: 1 };
+  if (face === "west") return { x: -1, z: 0 };
+  if (face === "east") return { x: 1, z: 0 };
+  return null;
+}
+
+/** Two ladders on opposite walls of a shaft — not a spiral step. */
+function isOpposingLadder(bot: Bot, ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean {
+  const fa = ladderFacingVec(bot, ax, ay, az);
+  const fb = ladderFacingVec(bot, bx, by, bz);
+  if (!fa || !fb) return false;
+  if (fa.x !== -fb.x || fa.z !== -fb.z) return false;
+  const dx = Math.sign(bx - ax);
+  const dz = Math.sign(bz - az);
+  return (fa.x !== 0 && dx === fa.x) || (fa.z !== 0 && dz === fa.z);
+}
+
+function ladderHasSideRung(bot: Bot, x: number, y: number, z: number): boolean {
+  for (const d of CARDINAL_XZ) {
+    for (const dy of [0, 1, -1]) {
+      if (!isLadder(bot, x + d.x, y + dy, z + d.z)) continue;
+      if (isOpposingLadder(bot, x, y, z, x + d.x, y + dy, z + d.z)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Dönmeli / spiral merdiven — düz kolon değil. Pathfinder sarsın, hop/hijack yok. */
+export function isTurningLadder(bot: Bot): boolean {
+  if (!bot.entity) return false;
+  const fx = Math.floor(bot.entity.position.x);
+  const fy = Math.floor(bot.entity.position.y);
+  const fz = Math.floor(bot.entity.position.z);
+  const start = findNearbyLadder(bot, fx, fy, fz);
+  const x = start?.x ?? fx;
+  const z = start?.z ?? fz;
+  const y0 = start?.y ?? fy;
+  for (let dy = -16; dy <= 16; dy++) {
+    if (!isLadder(bot, x, y0 + dy, z)) continue;
+    if (ladderHasSideRung(bot, x, y0 + dy, z)) return true;
+  }
+  return false;
+}
+
+/**
+ * Pathfinder only climbs the same XZ column (getMoveUp) and has no one-rung
+ * climb-down. Spiral/turning ladders also need a neighbor onto the offset rung.
+ * Long drops from a climbable are stripped so A* does not jump off the spiral.
+ */
+export function patchMovementsForTurningLadders(movements: unknown) {
+  const m = movements as {
+    bot?: Bot;
+    getBlock: (
+      node: PathNode,
+      dx: number,
+      dy: number,
+      dz: number
+    ) => { climbable?: boolean; safe?: boolean };
+    getNeighbors: (node: PathNode) => unknown[];
+  };
+  const orig = m.getNeighbors.bind(m);
+  m.getNeighbors = (node: PathNode) => {
+    const neighbors = orig(node);
+    addTurningLadderMoves(m, node, neighbors);
+    return neighbors;
+  };
+}
+
+function addTurningLadderMoves(
+  m: {
+    bot?: Bot;
+    getBlock: (
+      node: PathNode,
+      dx: number,
+      dy: number,
+      dz: number
+    ) => { climbable?: boolean; safe?: boolean };
+  },
+  node: PathNode,
+  neighbors: unknown[]
+) {
+  let here: { climbable?: boolean };
+  try {
+    here = m.getBlock(node, 0, 0, 0);
+  } catch {
+    return;
+  }
+  if (!here?.climbable) return;
+  for (let i = neighbors.length - 1; i >= 0; i--) {
+    const mv = neighbors[i] as { x: number; y: number; z: number };
+    if (mv.y >= node.y - 1) continue;
+    let destClimb = false;
+    try {
+      destClimb = Boolean(m.getBlock(mv, 0, 0, 0)?.climbable);
+    } catch {
+      destClimb = false;
+    }
+    if (!destClimb) neighbors.splice(i, 1);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Move = require("mineflayer-pathfinder/lib/move") as new (
+    x: number,
+    y: number,
+    z: number,
+    remainingBlocks: number,
+    cost: number,
+    toBreak: unknown[],
+    toPlace: unknown[],
+    parkour?: boolean
+  ) => unknown;
+  const remaining = (node as { remainingBlocks?: number }).remainingBlocks ?? 0;
+  const bot = m.bot;
+  try {
+    const below = m.getBlock(node, 0, -1, 0);
+    if (below?.climbable) {
+      neighbors.push(new Move(node.x, node.y - 1, node.z, remaining, 1, [], [], false));
+    }
+  } catch {
+    /* */
+  }
+  for (const dir of CARDINAL_XZ) {
+    for (const dy of [-2, -1, 0, 1, 2]) {
+      try {
+        const dest = m.getBlock(node, dir.x, dy, dir.z);
+        if (!dest?.climbable) continue;
+        const head = m.getBlock(node, dir.x, dy + 1, dir.z);
+        if (head && !head.safe && !head.climbable) continue;
+        if (
+          bot &&
+          isOpposingLadder(bot, node.x, node.y, node.z, node.x + dir.x, node.y + dy, node.z + dir.z)
+        ) {
+          continue;
+        }
+        const cost = dy < 0 ? 0.95 : 1.15;
+        neighbors.push(
+          new Move(node.x + dir.x, node.y + dy, node.z + dir.z, remaining, cost, [], [], false)
+        );
+      } catch {
+        /* */
+      }
+    }
+  }
+}
+
 /** Yatay boşluk blok sayısı (ayak noktaları arası - 1) */
 export function measureGapBlocks(
   from: { x: number; z: number },
@@ -349,8 +516,6 @@ export function findGapLanding(
 
   return best ? { x: best.x, y: best.y, z: best.z, gap: best.gap } : null;
 }
-
-type PathNode = { x: number; y: number; z: number };
 
 /**
  * Follow goal that does not treat "standing under the player" as almost-there.
@@ -1193,6 +1358,9 @@ export async function climbLadderParkour(
 ): Promise<boolean> {
   const bot = instance.bot;
   if (!bot?.entity) return false;
+  // Spiral/turning: pathfinder has offset-rung neighbors. Hijack (one column +
+  // exit onto a solid) pulls the bot off the parkour.
+  if (isTurningLadder(bot)) return false;
   const shouldAbort = opts?.shouldAbort;
   const pathMs = opts?.pathMs ?? 7_000;
   const manualMs = opts?.manualMs ?? 10_000;

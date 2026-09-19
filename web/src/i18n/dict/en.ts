@@ -896,6 +896,10 @@ export const en: MessageTree = {
     scanRadius: "Scan radius",
     mlgIndependentNote: "MLG water reclaim is separate",
     mlgIndependentDesc: "— even if this is off, MLG water spilled on landing (Survival → MLG material reclaim) is still reclaimed. This option is only for topping up sources while wandering.",
+    pathBreakBlocks: "Break blocks on path",
+    pathPlaceBlocks: "Place blocks on path (scaffold / tower)",
+    pathBreakPlaceHint:
+      "Independent of combat. Off: no ceiling mining and no scaffolding — a clear detour is preferred. On: breaking/placing still costs more than walking around.",
     parkourTitle: "Advanced parkour",
     pathfinderParkour: "Pathfinder parkour (2-block gap + sprint)",
     ladderParkour: "Ladder / vine parkour",
@@ -1088,6 +1092,12 @@ export const en: MessageTree = {
     fetchPlayerPrompt: "To whom (player)?",
     keepItemsHint:
       "Items on the keepItems list are not deposited. Chest physics are verified on Paper.",
+    rememberedChests: "Remembered chests",
+    noRememberedChests: "No remembered chests. They appear when the bot opens a chest or you Mark storage.",
+    forgetChest: "Forget",
+    forgetChestHint: "Removes it from memory; does not break the in-world chest.",
+    forgetChestToast: "Chest forgotten ({pos})",
+    chestStock: "{kinds} kinds · {total} items",
     farm: "Farming",
     farmCrop: "Crop",
     farmRadius: "Radius (circle, 1–32 blocks)",

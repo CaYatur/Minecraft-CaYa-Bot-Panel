@@ -100,6 +100,7 @@ export interface BotConfig {
   chat: { minMessageIntervalMs: number };
   movement: {
     canDig: boolean;
+    allowPlace?: boolean;
     allowSprint: boolean;
     allowParkour: boolean;
     scaffoldBlocks: string[];
@@ -303,13 +304,24 @@ export interface BotSnapshot {
   build?: BuildRuntime;
 }
 
+export interface ChestMemory {
+  id: string;
+  serverId: string;
+  x: number;
+  y: number;
+  z: number;
+  dimension: string;
+  items: { name: string; count: number }[];
+  updatedAt: number;
+}
+
 export interface StateSnapshot {
   servers: ServerProfile[];
   bots: BotSnapshot[];
   waypoints: Record<string, Waypoint[]>;
   supportedVersions: string[];
   rules?: unknown[];
-  worldMemory?: { chests: unknown[]; ores: unknown[] };
+  worldMemory?: { chests: ChestMemory[]; ores: unknown[] };
 }
 
 // ---- Faz 18 — MCP / AI agent (server modules/agent aynası) --------------------

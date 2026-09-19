@@ -377,6 +377,20 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       });
     })
   );
+  r.delete(
+    "/world-memory/chests/:chestId",
+    h((req, res) => {
+      const row = manager.forgetChest(String(req.params.chestId ?? ""));
+      res.json({ ok: true, chest: row });
+    })
+  );
+  r.delete(
+    "/bots/:id/chests/:chestId",
+    h((req, res) => {
+      const row = manager.forgetChest(String(req.params.chestId ?? ""), req.params.id);
+      res.json({ ok: true, chest: row });
+    })
+  );
 
   // ---- catalog (Faz 13) — sürüme göre item/ore listesi ---------------------------
   r.get(

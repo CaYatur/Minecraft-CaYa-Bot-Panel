@@ -78,6 +78,14 @@ export class WorldMemory {
     return row;
   }
 
+  removeChest(id: string): ChestMemory | undefined {
+    const ix = this.data.chests.findIndex((c) => c.id === id);
+    if (ix < 0) return undefined;
+    const [row] = this.data.chests.splice(ix, 1);
+    this.persist();
+    return row;
+  }
+
   findItem(serverId: string, itemName: string): ChestMemory | undefined {
     return this.chestsFor(serverId).find((c) => c.items.some((i) => i.name.includes(itemName)));
   }
