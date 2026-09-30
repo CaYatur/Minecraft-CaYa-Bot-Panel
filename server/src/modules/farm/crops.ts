@@ -3,7 +3,14 @@ import type { Block } from "prismarine-block";
 /** Faz 19 tarım sabitleri — ekin/tohum eşlemesi ve olgunluk kuralları. */
 
 /** çapayla farmland'e dönüşebilen bloklar */
-export const TILLABLE = new Set(["dirt", "grass_block", "dirt_path", "coarse_dirt", "rooted_dirt"]);
+export const TILLABLE = new Set([
+  "dirt",
+  "grass_block",
+  "grass",
+  "dirt_path",
+  "coarse_dirt",
+  "rooted_dirt"
+]);
 
 /** çapa tercihi (dayanıklıdan ucuza) */
 export const HOE_ORDER = [

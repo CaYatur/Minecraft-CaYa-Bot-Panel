@@ -7,7 +7,7 @@ import type { TaskSummary, Waypoint } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
 const CMD_HELP =
-  "goto · follow · yanina · wp · say · attack · mobtemizle · kac · loot · ye · av · odun [n] · maden ore n · uret item · stop";
+  "goto · follow · yanina · wp · say · attack · mobtemizle · kac · loot · ye · av · odun [n] · topla blok [n] · maden ore n · uret item · stop";
 
 // zustand kuralı: seçici içinde yeni dizi/obje ÜRETME (sonsuz render döngüsü yapar).
 // Boş varsayılanlar modül sabiti olarak dışarıda tutulur.
@@ -81,9 +81,18 @@ export function TasksPanel({ botId }: { botId: string }) {
       } else if (verb === "av" || verb === "hunt") {
         await act({ type: "hunt", radius: parts[1] ? Number(parts[1]) : 32 });
       } else if (verb === "odun" || verb === "wood") {
-        await act({ type: "collect-wood", count: parts[1] ? Number(parts[1]) : 16 });
+        await act({ type: "collect-wood", count: parts[1] ? Number(parts[1]) : 16, countMode: "add" });
+      } else if (verb === "topla" || verb === "collect") {
+        const item = (parts[1] || "oak_log").replace(/^minecraft:/, "");
+        const count = parts[2] ? Number(parts[2]) : 16;
+        const wood = item === "log" || item.endsWith("_log") || item.endsWith("_stem");
+        await act(
+          wood
+            ? { type: "collect-wood", count, logType: item === "log" ? undefined : item, countMode: "add" }
+            : { type: "collect-block", item, count, countMode: "add" }
+        );
       } else if (verb === "maden" || verb === "mine") {
-        await act({ type: "mine", ore: parts[1] || "iron", count: parts[2] ? Number(parts[2]) : 8 });
+        await act({ type: "mine", ore: parts[1] || "iron", count: parts[2] ? Number(parts[2]) : 8, countMode: "add" });
       } else if (verb === "uret" || verb === "üret" || verb === "craft") {
         await act({ type: "craft", item: parts[1] || "stick", count: parts[2] ? Number(parts[2]) : 1 });
       } else if (verb === "stop" || verb === "dur") {

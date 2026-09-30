@@ -515,6 +515,23 @@ export function SurvivalPanel({ botId }: { botId: string }) {
         <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
           <input
             type="checkbox"
+            checked={mov.canDig !== false}
+            onChange={(e) => void patchMove({ canDig: e.target.checked })}
+          />
+          {t("survival.pathBreakBlocks")}
+        </label>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={mov.allowPlace !== false}
+            onChange={(e) => void patchMove({ allowPlace: e.target.checked })}
+          />
+          {t("survival.pathPlaceBlocks")}
+        </label>
+        <p className="mb-2 text-[10px] leading-relaxed text-zinc-600">{t("survival.pathBreakPlaceHint")}</p>
+        <label className="mb-2 flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
             checked={mov.allowParkour !== false}
             onChange={(e) => void patchMove({ allowParkour: e.target.checked })}
           />

@@ -22,7 +22,7 @@ import { FarmService } from "../modules/farm";
 import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { depositToChest, withdrawFromChest } from "../modules/inventory/chestOps";
-import { runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
+import { restoreDefaultMovement, runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
 import { SurvivalService } from "../modules/survival";
 import type {
   BotConfig,
@@ -80,6 +80,11 @@ export class BotInstance extends EventEmitter {
   private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
   private readonly log: BotLogger;
+  /**
+   * Bumped on Stop/Reset/detach so zombie runners cannot call setGoal after
+   * the queue has already moved on (issue #14).
+   */
+  controlEpoch = 0;
 
   constructor(
     public config: BotConfig,
@@ -96,6 +101,12 @@ export class BotInstance extends EventEmitter {
     this.craft = new CraftService(this);
     this.build = new BuildService(this);
     this.farm = new FarmService(this);
+    this.tasks.on("taskAbort", (_summary, reason) => {
+      this.invalidateControl(String(reason ?? "task abort"));
+    });
+    this.tasks.on("queueCleared", (reason) => {
+      this.invalidateControl(String(reason ?? "queue cleared"));
+    });
     this.limiter = new ChatRateLimiter(
       (text) => {
         if (this.bot && this.status === "online") {
@@ -275,10 +286,39 @@ export class BotInstance extends EventEmitter {
   }
 
   /**
+   * Drop any in-flight pathfinder/dig/controls. Zombie runners must observe
+   * `controlEpoch` and refuse to setGoal after this.
+   */
+  invalidateControl(reason = "control invalidated") {
+    this.controlEpoch++;
+    const bot = this.bot;
+    if (!bot) return;
+    try {
+      const pf = bot.pathfinder as unknown as { setGoal?(g: null): void; stop?(): void };
+      pf.stop?.();
+      pf.setGoal?.(null);
+    } catch {
+      /* */
+    }
+    try {
+      (bot as unknown as { stopDigging?(): void }).stopDigging?.();
+    } catch {
+      /* */
+    }
+    try {
+      bot.clearControlStates();
+    } catch {
+      /* */
+    }
+    void reason;
+  }
+
+  /**
    * Bot bağlı kalır; tüm görev / hareket / combat companion / inşaat / pathfinder temizlenir.
    * Takılma / bug sonrası sunucu kapat-aç yerine panelden kurtarma.
    */
   resetAllWork(reason = "all work reset from panel") {
+    this.invalidateControl(reason);
     // 1) Trip build abort gate FIRST so pathNear/place/cleanup exit even while
     //    the runner is mid-await (was ignoring TaskQueue cancel alone).
     try {
@@ -354,6 +394,11 @@ export class BotInstance extends EventEmitter {
       }
       try {
         bot.clearControlStates();
+      } catch {
+        /* */
+      }
+      try {
+        restoreDefaultMovement(this);
       } catch {
         /* */
       }
@@ -578,7 +623,7 @@ export class BotInstance extends EventEmitter {
           Number(action.count ?? 16),
           action.logType ? String(action.logType) : undefined,
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       case "collect":
       case "collect-item":
@@ -586,9 +631,9 @@ export class BotInstance extends EventEmitter {
       case "collect-block":
         return this.gather.enqueueCollectBlock(
           String(action.item ?? action.block ?? action.name ?? ""),
-          Number(action.count ?? 8),
+          Number(action.count ?? 16),
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       case "collect-drops":
       case "eşya-topla":
@@ -600,7 +645,7 @@ export class BotInstance extends EventEmitter {
           Number(action.count ?? 8),
           action.mode === "utility" ? "utility" : "legit",
           PRIORITY.USER,
-          action.countMode === "add" ? "add" : "target"
+          action.countMode === "target" ? "target" : "add"
         );
       // ---- Faz 9 craft ---------------------------------------------------------
       case "craft":
@@ -728,7 +773,11 @@ export class BotInstance extends EventEmitter {
       case "hasat":
         return this.farm.enqueueHarvest({
           ...farmAreaFrom(action),
-          replant: action.replant !== false && action.replant !== "false"
+          replant: action.replant !== false && action.replant !== "false",
+          depositX: numOpt(action.depositX),
+          depositY: numOpt(action.depositY),
+          depositZ: numOpt(action.depositZ),
+          depositNearest: action.depositNearest === true || action.depositNearest === "true" || (action.depositNearest !== false && action.depositNearest !== "false" && numOpt(action.depositX) == null)
         });
       case "farm-cycle":
       case "farm_cycle":
@@ -1511,12 +1560,15 @@ function farmAreaFrom(action: Record<string, unknown>): {
   z?: number;
   radius?: number;
   maxBlocks?: number;
+  player?: string;
 } {
+  const player = action.player != null && String(action.player).trim() !== "" ? String(action.player).trim() : undefined;
   return {
     x: numOpt(action.x),
     y: numOpt(action.y),
     z: numOpt(action.z),
     radius: numOpt(action.radius),
-    maxBlocks: numOpt(action.maxBlocks ?? action.max_blocks)
+    maxBlocks: numOpt(action.maxBlocks ?? action.max_blocks),
+    player
   };
 }

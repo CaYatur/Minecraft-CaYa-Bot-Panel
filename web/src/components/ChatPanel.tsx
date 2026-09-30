@@ -56,7 +56,7 @@ export function ChatPanel({ botId }: { botId: string }) {
     : entries;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
         <input
           value={filter}
@@ -72,7 +72,7 @@ export function ChatPanel({ botId }: { botId: string }) {
         <span className="ml-auto text-[11px] text-zinc-600">{t("chat.messageCount", { n: entries.length })}</span>
       </div>
 
-      <div ref={listRef} onScroll={onScroll} className="mono flex-1 space-y-0.5 overflow-y-auto py-2 text-[13px]">
+      <div ref={listRef} onScroll={onScroll} className="mono min-h-0 flex-1 space-y-0.5 overflow-y-auto py-2 text-[13px]">
         {visible.length === 0 && <div className="py-8 text-center text-xs text-zinc-600">{t("chat.empty")}</div>}
         {visible.map((e, i) => (
           <ChatLine key={i} e={e} onMsg={(u) => setInput(`/msg ${u} `)} />

@@ -3,6 +3,7 @@ import type { Item } from "prismarine-item";
 import type { BotInstance } from "../../core/BotInstance";
 import { isHostileMob } from "../combat/mobs";
 import { v3 } from "../build/vec3util";
+import { isParkourLocked } from "../movement/parkour";
 
 /** Düşüş kurtarma yöntemi (öncelik skoru yüksek = tercih) */
 export type FallMethod =
@@ -186,10 +187,83 @@ function isWaterPlaceableBlock(block: { name: string; boundingBox?: string } | n
   return true;
 }
 
+/**
+ * Çarpışmasız, suyun değiştirdiği bitkiler (short_grass, eğrelti, çiçek…).
+ * İniş bunlarda değil, altındaki tam bloktadır. Su o hücreye konur.
+ */
+function isReplaceablePlantName(n0: string): boolean {
+  const n = n0.replace(/^minecraft:/, "").toLowerCase();
+  if (
+    n === "grass" ||
+    n === "short_grass" ||
+    n === "tall_grass" ||
+    n === "fern" ||
+    n === "large_fern" ||
+    n === "dead_bush" ||
+    n === "seagrass" ||
+    n === "tall_seagrass" ||
+    n === "kelp" ||
+    n === "kelp_plant" ||
+    n === "nether_sprouts" ||
+    n === "crimson_roots" ||
+    n === "warped_roots" ||
+    n === "brown_mushroom" ||
+    n === "red_mushroom" ||
+    n === "dandelion" ||
+    n === "poppy" ||
+    n === "blue_orchid" ||
+    n === "allium" ||
+    n === "azure_bluet" ||
+    n === "oxeye_daisy" ||
+    n === "cornflower" ||
+    n === "lily_of_the_valley" ||
+    n === "wither_rose" ||
+    n === "torchflower" ||
+    n === "pink_petals" ||
+    n === "wildflowers" ||
+    n === "sunflower" ||
+    n === "lilac" ||
+    n === "rose_bush" ||
+    n === "peony" ||
+    n === "pitcher_plant" ||
+    n === "open_eyeblossom" ||
+    n === "closed_eyeblossom"
+  ) {
+    return true;
+  }
+  if (n.endsWith("_sapling") || n.endsWith("_fungus") || n.endsWith("_tulip")) return true;
+  // Tarla ekini: çarpışması yok, su bu hücrenin yerine geçer. Farmland altta kalır.
+  if (
+    n === "wheat" ||
+    n === "carrots" ||
+    n === "potatoes" ||
+    n === "beetroots" ||
+    n === "nether_wart" ||
+    n === "cocoa" ||
+    n === "melon_stem" ||
+    n === "pumpkin_stem" ||
+    n === "attached_melon_stem" ||
+    n === "attached_pumpkin_stem" ||
+    n === "pitcher_crop" ||
+    n === "torchflower_crop"
+  ) {
+    return true;
+  }
+  if (n.endsWith("_crop") || n.endsWith("_stem")) return true;
+  return false;
+}
+
+/** Yaprak suyu içine alır; su birikintisi oluşmaz ve düşüş hasarı kesilmez. */
+function isWaterloggableLanding(n0: string): boolean {
+  const n = n0.replace(/^minecraft:/, "").toLowerCase();
+  return n.includes("leaves") || n.endsWith("_leaf");
+}
+
 /** Işın/geçiş — düşüş hesabında yok say (yere basılmaz) */
 function isFallThroughName(n0: string): boolean {
   const n = n0.replace(/^minecraft:/, "").toLowerCase();
   if (isAirName(n)) return true;
+  if (isReplaceablePlantName(n)) return true;
   if (n.includes("sign") || n === "torch" || n.includes("wall_torch") || n.includes("button")) return true;
   if (n.includes("pressure_plate") || n.includes("rail") || n.includes("tripwire") || n === "fire") return true;
   if (n.includes("banner") || n.includes("lever") || n.includes("redstone_wire") || n === "light") return true;
@@ -212,11 +286,24 @@ export class FallGuardService {
   private lastEmitAt = 0;
   private lastWarnAt = 0;
   private fallPeakY: number | null = null;
+  /** Yaprak gibi su tutmayan yüzeye düşerken yan tam bloğa kayma. */
+  private steering = false;
+  private steerYaw: number | null = null;
   private recoverJobs: MlgRecoverJob[] = [];
   private recoverSeq = 1;
   private state: FallGuardState = idleState();
 
   constructor(private readonly instance: BotInstance) {}
+
+  /** Su geri alınırken takip bakışı ve hedefi kovayı kaçırmasın. */
+  isReclaiming(): boolean {
+    return this.reclaimBusy || this.recoverJobs.length > 0;
+  }
+
+  /** Düşüş kayması, MLG ve kova toplama sırasında takip hareketi ezmesin. */
+  holdsMovement(): boolean {
+    return this.isReclaiming() || this.steering || this.busy;
+  }
 
   getState(): FallGuardState {
     const reclaim =
@@ -328,7 +415,7 @@ export class FallGuardService {
       return;
     }
 
-    if (shouldIgnoreFall(bot)) {
+    if (shouldIgnoreFall(bot) || isParkourLocked(bot)) {
       if (this.state.falling || this.fallPeakY != null) {
         this.fallPeakY = null;
         this.state = idleState();
@@ -348,6 +435,7 @@ export class FallGuardService {
 
     // Yere değiyor / suda / merdivende — MLG YOK (sadece reclaim)
     if (grounded) {
+      this.stopBadLandingSteer(bot);
       if (this.state.falling || this.state.active || this.fallPeakY != null) {
         this.state = idleState();
         this.state.lastAction =
@@ -364,6 +452,7 @@ export class FallGuardService {
     // düşüş: net aşağı hız veya ciddi fallDistance (küçük zıplama ≠ MLG)
     const falling = vy < -0.28 || metaFall > 2.5 || (this.fallPeakY != null && feetY < this.fallPeakY - 1.2 && vy < -0.15);
     if (!falling) {
+      this.stopBadLandingSteer(bot);
       if (this.state.falling) {
         this.state.falling = false;
         this.fallPeakY = null;
@@ -483,15 +572,16 @@ export class FallGuardService {
       return;
     }
 
-    // su for kötü yüzey (yaprak/ot vb.) → tekne/blok yastığa kay
+    // Su, yaprağı ıslatır (hasar kesilmez). Yanında tam blok yoksa su yerine
+    // yaprağın üstüne toz kar / ağ / saman. Ot bu yola girmez: altındaki toprak seçilir.
     type PlaceMethod = Exclude<FallMethod, "none">;
     let chosen: PlaceMethod = method as PlaceMethod;
-    if ((chosen === "water" || chosen === "powder_snow") && !hasWaterPlaceableNearby(bot, remaining + 1)) {
-      const altOrder: PlaceMethod[] = ["boat", "hay", "slime", "cobweb", "scaffolding", "ladder"];
+    if (chosen === "water" && !hasWaterPlaceableNearby(bot, remaining + 1) && !findLeafEscapeTarget(bot)) {
+      const altOrder: PlaceMethod[] = ["powder_snow", "cobweb", "hay", "slime", "boat", "scaffolding", "ladder"];
       const alt = altOrder.find((m) => options.includes(m));
       if (alt) {
         chosen = alt;
-        this.state.lastAction = `bad surface (leaves/grass?) → ${alt}`;
+        this.state.lastAction = `leaves — no side block → ${alt}`;
       }
     }
 
@@ -501,6 +591,7 @@ export class FallGuardService {
 
     // prep: hâlâ yüksekte — kova/blok ele
     if (remaining > windows.prepareFrom) {
+      this.steerTowardSafeWater(bot, chosen);
       if (!this.busy) void this.preEquip(bot, chosen);
       this.state.method = chosen;
       this.state.lastAction = `prep: ${chosen} (${remaining.toFixed(1)}m · v=${Math.abs(vy).toFixed(2)})`;
@@ -510,12 +601,26 @@ export class FallGuardService {
 
     // place penceresi: çok yüksekte raycast vurmaz; çok alçakta geç kalınır
     if (remaining > windows.placeMax) {
+      this.steerTowardSafeWater(bot, chosen);
       if (!this.busy) void this.preEquip(bot, chosen);
       this.state.method = chosen;
       this.state.lastAction = `wait: ${chosen} @${windows.placeMax.toFixed(1)}m (now ${remaining.toFixed(1)})`;
       this.emit();
       return;
     }
+    const escape = chosen === "water" ? findLeafEscapeTarget(bot) : null;
+    if (escape && bot.entity) {
+      const away = Math.hypot(escape.x + 0.5 - bot.entity.position.x, escape.z + 0.5 - bot.entity.position.z);
+      if (away > 0.7) {
+        this.steerTowardSafeWater(bot, "water");
+        if (!this.busy) void this.preEquip(bot, "water");
+        this.state.method = "water";
+        this.state.lastAction = `leaves → ground ${escape.x},${escape.y},${escape.z}`;
+        this.emit();
+        return;
+      }
+    }
+
     if (remaining < windows.placeMin && chosen !== "ladder" && chosen !== "scaffolding") {
       // neredeyse yere bastı — son şans yine de dene
       if (remaining < 0.25) {
@@ -543,6 +648,7 @@ export class FallGuardService {
       // tüm hareketi kes (parkur/merdiven jump+forward MLG bakışını bozmasın)
       try {
         for (const k of ["forward", "back", "left", "right", "sprint", "jump"] as const) {
+          if (this.steering && (k === "forward" || k === "sprint")) continue;
           bot.setControlState(k, false);
         }
       } catch {
@@ -586,6 +692,7 @@ export class FallGuardService {
       this.state.lastAction = `hata: ${e instanceof Error ? e.message : String(e)}`;
       this.log().warn("Fall recovery failed", e instanceof Error ? e.message : String(e));
     } finally {
+      this.stopBadLandingSteer(bot);
       this.busy = false;
       this.state.active = false;
       this.emit(true);
@@ -612,7 +719,7 @@ export class FallGuardService {
       // equip/look promise'leri başlatıp place sırasını bozabiliyordu.
       if (bot.heldItem?.name !== item.name) await bot.equip(item, "hand");
       if (method === "water" || method === "powder_snow" || method === "boat") {
-        await snapLookDown(bot);
+        await snapLookDown(bot, this.steerYaw);
       }
       this.preEquippedMethod = method;
       this.lastPreEquipAt = Date.now();
@@ -620,6 +727,50 @@ export class FallGuardService {
       this.preEquippedMethod = null;
     } finally {
       this.preEquipBusy = false;
+    }
+  }
+
+  /** Yaprak sütunundan, menzil dışındaki daha alçak zemine yaw ile kay. Düz MLG'de çalışmaz. */
+  private steerTowardSafeWater(bot: Bot, chosen: FallMethod) {
+    if (chosen !== "water" || !bot.entity) {
+      this.stopBadLandingSteer(bot);
+      return;
+    }
+    const target = findLeafEscapeTarget(bot);
+    if (!target) {
+      this.stopBadLandingSteer(bot);
+      return;
+    }
+    try {
+      (bot.pathfinder as { setGoal?: (g: null) => void }).setGoal?.(null);
+    } catch {
+      /* */
+    }
+    const dx = target.x + 0.5 - bot.entity.position.x;
+    const dz = target.z + 0.5 - bot.entity.position.z;
+    if (Math.hypot(dx, dz) < 0.42) {
+      this.stopBadLandingSteer(bot);
+      return;
+    }
+    this.steerYaw = Math.atan2(-dx, -dz);
+    this.steering = true;
+    try {
+      bot.setControlState("forward", true);
+      bot.setControlState("sprint", Math.hypot(dx, dz) > 1.05);
+    } catch {
+      /* */
+    }
+  }
+
+  private stopBadLandingSteer(bot: Bot) {
+    if (!this.steering && this.steerYaw == null) return;
+    this.steering = false;
+    this.steerYaw = null;
+    try {
+      bot.setControlState("forward", false);
+      bot.setControlState("sprint", false);
+    } catch {
+      /* */
     }
   }
 
@@ -751,10 +902,23 @@ private async tryEquipTotem(bot: Bot) {
         );
       }
 
-      if (isInLiquid(bot) || (method === "powder_snow" && hasPowderSnowNear(bot))) {
+      if (isInLiquid(bot) || isEffectivelyGrounded(bot) || (method === "powder_snow" && hasPowderSnowNear(bot))) {
+        await sleep(120);
+        if (inventorySaysPlaced()) {
+          const p = bot.entity.position;
+          const t = lastTarget ?? findBestWaterPlaceTarget(bot, 4);
+          return markSuccess(
+            t?.x ?? Math.floor(p.x),
+            t ? t.y + 1 : Math.floor(p.y),
+            t?.z ?? Math.floor(p.z),
+            "landed"
+          );
+        }
+        if (lastTarget && hasWaterNear(bot, lastTarget.x, lastTarget.y + 1, lastTarget.z)) {
+          return markSuccess(lastTarget.x, lastTarget.y + 1, lastTarget.z, "water-at-target");
+        }
         return false;
       }
-      if (isEffectivelyGrounded(bot)) return false;
 
       const land = findLandingBelow(bot);
       const rem = land ? bot.entity.position.y - land.standY : estimateRemainingBlind(bot);
@@ -780,7 +944,10 @@ private async tryEquipTotem(bot: Bot) {
         this.state.lastAction = "MLG: landing surface already soft";
         return true;
       }
-      if (!solid || !isWaterPlaceableBlock(solid)) {
+      const powderOnLeaf =
+        method === "powder_snow" &&
+        Boolean(solid && isWaterloggableLanding(solid.name) && above && (isAirName(above.name) || isReplaceablePlantName(above.name)));
+      if (!solid || (!isWaterPlaceableBlock(solid) && !powderOnLeaf)) {
         await sleep(10);
         continue;
       }
@@ -1021,10 +1188,11 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
       }
     }
 
-    // combat mode saldırı/savunma + çok yakın tehdit
+    // Kaçış su kovası toplamasını iptal etmesin. Can düşükken kova bir sonraki
+    // düşüşün tek şansı; log: "reclaim cancelled — fleeing" ardından kovasız ölüm.
     try {
       const mode = this.instance.combat?.getRuntime?.()?.mode;
-      if (mode === "fleeing") return { ok: false, reason: "fleeing" };
+      if (mode === "fleeing" && !isWater) return { ok: false, reason: "fleeing" };
       if ((mode === "attacking" || mode === "defending") && nearThreat != null && nearThreat < 3 && !isWater) {
         return { ok: false, reason: "combat" };
       }
@@ -1053,14 +1221,14 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
       job.unsafeStreak = (job.unsafeStreak ?? 0) + 1;
       job.lastTryAt = now;
       const isWater = job.method === "water" || job.method === "powder_snow";
-      // tehdit/fleeing/yanma: su for de çabuk drop (hayati değil, hayatta kal)
+      // Su kaçışta ve iniş otururken silinmez. Ateş/lav kovayı yakar, o yüzden düşer.
       const hardUnsafe =
-        safety.reason === "fleeing" ||
         safety.reason === "on fire" ||
         safety.reason === "lav" ||
-        safety.reason === "near enemy+low health" ||
-        safety.reason === "still falling";
-      if (hardUnsafe && job.unsafeStreak >= (isWater ? 3 : 1)) {
+        (safety.reason === "near enemy+low health" && !isWater) ||
+        (safety.reason === "still falling" && !isWater) ||
+        (safety.reason === "fleeing" && !isWater);
+      if (hardUnsafe && job.unsafeStreak >= (isWater ? 8 : 1)) {
         this.recoverJobs = this.recoverJobs.filter((j) => j.id !== job.id);
         this.state.lastAction = `reclaim cancel (unsafe: ${safety.reason})`;
         this.log().info("MLG reclaim ertelendi/cancelled", `${job.method} · ${safety.reason}`);
@@ -1162,8 +1330,8 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
     }
 
     if (!ordered.length) {
-      // su yok — targete ulaştıysak OK, değilse birkaç deneme sonra drop
-      return filledNow >= want || job.tries > 8;
+      // Kaynak gerçekten yoksa dolu kova sayısı artmadan başarılı sayma.
+      return filledNow >= want;
     }
 
     const before = filledNow;
@@ -1211,48 +1379,61 @@ private async placeBoatMlg(bot: Bot, item: Item): Promise<boolean> {
       return false;
     }
 
+    try {
+      (bot.pathfinder as { setGoal?: (g: null) => void }).setGoal?.(null);
+    } catch {
+      /* */
+    }
+
     const bx = block.position.x;
     const by = block.position.y;
     const bz = block.position.z;
+
+    const tryScoop = () => {
+      try {
+        bot.activateItem(false);
+      } catch {
+        void bot.activateItem();
+      }
+    };
+
+    // Farm su toplama ile aynı: kaynağın içine gir, lookAt(y+0.4), activateItem.
+    // activateBlock kovada işe yaramaz (Prismarine #3428 / #3731).
+    await stepIntoWaterSource(bot, bx, bz);
     try {
       await bot.lookAt(v3(bx + 0.5, by + 0.4, bz + 0.5), true);
     } catch {
+      lookStraightDown(bot);
+    }
+    tryScoop();
+    await sleep(160);
+    let after = countItemName(bot, filledName);
+    let emptyAfter = countItemName(bot, "bucket");
+    if (after > before || emptyAfter < emptyBefore || bot.heldItem?.name === filledName) {
       try {
-        await bot.lookAt(v3(bx + 0.5, by + 0.9, bz + 0.5), true);
+        bot.deactivateItem();
       } catch {
         /* */
       }
+      return true;
     }
-    await sleep(40);
 
+    await stepIntoWaterSource(bot, bx, bz);
     try {
-      bot.activateItem(false);
+      await bot.lookAt(v3(bx + 0.5, by + 0.4, bz + 0.5), true);
     } catch {
-      try {
-        await bot.activateItem();
-      } catch {
-        /* */
-      }
+      lookStraightDown(bot);
     }
-    await sleep(80);
+    tryScoop();
+    await sleep(160);
     try {
       bot.deactivateItem();
     } catch {
       /* */
     }
 
-    try {
-      const b = bot.blockAt(v3(Math.floor(bx), Math.floor(by), Math.floor(bz)));
-      if (b) await bot.activateBlock(b);
-    } catch {
-      /* */
-    }
-    tryUseItemPacket(bot);
-    await sleep(70);
-
-    const after = countItemName(bot, filledName);
-    const emptyAfter = countItemName(bot, "bucket");
-    // dolu arttı veya boş azaldı
+    after = countItemName(bot, filledName);
+    emptyAfter = countItemName(bot, "bucket");
     if (after > before || emptyAfter < emptyBefore) return true;
     if (bot.heldItem?.name === filledName) return true;
     return false;
@@ -1640,6 +1821,56 @@ function nearestHostileDist(bot: Bot): number | null {
   return best;
 }
 
+function feetInColumn(bot: Bot, bx: number, bz: number): boolean {
+  if (!bot.entity) return false;
+  return Math.floor(bot.entity.position.x) === bx && Math.floor(bot.entity.position.z) === bz;
+}
+
+/** use_item aşağı ışını ayakların altındaki bloğa vurur. Kaynağın üstünde durmak şart. */
+function lookStraightDown(bot: Bot) {
+  if (!bot.entity) return;
+  bot.entity.pitch = -Math.PI / 2;
+}
+
+/** Alçak inişte bot kaynağın kenarındadır. Kaynağın içine bir adım girer, öteye kaçmaz. */
+async function stepIntoWaterSource(bot: Bot, bx: number, bz: number) {
+  if (!bot.entity || feetInColumn(bot, bx, bz)) return;
+  try {
+    bot.setControlState("sprint", false);
+    bot.setControlState("jump", false);
+    bot.setControlState("forward", true);
+  } catch {
+    return;
+  }
+  const until = Date.now() + 500;
+  while (Date.now() < until && bot.entity && !feetInColumn(bot, bx, bz)) {
+    const dx = bx + 0.5 - bot.entity.position.x;
+    const dz = bz + 0.5 - bot.entity.position.z;
+    bot.entity.yaw = Math.atan2(-dx, -dz);
+    bot.entity.pitch = 0;
+    await sleep(40);
+  }
+  try {
+    bot.setControlState("forward", false);
+  } catch {
+    /* */
+  }
+}
+
+/** Kova yalnızca level 0 kaynağı alır; akan su (level 1–7) dolmaz. */
+function isWaterSourceBlock(block: { metadata?: number; getProperties?: () => { level?: string | number } }): boolean {
+  try {
+    const props = block.getProperties?.();
+    if (props && props.level != null && props.level !== "") {
+      return Number(props.level) === 0;
+    }
+  } catch {
+    /* */
+  }
+  if (typeof block.metadata === "number") return block.metadata === 0;
+  return true;
+}
+
 /** Kaynak su / powder snow — en yakın (ayak / job civarı). Ot üstüne akmış suyu da bulur. */
 function findNearestWaterSource(
   bot: Bot,
@@ -1666,6 +1897,7 @@ function findNearestWaterSource(
         const isWater = n === "water" || n.includes("water") || n === "bubble_column";
         const isSnow = n === "powder_snow";
         if (!isWater && !isSnow) continue;
+        if (isWater && !isWaterSourceBlock(b)) continue;
 
         // göz distancesi (reach)
         const dist = Math.hypot(bx + 0.5 - ex, by + 0.4 - ey, bz + 0.5 - ez);
@@ -1902,6 +2134,33 @@ function hasWaterPlaceableNearby(bot: Bot, maxDown: number): boolean {
 }
 
 /**
+ * Yaprak altındayken menzil şartı yok: 4 blok yan, 14 blok aşağı tam zemin.
+ * Su ancak yaklaşınca konur; kayma yüksekten başlar.
+ */
+function findLeafEscapeTarget(bot: Bot): { x: number; y: number; z: number } | null {
+  if (!bot.entity) return null;
+  const pos = bot.entity.position;
+  const fx = Math.floor(pos.x);
+  const fz = Math.floor(pos.z);
+  const feet = scanColumn(bot, fx, fz, Math.floor(pos.y));
+  if (!feet || feet.waterPlaceable || !isWaterloggableLanding(feet.name)) return null;
+
+  let best: { x: number; y: number; z: number; score: number } | null = null;
+  for (let dx = -4; dx <= 4; dx++) {
+    for (let dz = -4; dz <= 4; dz++) {
+      if (dx === 0 && dz === 0) continue;
+      const horiz = Math.hypot(dx, dz);
+      if (horiz > 4.2) continue;
+      const info = scanColumn(bot, fx + dx, fz + dz, feet.solidY);
+      if (!info?.waterPlaceable) continue;
+      const score = horiz + Math.max(0, feet.standY - info.standY) * 0.12;
+      if (!best || score < best.score) best = { x: fx + dx, y: info.solidY, z: fz + dz, score };
+    }
+  }
+  return best ? { x: best.x, y: best.y, z: best.z } : null;
+}
+
+/**
  * Su koyulacak en iyi tam katı blok (x,y,z = solid block coords).
  * Yaprak/çit/slab atlanır; ayak altı tercih, yoksa 3x3 komşu.
  */
@@ -1937,7 +2196,7 @@ function predictImpactXZ(bot: Bot, maxTicks = 10): { x: number; z: number; ticks
 
 function isReplaceableAboveForMlg(name0: string): boolean {
   const name = name0.replace(/^minecraft:/, "");
-  if (isAirName(name) || isFallThroughName(name)) return true;
+  if (isAirName(name) || isFallThroughName(name) || isReplaceablePlantName(name)) return true;
   if (name.includes("water") || name === "powder_snow" || name === "snow") return true;
   return false;
 }
@@ -1968,10 +2227,13 @@ function findBestWaterPlaceTarget(
   const addColumn = (x: number, z: number) => {
     if (!columns.some(([cx, cz]) => cx === x && cz === z)) columns.push([x, z]);
   };
+  const feet = scanColumn(bot, Math.floor(pos.x), Math.floor(pos.z), Math.floor(pos.y));
+  const widen = Boolean(feet && !feet.waterPlaceable && isWaterloggableLanding(feet.name));
   const px = Math.floor(predicted.x);
   const pz = Math.floor(predicted.z);
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dz = -1; dz <= 1; dz++) addColumn(px + dx, pz + dz);
+  const span = widen ? 3 : 1;
+  for (let dx = -span; dx <= span; dx++) {
+    for (let dz = -span; dz <= span; dz++) addColumn(px + dx, pz + dz);
   }
   addColumn(Math.floor(pos.x), Math.floor(pos.z));
 
@@ -1980,12 +2242,13 @@ function findBestWaterPlaceTarget(
 
   for (const [x, z] of columns) {
     const impactDistance = Math.hypot(x + 0.5 - predicted.x, z + 0.5 - predicted.z);
-    if (impactDistance > 1.75) continue;
+    // Düz zeminde komşu çıkıntıya kaçılmaz. Yaprakta yandaki daha alçak zemin de geçer.
+    if (impactDistance > (widen ? 3.25 : 1.75)) continue;
 
     for (let y = startY; y >= minY; y--) {
       const block = bot.blockAt(v3(x, y, z));
       if (!isWaterPlaceableBlock(block)) continue;
-      if (!canSeeMlgBlock(bot, block)) continue;
+      if (!widen && !canSeeMlgBlock(bot, block)) continue;
 
       const above = bot.blockAt(v3(x, y + 1, z));
       if (above && !isReplaceableAboveForMlg(above.name)) continue;
@@ -1996,7 +2259,7 @@ function findBestWaterPlaceTarget(
       const reach = Math.hypot(tx - pos.x, ty - eyeY, tz - pos.z);
       if (reach > BLOCK_REACH + 0.08) continue;
 
-      const heightPenalty = desiredSolidY == null ? 0 : Math.abs(y - desiredSolidY) * 1.4;
+      const heightPenalty = !widen && desiredSolidY != null ? Math.abs(y - desiredSolidY) * 1.4 : 0;
       const score = impactDistance * 4 + heightPenalty + reach * 0.12;
       if (score < bestScore) {
         bestScore = score;
@@ -2092,15 +2355,16 @@ function findItemForMethod(bot: Bot, method: FallMethod, banned: string[]): Item
   }
 }
 
-/** Düşerken anında yere bak — force=true, bekleme yok */
-async function snapLookDown(bot: Bot) {
+/** Düşerken anında yere bak — force=true, bekleme yok. yaw verilirse o yöne bakar. */
+async function snapLookDown(bot: Bot, yaw?: number | null) {
   if (!bot.entity) return;
+  const y = yaw ?? bot.entity.yaw;
   try {
     // force: yumuşak dönüş yok, anında pitch
-    await bot.look(bot.entity.yaw, -Math.PI / 2, true);
+    await bot.look(y, -Math.PI / 2, true);
   } catch {
     try {
-      await bot.look(bot.entity.yaw, -1.55, true);
+      await bot.look(y, -1.55, true);
     } catch {
       try {
         // son çare: pitch alanı

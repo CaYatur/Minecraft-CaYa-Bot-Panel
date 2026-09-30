@@ -35,6 +35,10 @@ export interface CombatConfig {
   jumpCrit: boolean;
   fleeAtHealth: number;
   chaseDistance: number;
+  /** Non-hunter combat may break blocks while pathing. Default false (issue #9). */
+  allowBlockBreak?: boolean;
+  /** Non-hunter combat may place scaffold. Default false. */
+  allowBlockPlace?: boolean;
   /**
    * Hedefe kenetlenmişken (saldırı/savunma): menzildeki başka mob / hasar veren oyuncuya
    * cleave — main target değişmez, çok yakın tehdit de hasar alır.
@@ -127,6 +131,8 @@ export interface CombatRuntime {
 
 export interface MovementConfig {
   canDig: boolean;
+  /** Pathfinder may place scaffold/towers. Independent of combat. Default true (goto). */
+  allowPlace?: boolean;
   allowSprint: boolean;
   allowParkour: boolean;
   /** sacrificial blocks the bot may place to cross obstacles */
@@ -431,6 +437,8 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
       jumpCrit: true,
       fleeAtHealth: 6,
       chaseDistance: 24,
+      allowBlockBreak: false,
+      allowBlockPlace: false,
       // opt-in: targete kilitliyken yanındaki mob / hasar veren oyuncuya da vur
       cleaveNearby: false,
       cleaveRange: 3.0,
@@ -499,6 +507,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     chat: { minMessageIntervalMs: 1500 },
     movement: {
       canDig: true,
+      allowPlace: true,
       allowSprint: true,
       allowParkour: true,
       scaffoldBlocks: ["dirt", "cobblestone", "netherrack"],

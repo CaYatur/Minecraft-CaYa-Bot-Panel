@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { BuildRuntime } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 import { BuildAnim } from "./BuildAnim";
+import { RememberedChests } from "./RememberedChests";
 
 interface SchematicMeta {
   id: string;
@@ -464,6 +465,7 @@ export function BuildPanel({ botId }: { botId: string }) {
           {t("build.scaffoldLabel", { list: bot.config.movement.scaffoldBlocks.join(", ") || "—" })}
         </span>
       </div>
+      <RememberedChests botId={botId} />
 
       {/* Anlık iş + malzeme listesi — butonların altında, scroll ile taşmaz */}
       {(busy || build.activity) && (

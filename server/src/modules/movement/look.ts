@@ -75,13 +75,20 @@ export async function easeLookAt(
     const before = bot.entity.yaw;
     await stepLookAt(bot, point, turnDegPerTick);
     const dyaw = Math.abs(normalizeAngle(bot.entity.yaw - before));
-    if (dyaw < 0.025 && Math.abs(bot.entity.pitch) < 1.6) {
-      // check remaining
+    if (dyaw < 0.025) {
       const from = bot.entity.position.offset(0, eyeHeight(bot), 0);
       const dx = point.x - from.x;
+      const dy = point.y - from.y;
       const dz = point.z - from.z;
       const targetYaw = Math.atan2(-dx, -dz);
-      if (Math.abs(normalizeAngle(targetYaw - bot.entity.yaw)) < 0.05) return;
+      const ground = Math.sqrt(dx * dx + dz * dz) || 0.001;
+      const targetPitch = clamp(Math.atan2(dy, ground), -1.5, 1.5);
+      if (
+        Math.abs(normalizeAngle(targetYaw - bot.entity.yaw)) < 0.05 &&
+        Math.abs(targetPitch - bot.entity.pitch) < 0.08
+      ) {
+        return;
+      }
     }
     await sleep(45 + Math.floor(Math.random() * 25));
   }

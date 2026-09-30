@@ -2,10 +2,10 @@ import type { Bot } from "mineflayer";
 import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
 import type { BotInstance } from "../../core/BotInstance";
-import { PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
+import { isTokenAborted, PRIORITY, type ProgressFn, type TaskToken } from "../../core/TaskQueue";
 import type { CombatConfig, CombatRuntime, CompanionState, DeathRecord } from "../../types";
 import { goals } from "mineflayer-pathfinder";
-import { ensureMovement, runFollow, runGoto, stopMovement, tryOpenNearbyDoor } from "../movement";
+import { ensureMovement, runFollow, runGoto, stopMovement, tryPassNearbyDoor } from "../movement";
 import { stepLookAtEntity } from "../movement/look";
 import { CREEPER_SAFE_RANGE, isHostileMob, isPlayerEntity } from "./mobs";
 import {
@@ -28,7 +28,7 @@ const HUNTER_TICK_MS = 500;
 // caya-combat-mlg-stability-v2: erişilemeyen/ışınlmainn target bekçisi.
 const caya_combat_mlg_stability_v2_combat = true;
 const UNREACHABLE_TARGET_TTL_MS = 15_000;
-const TARGET_TELEPORT_DELTA = 10;
+const TARGET_TELEPORT_DELTA = 8;
 const APPROACH_STALL_RETRY_MS = 3_500;
 const APPROACH_STALL_ABORT_MS = 7_500;
 
@@ -770,6 +770,7 @@ getRuntime(): CombatRuntime {
       .map((p) => p?.entity)
       .filter((e): e is Entity => Boolean(e && this.hunterEligible(labelEntity(e))))
       .filter((e) => distanceEyeToEntity(bot, e) <= maxVisibleRange)
+      .filter((e) => hasLineOfSight(bot, e))
       .sort((a, b) => distanceEyeToEntity(bot, a) - distanceEyeToEntity(bot, b));
   }
 
@@ -1042,6 +1043,8 @@ getRuntime(): CombatRuntime {
         if (mode !== "mob" && mode !== "all") continue;
       } else continue;
 
+      if (!hasLineOfSight(bot, e)) continue;
+
       if (d < bestD) {
         bestD = d;
         best = e;
@@ -1058,6 +1061,7 @@ getRuntime(): CombatRuntime {
    */
   private protectTick() {
     if (this.deadPaused) return;
+    if (Date.now() < this.companionPathPausedUntil) return;
     if (!this.hasProtect() || this.instance.status !== "online") return;
     const bot = this.bot ?? this.instance.bot;
     if (!bot?.entity) return;
@@ -1115,6 +1119,8 @@ getRuntime(): CombatRuntime {
         } else if (hostile) {
           if (!settings.retaliateMobs) continue;
         } else continue;
+
+        if (!hasLineOfSight(bot, e)) continue;
 
         if (d < bestD) {
           bestD = d;
@@ -1220,6 +1226,7 @@ getRuntime(): CombatRuntime {
       const chase = hunterCfg?.enabled ? (hunterCfg.chaseDistance ?? 64) : (this.cfg().chaseDistance ?? 24);
       const started = Date.now();
       const maxMs = 5 * 60_000;
+      let lastAttackPos: Vec3 | null = null;
 
       while (!token.cancelled && Date.now() - started < maxMs) {
         const fleeAt = hunterCfg?.enabled ? (hunterCfg.fleeAtHealth ?? 5) : (this.cfg().fleeAtHealth ?? 6);
@@ -1253,11 +1260,26 @@ getRuntime(): CombatRuntime {
         }
 
         const dist = distanceEyeToEntity(bot, entity);
+        const feetDist = bot.entity.position.distanceTo(entity.position);
         report({ done: 0, total: Math.max(1, Math.round(dist)), label: `${playerName} · ${dist.toFixed(1)} blocks` });
 
-        if (dist > chase) {
+        if (lastAttackPos && entity.position.distanceTo(lastAttackPos) >= TARGET_TELEPORT_DELTA) {
+          this.log().info(`Target teleported — attack dropped`, `${playerName} jump ${entity.position.distanceTo(lastAttackPos).toFixed(1)}m`);
+          this.markTargetUnreachable(entity, "teleported", 8_000);
+          break;
+        }
+        lastAttackPos = entity.position.clone();
+        if (feetDist > chase || dist > chase) {
           this.log().info(`Target beyond ${chase} blocks — chase abandoned`);
           break;
+        }
+        if (!hasLineOfSight(bot, entity)) {
+          const vantage = this.findCombatVantagePoint(entity, 5);
+          if (!vantage) {
+            this.markTargetUnreachable(entity, "no line of sight", 4_000);
+            this.log().info(`Target not visible — attack dropped`, playerName);
+            break;
+          }
         }
 
         const reach = this.cfg().reach ?? 3;
@@ -1511,6 +1533,7 @@ getRuntime(): CombatRuntime {
     let lostSince: number | null = null;
     let hits = 0;
     let lastWeaponCheck = 0;
+    let lastSeenPos = initial?.position?.clone?.() ?? null;
 
     try {
       while (!token.cancelled && Date.now() - t0 < 120_000) {
@@ -1528,46 +1551,48 @@ getRuntime(): CombatRuntime {
           await this.ensureCombatWeapon();
         }
 
-        // 1) entity id  2) en yakın aynı etiket  3) en yakın uygun tehdit
+        // 1) entity id  2) en yakın aynı etiket  3) görünür tehdit — asla uzak `initial`'e dönme
         let entity =
-          this.resolveCombatEntity(targetId, label, chase + 4) ??
-          this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "all" : this.cfg().defendMode, chase) ??
-          (initial && initial.isValid !== false && !this.isTargetTemporarilyUnreachable(initial) ? initial : null);
+          this.resolveCombatEntity(targetId, label, chase) ??
+          this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "all" : this.cfg().defendMode, chase);
 
         if (!entity || entity.isValid === false) {
           if (lostSince == null) lostSince = Date.now();
-          // kısa grace — entity paket gecikmesi
-          if (Date.now() - lostSince > 2000) {
+          if (Date.now() - lostSince > 800) {
             this.log().info("Attacker disappeared — defense ended", label);
             break;
           }
           report({ done: 0, total: 1, label: `savun ${label} · searching` });
-          await sleep(150);
+          await sleep(100);
           continue;
         }
         lostSince = null;
         if (typeof entity.id === "number") targetId = entity.id;
 
-        // gövde distancesi (göz-aim bazen 1.21'de şişebilir; kovalama for feet)
         const dist = bot.entity.position.distanceTo(entity.position);
+        if (lastSeenPos && entity.position.distanceTo(lastSeenPos) >= TARGET_TELEPORT_DELTA) {
+          this.log().info("Target teleported — defense dropped", `${label} jump ${entity.position.distanceTo(lastSeenPos).toFixed(1)}m`);
+          this.markTargetUnreachable(entity, "teleported", 8_000);
+          break;
+        }
+        lastSeenPos = entity.position.clone();
+        if (dist > chase) {
+          this.log().info("Attacker left range — chase abandoned", `${dist.toFixed(1)}>${chase}`);
+          break;
+        }
+        if (!hasLineOfSight(bot, entity)) {
+          const vantage = this.findCombatVantagePoint(entity, 5);
+          if (!vantage) {
+            this.markTargetUnreachable(entity, "no line of sight", 4_000);
+            this.log().info("Target not visible — defense dropped", label);
+            break;
+          }
+        }
         report({
           done: hits,
           total: Math.max(hits + 1, 1),
           label: `savun ${labelEntity(entity)} · ${dist.toFixed(1)}m${hits ? ` · ${hits} hit` : ""}`
         });
-
-        if (dist > chase) {
-          // yanlış uzak entity seçildiyse en yakını dene, hemen vazgeçme
-          const nearer =
-            this.findNearestByLabel(label, chase) ??
-            this.pickSelfGuardTarget(this.cfg().defendMode === "off" ? "mob" : this.cfg().defendMode, chase);
-          if (!nearer) {
-            this.log().info("Attacker left range — chase abandoned", `${dist.toFixed(1)}>${chase}`);
-            break;
-          }
-          entity = nearer;
-          if (typeof entity.id === "number") targetId = entity.id;
-        }
 
         if (entity.health !== undefined && entity.health <= 0) {
           this.log().info(`Target died: ${labelEntity(entity)}`);
@@ -1798,10 +1823,12 @@ getRuntime(): CombatRuntime {
       else if (mode === "mob" && hostile) candidates.push(e);
       else if (mode === "all" && (player || hostile)) candidates.push(e);
     }
-    candidates.sort(
+    const visible = candidates.filter((e) => hasLineOfSight(bot, e));
+    const pool = visible.length ? visible : [];
+    pool.sort(
       (a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position)
     );
-    return candidates[0] ?? null;
+    return pool[0] ?? null;
   }
 
   private nearestHostile(radius: number): Entity | null {
@@ -1814,6 +1841,7 @@ getRuntime(): CombatRuntime {
       if (!e || e === bot.entity) continue;
       if (this.isTargetTemporarilyUnreachable(e)) continue;
       if (!isHostileMob(String(e.name ?? e.displayName ?? ""))) continue;
+      if (!hasLineOfSight(bot, e)) continue;
       const d = bot.entity.position.distanceTo(e.position);
       if (d <= bestD) {
         bestD = d;
@@ -1956,8 +1984,12 @@ getRuntime(): CombatRuntime {
     const hunterCfg = this.cfg().hunter;
     const hunterActive = Boolean(hunterCfg?.enabled);
     const chaseLimit = Math.max(12, hunterActive ? (hunterCfg?.chaseDistance ?? 128) : (Number(this.cfg().chaseDistance) || 24));
-    const canDigRoute = hunterActive ? Boolean(hunterCfg?.allowBlockBreak) : true;
-    const canPlaceRoute = hunterActive ? Boolean(hunterCfg?.allowBlockPlace) : false;
+    const canDigRoute = hunterActive
+      ? Boolean(hunterCfg?.allowBlockBreak)
+      : Boolean(this.cfg().allowBlockBreak);
+    const canPlaceRoute = hunterActive
+      ? Boolean(hunterCfg?.allowBlockPlace)
+      : Boolean(this.cfg().allowBlockPlace);
     let tracked: Entity =
       (typeof entity.id === "number" ? bot.entities[entity.id] : undefined) ?? entity;
     let lastBotPos = bot.entity.position.clone();
@@ -1980,9 +2012,10 @@ getRuntime(): CombatRuntime {
       const status = String(result?.status ?? "");
       if (status === "noPath" || status === "timeout") {
         if (!noPathSince) noPathSince = Date.now();
-      } else if (status === "success" || status === "partial") {
+      } else if (status === "success") {
         noPathSince = 0;
       }
+      // `partial` is in-progress A* (issue #10) — do not treat as a valid path.
     };
 
     try {
@@ -2000,30 +2033,37 @@ getRuntime(): CombatRuntime {
       bot.on("path_update", onPathUpdate);
       setFollowGoal(tracked);
       const startedAt = Date.now();
+      const approachEpoch = this.instance.controlEpoch;
 
-      while (!token.cancelled && !this.deadPaused && Date.now() - startedAt < 15_000) {
+      while (!isTokenAborted(token) && !this.deadPaused && this.instance.controlEpoch === approachEpoch && Date.now() - startedAt < 15_000) {
         if ((bot.health ?? 0) <= 0 || !bot.entity) break;
 
         const live = typeof entity.id === "number" ? bot.entities[entity.id] : tracked;
         if (!live || live.isValid === false) break;
-        if (live !== tracked) {
-          tracked = live;
-          lastTargetPos = live.position.clone();
-          setFollowGoal(tracked);
-        }
 
         const now = Date.now();
         const dist = bot.entity.position.distanceTo(live.position);
         const targetJump = live.position.distanceTo(lastTargetPos);
 
-        // Admin TP / anlık uzak taşıma: eski target konumuna sonsuza kadar rota çizme.
-        if (targetJump >= TARGET_TELEPORT_DELTA && dist > chaseLimit + 4) {
+        // Admin TP: drop immediately. Do not wait for chaseLimit — GoalFollow would path 1000m.
+        if (targetJump >= TARGET_TELEPORT_DELTA) {
           this.markTargetUnreachable(live, "target teleported (" + targetJump.toFixed(1) + " blocks)", 8_000);
           break;
         }
-        if (dist > chaseLimit + 8) {
-          this.markTargetUnreachable(live, "outside chase limit (" + dist.toFixed(1) + ">" + (chaseLimit + 8) + ")", 8_000);
+        if (dist > chaseLimit) {
+          this.markTargetUnreachable(live, "outside chase limit (" + dist.toFixed(1) + ">" + chaseLimit + ")", 8_000);
           break;
+        }
+        if (live !== tracked) {
+          tracked = live;
+          setFollowGoal(tracked);
+        }
+        if (!hasLineOfSight(bot, live) && !canDigRoute) {
+          const vantage = this.findCombatVantagePoint(live, 5);
+          if (!vantage) {
+            this.markTargetUnreachable(live, "no line of sight", 4_000);
+            break;
+          }
         }
 
         const reach = this.cfg().reach ?? 3;
@@ -2057,7 +2097,7 @@ getRuntime(): CombatRuntime {
         const noPathFor = noPathSince ? now - noPathSince : 0;
 
         if (!routeRetried && (stalledFor >= APPROACH_STALL_RETRY_MS || noPathFor >= 1_500)) {
-          if (await tryOpenNearbyDoor(this.instance)) {
+          if (await tryPassNearbyDoor(this.instance)) {
             ensureMovement(this.instance, { mode: "goto", allowSprintNow: true, parkour: true, canDig: canDigRoute, canOpenDoors: true, allowPlace: canPlaceRoute });
             setFollowGoal(live);
             lastProgressAt = now;
@@ -2099,7 +2139,7 @@ getRuntime(): CombatRuntime {
         }
 
         lastTargetPos = live.position.clone();
-        await sleep(100);
+        await sleep(80);
       }
     } catch (error) {
       this.log().debug("Approach failed", error instanceof Error ? error.message : String(error));

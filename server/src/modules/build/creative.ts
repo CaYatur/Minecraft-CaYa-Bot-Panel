@@ -8,8 +8,9 @@ import type { Bot } from "mineflayer";
  */
 
 export function isCreativeMode(bot: Bot | null | undefined): boolean {
-  const gm = (bot as unknown as { game?: { gameMode?: string } } | null | undefined)?.game?.gameMode;
-  return gm === "creative";
+  const gm = (bot as unknown as { game?: { gameMode?: string | number } } | null | undefined)?.game?.gameMode;
+  if (gm === "creative" || gm === 1 || gm === "1") return true;
+  return String(gm ?? "").toLowerCase().includes("creative");
 }
 
 function countItem(bot: Bot, name: string): number {

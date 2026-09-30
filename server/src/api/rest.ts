@@ -19,6 +19,7 @@ import {
   loadParsedSchematic
 } from "../modules/build";
 import { getCatalog } from "../modules/catalog/minecraftCatalog";
+import { getVersionSyncStatus, installPublishedMineflayer } from "../modules/versions/sync";
 import type { AgentService } from "../modules/agent";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
@@ -44,6 +45,21 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/state",
     h((_req, res) => {
       res.json(manager.snapshot(supportedVersions));
+    })
+  );
+
+  // ---- protocol versions (issue #21) ------------------------------------------
+  r.get(
+    "/versions",
+    h(async (req, res) => {
+      res.json(await getVersionSyncStatus(req.query.refresh === "1"));
+    })
+  );
+  r.post(
+    "/versions/install",
+    h(async (_req, res) => {
+      const anyOnline = [...manager.bots.values()].some((b) => b.status === "online" || b.status === "connecting");
+      res.json(await installPublishedMineflayer(anyOnline));
     })
   );
 
@@ -375,6 +391,20 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         chests: manager.worldMemory.chestsFor(serverId),
         ores: manager.worldMemory.oresFor(serverId)
       });
+    })
+  );
+  r.delete(
+    "/world-memory/chests/:chestId",
+    h((req, res) => {
+      const row = manager.forgetChest(String(req.params.chestId ?? ""));
+      res.json({ ok: true, chest: row });
+    })
+  );
+  r.delete(
+    "/bots/:id/chests/:chestId",
+    h((req, res) => {
+      const row = manager.forgetChest(String(req.params.chestId ?? ""), req.params.id);
+      res.json({ ok: true, chest: row });
     })
   );
 

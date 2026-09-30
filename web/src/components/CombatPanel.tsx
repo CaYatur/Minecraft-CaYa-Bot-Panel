@@ -315,6 +315,22 @@ export function CombatPanel({ botId }: { botId: string }) {
               max={20}
               onCommit={(v) => void patchCombat({ fleeAtHealth: v })}
             />
+            <label className="flex items-center gap-2 text-xs text-zinc-400 sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={Boolean(cfg.allowBlockBreak)}
+                onChange={(e) => void patchCombat({ allowBlockBreak: e.target.checked })}
+              />
+              {t("combat.allowBlockBreak")}
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-400 sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={Boolean(cfg.allowBlockPlace)}
+                onChange={(e) => void patchCombat({ allowBlockPlace: e.target.checked })}
+              />
+              {t("combat.allowBlockPlace")}
+            </label>
             <NumField
               label={t("combat.chaseDistance")}
               value={cfg.chaseDistance}
