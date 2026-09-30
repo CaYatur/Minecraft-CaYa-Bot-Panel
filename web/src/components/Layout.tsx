@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { BrainCircuit, Globe, LayoutGrid, Settings2, SlidersHorizontal, Wrench } from "lucide-react";
 import { BotLogo } from "./BotLogo";
+import { ProtocolNotice } from "./ProtocolNotice";
 import { useI18n } from "../i18n/useI18n";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -90,7 +91,10 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</main>
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <ProtocolNotice />
+        {children}
+      </main>
 
       {/* toasts */}
       <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-80 flex-col gap-2">
