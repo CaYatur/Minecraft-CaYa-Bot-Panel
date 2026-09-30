@@ -741,6 +741,11 @@ export async function runFollow(
             await sleep(40);
             continue;
           }
+          if (instance.survival?.fallGuard?.holdsMovement?.()) {
+            clearGoal(bot);
+            await sleep(40);
+            continue;
+          }
           const cur = bot.players[playerName]?.entity ?? null;
           if (!cur || cur !== tracked) {
             tracked = cur;
