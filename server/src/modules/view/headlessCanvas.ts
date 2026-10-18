@@ -7,15 +7,12 @@ import { createRequire } from "module";
 import { EventEmitter } from "events";
 
 const nodeRequire = createRequire(__filename);
-const { Canvas, Image } = nodeRequire("canvas") as {
-  Canvas: new (width: number, height: number) => HeadlessSurface;
-  Image: new () => unknown;
-};
-const createGLContext = nodeRequire("gl") as (
-  width: number,
-  height: number,
-  options?: Record<string, unknown>
-) => WebGLContext | null;
+
+type CanvasCtor = new (width: number, height: number) => HeadlessSurface;
+type ImageCtor = new () => unknown;
+type GlFactory = (width: number, height: number, options?: Record<string, unknown>) => WebGLContext | null;
+
+let HeadlessCtor: CanvasCtor | undefined;
 
 interface WebGLContext {
   canvas: unknown;
@@ -46,7 +43,26 @@ export interface HeadlessSurface {
   get clientHeight(): number;
 }
 
-class HeadlessCanvas extends (Canvas as new (width: number, height: number) => HeadlessSurface) {
+function ensureNative(): CanvasCtor {
+  if (HeadlessCtor) return HeadlessCtor;
+  let canvasMod: { Canvas: CanvasCtor; Image: ImageCtor };
+  try {
+    canvasMod = nodeRequire("canvas");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`The built-in canvas module failed to load. ${detail}`);
+  }
+  let glFactory: GlFactory;
+  try {
+    glFactory = nodeRequire("gl");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`The built-in gl module failed to load. ${detail}`);
+  }
+  const CanvasBase = canvasMod.Canvas;
+  const ImageBase = canvasMod.Image;
+
+  class HeadlessCanvas extends CanvasBase {
   style: Record<string, string> = {};
   __gl__?: WebGLContext;
   private __contextType__?: string;
@@ -86,7 +102,7 @@ class HeadlessCanvas extends (Canvas as new (width: number, height: number) => H
     this.__contextType__ = type;
     if (type === "webgl" || type === "webgl2") {
       this[ctxKey] = super.getContext("2d") as HeadlessCanvas[typeof ctxKey];
-      const gl = createGLContext(this.width, this.height, { preserveDrawingBuffer: true, ...options });
+      const gl = glFactory(this.width, this.height, { preserveDrawingBuffer: true, ...options });
       if (!gl) return null;
       const originalUniform = gl.getUniformLocation.bind(gl);
       gl.getUniformLocation = (program: { _uniforms?: { name: string }[] }, name: string) => {
@@ -102,9 +118,9 @@ class HeadlessCanvas extends (Canvas as new (width: number, height: number) => H
       gl.texImage2D = (...args: unknown[]) => {
         const last = args[args.length - 1] as { _image?: unknown } | undefined;
         if (last && last._image) args[args.length - 1] = last._image;
-        if (last instanceof Image) {
+        if (last instanceof ImageBase) {
           const image = last as { width: number; height: number };
-          const copy = new Canvas(image.width, image.height);
+          const copy = new CanvasBase(image.width, image.height);
           (copy.getContext("2d") as { drawImage(img: unknown, x: number, y: number): void }).drawImage(image, 0, 0);
           args[args.length - 1] = copy;
         }
@@ -164,10 +180,15 @@ class HeadlessCanvas extends (Canvas as new (width: number, height: number) => H
     if (key === "height") return this.height;
     return this.__attributes__[key];
   }
+  }
+
+  HeadlessCtor = HeadlessCanvas;
+  return HeadlessCtor;
 }
 
 export function createHeadlessCanvas(width: number, height: number): HeadlessSurface {
-  return new HeadlessCanvas(width, height);
+  const Ctor = ensureNative();
+  return new Ctor(width, height);
 }
 
 /** A colored cube, used to prove the bundled WebGL path returns a real PNG. */
