@@ -297,7 +297,7 @@ export function BotDetail() {
 
       <NearbyPlayers botId={id} />
 
-      <div className="flex shrink-0 flex-wrap items-end gap-1 border-b border-zinc-800">
+      <div className="flex shrink-0 flex-wrap-reverse items-end gap-1 border-b border-zinc-800">
         {TABS.map((item) => (
           <button
             key={item.id}

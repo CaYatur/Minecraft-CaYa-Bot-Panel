@@ -1,6 +1,6 @@
 {
   "name": "@caya/web",
-  "version": "1.0.5",
+  "version": "3.0.5",
   "private": true,
   "type": "module",
   "scripts": {

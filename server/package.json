@@ -1,6 +1,6 @@
 {
   "name": "@caya/server",
-  "version": "1.0.5",
+  "version": "3.0.5",
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
