@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useDialog } from "../lib/dialog";
 import { Link } from "react-router-dom";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
@@ -91,9 +92,15 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialog(dialogRef, () => {
+    if (!busy) onClose();
+  });
+
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-bot-title"

@@ -253,10 +253,10 @@ function FlowList({ nodes, onChange, depth, title, tone, ...props }: FlowListPro
       {nodes.map((node, index) => (
         <div key={node.id} className="relative">
           <div className="absolute top-2 right-2 z-10 flex gap-1">
-            <MiniButton disabled={index === 0} onClick={() => move(index, -1)} title="Up">
+            <MiniButton disabled={index === 0} onClick={() => move(index, -1)} title={props.t("automations.advanced.moveUp")}>
               <ChevronUp className="h-3 w-3" />
             </MiniButton>
-            <MiniButton disabled={index === nodes.length - 1} onClick={() => move(index, 1)} title="Down">
+            <MiniButton disabled={index === nodes.length - 1} onClick={() => move(index, 1)} title={props.t("automations.advanced.moveDown")}>
               <ChevronDown className="h-3 w-3" />
             </MiniButton>
             <MiniButton onClick={() => duplicate(index)} title={props.t("automations.advanced.duplicate")}>
@@ -634,7 +634,7 @@ function BotConditionEditor({ condition, onChange, ...props }: Omit<Props, "valu
             className={`${fieldCls} min-w-[12rem] flex-1`}
           />
           <select value={String(condition.match ?? (type === "task_label_is" ? "contains" : "eq"))} onChange={(event) => patch({ match: event.target.value })} className={fieldCls}>
-            <option value="eq">=</option><option value="neq">≠</option><option value="contains">contains</option><option value="startsWith">starts</option><option value="regex">regex</option>
+            <option value="eq">=</option><option value="neq">≠</option><option value="contains">{props.t("automations.advanced.matchContains")}</option><option value="startsWith">{props.t("automations.advanced.matchStarts")}</option><option value="regex">{props.t("automations.advanced.matchRegex")}</option>
           </select>
         </>
       )}
@@ -658,7 +658,7 @@ function CompareConditionEditor({ condition, onChange, t }: { condition: Extract
       </Field>
       {!noRight && (
         <Field label={t("automations.advanced.rightValue")}>
-          <input value={String(condition.right ?? "")} onChange={(event) => onChange({ ...condition, right: event.target.value })} placeholder="done" className={fieldCls} />
+          <input value={String(condition.right ?? "")} onChange={(event) => onChange({ ...condition, right: event.target.value })} placeholder={t("automations.advanced.phValue")} className={fieldCls} />
         </Field>
       )}
     </div>
@@ -704,12 +704,12 @@ function ActionEditor({ action, onChange, ...props }: Omit<Props, "value" | "onC
         {["goto", "follow", "attack", "protect", "social-follow", "social-attack", "unfollow"].includes(type) && (
           <input value={String(action.player ?? "{player}")} onChange={(event) => patch({ player: event.target.value })} placeholder="{player} / {arg0}" className={`${fieldCls} w-40`} />
         )}
-        {type === "send_chat" && <input value={String(action.text ?? "")} onChange={(event) => patch({ text: event.target.value })} placeholder="message" className={`${fieldCls} min-w-[14rem] flex-1`} />}
-        {type === "panel_notify" && <input value={String(action.message ?? "")} onChange={(event) => patch({ message: event.target.value })} placeholder="notification" className={`${fieldCls} min-w-[14rem] flex-1`} />}
+        {type === "send_chat" && <input value={String(action.text ?? "")} onChange={(event) => patch({ text: event.target.value })} placeholder={props.t("automations.advanced.phMessage")} className={`${fieldCls} min-w-[14rem] flex-1`} />}
+        {type === "panel_notify" && <input value={String(action.message ?? "")} onChange={(event) => patch({ message: event.target.value })} placeholder={props.t("automations.advanced.phNotification")} className={`${fieldCls} min-w-[14rem] flex-1`} />}
         {["report_status", "bot_status", "durum-raporu"].includes(type) && (
           <>
-            <input value={String(action.message ?? "")} onChange={(event) => patch({ message: event.target.value })} placeholder="Task: {task}" className={`${fieldCls} min-w-[14rem] flex-1`} />
-            <select value={String(action.to ?? "panel")} onChange={(event) => patch({ to: event.target.value })} className={fieldCls}><option value="panel">panel</option><option value="chat">chat</option><option value="both">both</option></select>
+            <input value={String(action.message ?? "")} onChange={(event) => patch({ message: event.target.value })} placeholder={props.t("automations.advanced.phStatus")} className={`${fieldCls} min-w-[14rem] flex-1`} />
+            <select value={String(action.to ?? "panel")} onChange={(event) => patch({ to: event.target.value })} className={fieldCls}><option value="panel">{props.t("automations.advanced.toPanel")}</option><option value="chat">{props.t("automations.advanced.toChat")}</option><option value="both">{props.t("automations.advanced.toBoth")}</option></select>
           </>
         )}
         {["collect", "collect_item", "craft", "withdraw", "mine"].includes(type) && (

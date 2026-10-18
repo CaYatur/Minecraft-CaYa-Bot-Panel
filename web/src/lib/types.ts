@@ -355,6 +355,7 @@ export interface StateSnapshot {
   rules?: unknown[];
   worldMemory?: { chests: ChestMemory[]; ores: unknown[] };
   accounts?: AuthAccount[];
+  secrets?: { encrypted: boolean; reason: string | null };
 }
 
 // ---- Faz 18 — MCP / AI agent (server modules/agent aynası) --------------------

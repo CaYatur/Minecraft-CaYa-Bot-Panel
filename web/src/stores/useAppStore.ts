@@ -36,6 +36,7 @@ interface AppState {
   /** Faz 18 — MCP / agent durumu (socket mcp:status ile canlı) */
   mcpStatus: McpStatusPayload | null;
   accounts: AuthAccount[];
+  secrets: { encrypted: boolean; reason: string | null } | null;
   msaPrompt: DeviceCodePrompt | null;
   /** auto | en | tr */
   localePreference: LocalePreference;
@@ -68,6 +69,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   supportedVersions: [],
   bots: {},
   waypoints: {},
+  secrets: null,
   worldMemory: { chests: [], ores: [] },
   chat: {},
   chatQueue: {},
@@ -120,6 +122,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ores: s.worldMemory?.ores ?? []
         },
         accounts: s.accounts ?? [],
+        secrets: s.secrets ?? null,
         snapshotLoaded: true
       };
     }),

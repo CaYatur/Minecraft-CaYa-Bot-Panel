@@ -1,7 +1,7 @@
-import * as fs from "fs";
 import * as path from "path";
 import { DATA_DIR } from "../../config/paths";
 import { loadJson, saveJson } from "../../persistence/store";
+import { readSecretJson, writeSecretJson } from "../../security/secretBox";
 import { maskWebhook, type DiscordAllow } from "./logic";
 
 export interface DiscordEvents {
@@ -87,19 +87,17 @@ function secretPath(): string {
 }
 
 function readSecrets(): { token?: string; webhookUrl?: string } {
-  try {
-    if (!fs.existsSync(secretPath())) return {};
-    return JSON.parse(fs.readFileSync(secretPath(), "utf8")) as { token?: string; webhookUrl?: string };
-  } catch {
-    return {};
-  }
+  const raw = readSecretJson<{ token?: string; webhookUrl?: string }>(secretPath(), {});
+  return raw && typeof raw === "object" ? raw : {};
 }
 
 function writeSecrets(data: { token?: string; webhookUrl?: string }): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = secretPath() + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(data), { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(tmp, secretPath());
+  writeSecretJson(secretPath(), data);
+}
+
+/** Startup migration: seals an older plaintext file. */
+export function migrateDiscordSecrets(): void {
+  readSecrets();
 }
 
 export function readDiscordSecrets(): { token: string | null; webhookUrl: string | null } {

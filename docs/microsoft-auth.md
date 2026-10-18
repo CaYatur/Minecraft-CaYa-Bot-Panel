@@ -12,6 +12,8 @@ Bots can join online-mode servers with a Microsoft account. Offline bots stay on
 6. Create a bot, or open a bot and set **Login** to **Microsoft**, then pick the account and save.
 7. Start the bot. The next panel restart reconnects with the saved cache and does not ask for a code again.
 
+If you close the dialog, or the code expires before you approve it, the bot moves to **stopped** and shows "Microsoft sign-in was cancelled" or "The Microsoft device code expired". Start it again to get a new code.
+
 If the refresh token expires, auto-reconnect stops and asks you to sign in again. It does not open a new device-code loop by itself.
 
 ## More than one account
@@ -25,8 +27,11 @@ If Microsoft accepts the account but the server rejects the join (for example th
 ## What is stored
 
 - `data/auth/accounts.json` stores the label, premium username, UUID, and skin URL. It does not store tokens.
-- Token files live in `data/auth/<accountId>/`. On Windows the folder ACL is limited to the current user. On Unix the directory is `0700` and cache files are `0600`.
-- When Electron `safeStorage` is available in the server process, cache JSON is sealed at rest. The packaged server is started with `ELECTRON_RUN_AS_NODE`, so that seal is skipped there and the user-only folder permission is the control.
+- Token caches live in `data/auth/<accountId>/` as `*-cache.json.sealed` files, encrypted with AES-256-GCM. Tokens are kept in memory while the panel runs and only the sealed form is written.
+- The data key belongs to the desktop app. Its main process keeps it in `secret-key.bin` next to the data folder, protected by the OS keychain (Electron `safeStorage`, DPAPI on Windows), and hands it to the backend at start. Copying the data folder to another Windows account or PC does not make the tokens readable.
+- Plaintext caches from older versions are encrypted on first start and the plaintext files are deleted.
+- Without a key (plain `npm run dev`, or no OS keychain) the panel shows a yellow "Secrets are not encrypted" banner and writes plain files as before.
+- On Windows the data folder ACL is limited to the current user (and SYSTEM) and inherited by the files inside. If files in the data folder become unreadable ("Access is denied"), close the panel and run `icacls "%APPDATA%\Minecraft CaYa Bot Panel\data" /reset /T /C /Q` as the same user (use `takeown /F <folder> /R /D Y` first if the reset is refused). The panel also does this itself on start. On Unix the directory is `0700` and secret files are `0600`.
 - Tokens are not sent on Socket.IO, not written to the panel log, and not included in bot config.
 
 The device code is shown only to the panel client that started the login.

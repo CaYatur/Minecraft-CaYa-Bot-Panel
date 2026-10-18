@@ -3,9 +3,11 @@ import type { MessageTree } from "../types";
 export const tr: MessageTree = {
   app: {
     name: "Minecraft CaYa Bot Panel",
-    nameShort: "CaYa Bot Panel",
-    roadmap: "Yol haritası: TODO.md",
-    principleI1: "Sistem mesajları asla oyun sohbetine yazılmaz (İ1)."
+    nameShort: "CaYa Bot Panel"
+  },
+  secrets: {
+    title: "Gizli bilgiler şifrelenmiyor.",
+    body: "Microsoft oturumları, Discord token'ı, MCP token'ı ve giriş şifreleri veri klasöründe düz dosya olarak saklanıyor. Şifrelemek için masaüstü uygulamasını, işletim sistemi anahtar deposu çalışan bir hesapta kullanın."
   },
   errorBoundary: {
     title: "Panelde bir hata oluştu",
@@ -21,6 +23,7 @@ export const tr: MessageTree = {
     settings: "Ayarlar"
   },
   connection: {
+    lostBanner: "Panel arka ucuyla bağlantı koptu. Ekrandaki veriler eski olabilir; yeniden bağlanılıyor…",
     connected: "Bağlı",
     disconnected: "Bağlantı yok",
     apiConnected: "API bağlantısı",
@@ -97,6 +100,10 @@ export const tr: MessageTree = {
     allChatEmpty: "Henüz sohbet mesajı yok"
   },
   settings: {
+    version: "Sürüm",
+    secretsStorage: "Kayıtlı gizli bilgiler",
+    secretsEncrypted: "Şifreli",
+    secretsPlain: "Şifresiz",
     title: "Ayarlar",
     botsOnline: "{online}/{total} bot çevrimiçi",
     system: "Sistem",
@@ -121,6 +128,8 @@ export const tr: MessageTree = {
     aboutLicense: "MIT lisanslı"
   },
   servers: {
+    portInvalid: "Port 1 ile 65535 arasında bir sayı olmalı.",
+    hostInvalid: "http:// ve boşluk olmadan bir alan adı veya IP girin.",
     title: "Sunucular",
     add: "+ Sunucu ekle",
     empty: "Henüz sunucu profili yok.",
@@ -537,6 +546,18 @@ export const tr: MessageTree = {
     summaryAttacked: "saldırı · {source}",
     summaryFollowOut: "takip menzil dışı (>{radius}m)",
     advanced: {
+      moveUp: "Yukarı taşı",
+      moveDown: "Aşağı taşı",
+      matchContains: "içerir",
+      matchStarts: "ile başlar",
+      matchRegex: "regex",
+      phMessage: "mesaj",
+      phNotification: "bildirim",
+      phStatus: "Görev: {task}",
+      phValue: "değer",
+      toPanel: "panel",
+      toChat: "sohbet",
+      toBoth: "ikisi",
       editorMode: "Düzenleyici modu",
       simpleMode: "Basit",
       advancedMode: "Gelişmiş akış",
@@ -1199,6 +1220,8 @@ export const tr: MessageTree = {
     failed: "Başarısız"
   },
   mcp: {
+    reveal: "Göster",
+    hide: "Gizle",
     title: "MCP / Yapay Zekâ",
     subtitle: "Botları bir yapay zekâ modeline bağla: Ollama ile oyun içi ajan veya Claude Code gibi MCP istemcileri.",
     masterEnable: "MCP sistemini etkinleştir",
@@ -1419,6 +1442,33 @@ export const tr: MessageTree = {
     uptime: "Çevrimiçi {now} sn · toplam {total} sn · oturum {sessions} · kopma {drops}",
     password: "Giriş şifresi",
     passwordSaved: "Şifre kayıtlı",
+    passwordMissing: "Kayıtlı şifre yok.",
+    passwordReplace: "Yeni şifre (kayıtlı olanın yerine geçer)",
+    removePassword: "Şifreyi sil",
+    removePasswordConfirm: "Bu botun kayıtlı giriş şifresi silinsin mi?",
+    passwordRemoved: "Şifre silindi",
+    templateNeedsPassword: "Özel komut {password} içermeli.",
+    viewStop: "3D görünümü kapat",
+    viewStarting: "Açılıyor…",
+    viewClosed: "Bot bağlantısı koptuğu ya da süre dolduğu için 3D görünüm kapandı. Yeniden açın.",
+    viewNeedsOnline: "Görünümü açmak için bot çevrimiçi olmalı.",
+    webhookInvalid: "Bir Discord webhook bağlantısı girin: https://discord.com/api/webhooks/…",
+    webhookReplace: "Yeni webhook URL'si (kayıtlı olanın yerine geçer)",
+    removeWebhook: "Webhook'u sil",
+    removeWebhookConfirm: "Kayıtlı webhook URL'si silinsin mi? Bildirimler durur.",
+    removeToken: "Bot token'ını sil",
+    removeTokenConfirm: "Kayıtlı Discord bot token'ı silinsin mi? Discord botunun bağlantısı kesilir.",
+    removed: "Silindi",
+    savedOk: "Kaydedildi",
+    idsInvalid: "Discord kimlikleri yalnızca rakam olmalı (15–22 hane).",
+    discordLoadFailed: "Discord ayarları yüklenemedi.",
+    gateway: {
+      off: "kapalı",
+      connecting: "bağlanıyor",
+      ready: "hazır",
+      error: "hata",
+      unavailable: "kullanılamıyor"
+    },
     savePassword: "Şifreyi kaydet",
     viewer: "Bot görünümü",
     viewerHelp: "Bu botun 3D sayfasını yalnızca bu bilgisayarda açar. Sekmeden ayrılınca yaklaşık 20 saniye sonra kapanır. MCP oturumu bu sayfayı açmaz. Dünyayı ekran görüntüsü ve yazı tarifiyle görür.",

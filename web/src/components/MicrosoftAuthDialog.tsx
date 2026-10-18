@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDialog } from "../lib/dialog";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
@@ -18,6 +19,20 @@ export function MicrosoftAuthDialog() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [prompt]);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Escape closes it the same way as the close button (cancels a pending code).
+  useDialog(
+    dialogRef,
+    () => {
+      if (!prompt) return;
+      if (prompt.phase !== "error") void api.post(`/api/accounts/${prompt.accountId}/cancel`).catch(() => undefined);
+      clear();
+    },
+    Boolean(prompt),
+    // The add button is disabled once the label is cleared; return to the label field.
+    { returnFallback: () => document.getElementById("ms-account-label") }
+  );
 
   if (!prompt) return null;
 
@@ -60,6 +75,7 @@ export function MicrosoftAuthDialog() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="msa-title"

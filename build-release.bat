@@ -45,7 +45,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] npm run dist:win  (build + NSIS + portable^)
+echo [2/4] npm run dist:win  (build + NSIS Setup + SHA256^)
 echo.
 call npm run dist:win
 if errorlevel 1 (

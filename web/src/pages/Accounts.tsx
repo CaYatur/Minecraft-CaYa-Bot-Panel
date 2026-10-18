@@ -11,6 +11,7 @@ function headUrl(account: AuthAccount): string | null {
 
 export function Accounts() {
   const accounts = useAppStore((s) => s.accounts);
+  const snapshotLoaded = useAppStore((s) => s.snapshotLoaded);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const setMsaPrompt = useAppStore((s) => s.setMsaPrompt);
   const toast = useAppStore((s) => s.toast);
@@ -66,6 +67,7 @@ export function Accounts() {
         <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-400">{t("accounts.label")}</span>
           <input
+            id="ms-account-label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             maxLength={32}
@@ -82,7 +84,9 @@ export function Accounts() {
         </button>
       </form>
 
-      {accounts.length === 0 ? (
+      {!snapshotLoaded ? (
+        <p className="text-sm text-zinc-500" aria-busy="true">{t("common.loading")}</p>
+      ) : accounts.length === 0 ? (
         <div className="rounded-xl border border-dashed border-zinc-800 px-4 py-8 text-center text-sm text-zinc-500">
           {t("accounts.empty")}
         </div>

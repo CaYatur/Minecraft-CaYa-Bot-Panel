@@ -5,10 +5,16 @@ import * as path from "path";
 import { Server as SocketServer } from "socket.io";
 import { createRestRouter, restErrorHandler } from "./api/rest";
 import { setupSocket } from "./api/socket";
-import { WEB_DIST_DIR } from "./config/paths";
+import { DATA_DIR, WEB_DIST_DIR } from "./config/paths";
 import { BotManager } from "./core/BotManager";
 import { AgentService } from "./modules/agent";
-import { createMcpRouter } from "./modules/agent/mcpHttp";
+import { createMcpRouter, isBrowserNavigation } from "./modules/agent/mcpHttp";
+import { migrateLoginSecrets } from "./modules/alwaysOn/secrets";
+import { accounts } from "./modules/auth/accounts";
+import { migrateDiscordSecrets } from "./modules/discord/store";
+import { httpGuard, parseAllowedHosts, socketGuard, type GuardOptions } from "./security/httpGuard";
+import { hardenDataDir } from "./security/permissions";
+import { initSecretBox } from "./security/secretBox";
 import { createLogger } from "./utils/logger";
 
 const PORT = Number(process.env.CAYA_PORT || 3001);
@@ -29,7 +35,7 @@ function readSupportedVersions(): string[] {
   return ["1.8.9", "1.12.2", "1.16.4", "1.17.1", "1.18.2", "1.19.4", "1.20.4", "1.21.1"];
 }
 
-function main() {
+async function main() {
   // İ4 safek ağı: tek bir botun beklenmedik hatası tüm paneli düşürmemeli.
   // Hata yutulmaz — panel loguna ERROR olarak düşer.
   process.on("uncaughtException", (err) => {
@@ -39,7 +45,20 @@ function main() {
     log.error("Unhandled promise rejection (process kept alive)", String(reason));
   });
 
+  // Secrets must be readable before any store loads, so wait for the data key first.
+  await initSecretBox();
+  // Finish before stores write, so no rename races a running icacls.
+  if (process.env.CAYA_SKIP_ACL !== "1") await hardenDataDir(DATA_DIR);
+  try {
+    accounts.load();
+    migrateDiscordSecrets();
+    migrateLoginSecrets();
+  } catch (err) {
+    log.error("Secret migration failed", String(err));
+  }
+
   const supportedVersions = readSupportedVersions();
+  const guard: GuardOptions = { bindHost: HOST, allowedHosts: parseAllowedHosts(process.env.CAYA_ALLOWED_HOSTS) };
 
   const manager = new BotManager();
   manager.boot();
@@ -50,6 +69,8 @@ function main() {
 
   const app = express();
   // şema yükleme base64 for büyük body; diğer rotalar da aynı limit (localhost panel)
+  app.disable("x-powered-by");
+  app.use(["/api", "/mcp", "/socket.io"], httpGuard(guard));
   app.use(express.json({ limit: "32mb" }));
   app.use("/api", createRestRouter(manager, supportedVersions, agents));
   app.use("/api", restErrorHandler);
@@ -60,15 +81,24 @@ function main() {
   if (fs.existsSync(path.join(WEB_DIST_DIR, "index.html"))) {
     app.use(express.static(WEB_DIST_DIR));
     app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io") || req.path.startsWith("/mcp")) return next();
+      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io")) return next();
+      // /mcp is both the MCP endpoint and a panel page; only browser navigations get the page.
+      if (req.path.startsWith("/mcp") && !isBrowserNavigation(req)) return next();
       res.sendFile(path.join(WEB_DIST_DIR, "index.html"));
     });
     log.info("Compiled panel found — serving statically");
   }
 
   const httpServer = http.createServer(app);
-  const io = new SocketServer(httpServer);
+  const io = new SocketServer(httpServer, { allowRequest: socketGuard(guard) });
   setupSocket(io, manager, supportedVersions, agents);
+
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    // Without this the error is swallowed by the uncaughtException guard and
+    // the process lingers without a listening socket.
+    log.error(`Could not listen on ${HOST}:${PORT}`, err.code === "EADDRINUSE" ? "port already in use" : String(err));
+    process.exit(1);
+  });
 
   httpServer.listen(PORT, HOST, () => {
     log.success(`Minecraft CaYa Bot Panel API ready: http://${HOST}:${PORT} (mineflayer versions: ${supportedVersions.length})`);
@@ -82,6 +112,9 @@ function main() {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // Forked by the desktop app: exit with it instead of staying behind as an
+  // orphan that keeps the port and the bots' sessions open.
+  if (typeof process.send === "function") process.on("disconnect", shutdown);
 }
 
-main();
+void main();

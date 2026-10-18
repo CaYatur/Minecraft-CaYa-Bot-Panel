@@ -17,6 +17,7 @@ import {
   X,
   Zap
 } from "lucide-react";
+import { maskSecret } from "../lib/secrets";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { EV } from "../lib/events";
@@ -199,13 +200,39 @@ function NumField({
   );
 }
 
-function CopyLine({ value, copyLabel, copiedLabel }: { value: string; copyLabel: string; copiedLabel: string }) {
+function CopyLine({
+  value,
+  copyLabel,
+  copiedLabel,
+  masked,
+  revealLabel,
+  hideLabel
+}: {
+  value: string;
+  copyLabel: string;
+  copiedLabel: string;
+  /** Text shown instead of `value` until the user reveals it (secrets). */
+  masked?: string;
+  revealLabel?: string;
+  hideLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   return (
     <div className="flex items-center gap-2">
-      <code className="mono flex-1 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/70 px-2.5 py-1.5 text-[11px] whitespace-nowrap text-emerald-300/90">
-        {value}
+      <code className="mono min-w-0 flex-1 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/70 px-2.5 py-1.5 text-[11px] whitespace-nowrap text-emerald-300/90">
+        {masked && !revealed ? masked : value}
       </code>
+      {masked && (
+        <button
+          type="button"
+          aria-pressed={revealed}
+          onClick={() => setRevealed((v) => !v)}
+          className="shrink-0 rounded-lg bg-zinc-800 px-2 py-1.5 text-[11px] text-zinc-300 hover:bg-zinc-700"
+        >
+          {revealed ? hideLabel : revealLabel}
+        </button>
+      )}
       <button
         type="button"
         onClick={() => {
@@ -348,7 +375,14 @@ function EndpointCard({ status, patch }: { status: McpStatusPayload; patch: (p: 
         </div>
         <div>
           <div className="mb-1 text-[11px] text-zinc-500">{t("mcp.claudeCmd")}</div>
-          <CopyLine value={status.claudeCommand} copyLabel={t("mcp.copy")} copiedLabel={t("mcp.copied")} />
+          <CopyLine
+            value={status.claudeCommand}
+            masked={s.mcpServer.requireToken && s.mcpServer.token ? maskSecret(status.claudeCommand, s.mcpServer.token) : undefined}
+            revealLabel={t("mcp.reveal")}
+            hideLabel={t("mcp.hide")}
+            copyLabel={t("mcp.copy")}
+            copiedLabel={t("mcp.copied")}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-zinc-800/70 pt-3">
@@ -373,7 +407,14 @@ function EndpointCard({ status, patch }: { status: McpStatusPayload; patch: (p: 
           )}
         </div>
         {s.mcpServer.requireToken && (
-          <CopyLine value={`Authorization: Bearer ${s.mcpServer.token}`} copyLabel={t("mcp.copy")} copiedLabel={t("mcp.copied")} />
+          <CopyLine
+            value={`Authorization: Bearer ${s.mcpServer.token}`}
+            masked={maskSecret(`Authorization: Bearer ${s.mcpServer.token}`, s.mcpServer.token)}
+            revealLabel={t("mcp.reveal")}
+            hideLabel={t("mcp.hide")}
+            copyLabel={t("mcp.copy")}
+            copiedLabel={t("mcp.copied")}
+          />
         )}
         <p className="text-[11px] text-zinc-600">{t("mcp.tokenHint")}</p>
       </div>

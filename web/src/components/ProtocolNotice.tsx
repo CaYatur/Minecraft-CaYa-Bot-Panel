@@ -173,7 +173,7 @@ export function ProtocolNotice() {
   };
 
   return (
-    <div className={`sticky top-0 z-30 border-b px-4 py-2 text-sm ${tone}`}>
+    <div className={`border-b px-4 py-2 text-sm ${tone}`}>
       <div className="flex flex-wrap items-center gap-3">
         <p className="min-w-0 flex-1 leading-snug">{text}</p>
         {status.offerInstall && !status.restartRequired && (

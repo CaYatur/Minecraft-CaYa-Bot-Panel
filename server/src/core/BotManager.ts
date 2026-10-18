@@ -1,10 +1,11 @@
+import { secretStatus } from "../security/secretBox";
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
 import { antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec } from "../modules/alwaysOn/antiAfk";
 import { loginSendMode, normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
 import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
-import { stopAllViews, stopView } from "../modules/view/session";
+import { stopAllViews, stopView, stopViewIfStale } from "../modules/view/session";
 import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
 import { RuleEngine } from "../modules/automation/RuleEngine";
 import { WorldMemory } from "../modules/world/memory";
@@ -62,7 +63,9 @@ export class BotManager extends EventEmitter {
     });
     accounts.on("cancelled", (info: { accountId: string; botId?: string }) => {
       const inst = info.botId ? this.bots.get(info.botId) : undefined;
-      if (inst && inst.config.accountId === info.accountId && inst.status === "connecting") inst.stop();
+      if (inst && inst.config.accountId === info.accountId && inst.status !== "online" && inst.status !== "stopped") {
+        inst.stopForAuth("auth.cancelled");
+      }
     });
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
@@ -124,7 +127,11 @@ export class BotManager extends EventEmitter {
   updateServer(id: string, patch: Partial<Omit<ServerProfile, "id">>): ServerProfile {
     const profile = this.servers.find((s) => s.id === id);
     if (!profile) throw new PanelError("Server profile not found.", 404);
-    if (patch.host !== undefined) profile.host = String(patch.host).trim();
+    if (patch.host !== undefined) {
+      const host = String(patch.host).trim();
+      if (!host) throw new PanelError("Server address is required.");
+      profile.host = host;
+    }
     if (patch.port !== undefined) profile.port = clampPort(patch.port);
     if (patch.version !== undefined) profile.version = normalizeVersion(patch.version);
     if (patch.name !== undefined) profile.name = String(patch.name).trim() || profile.name;
@@ -328,6 +335,7 @@ export class BotManager extends EventEmitter {
       if (list.length > 0) waypoints[s.id] = list;
     }
     return {
+      secrets: secretStatus(),
       servers: this.servers,
       bots: [...this.bots.values()].map((b) => b.getSnapshot()),
       waypoints,
@@ -413,7 +421,7 @@ export class BotManager extends EventEmitter {
           accounts.prepareCache(accountId);
           return {
             cacheKey: accounts.cacheKey(accountId),
-            profilesFolder: accounts.cacheDir(accountId),
+            profilesFolder: accounts.cacheFactory(accountId),
             hasCache: accounts.hasCache(accountId)
           };
         },
@@ -431,6 +439,10 @@ export class BotManager extends EventEmitter {
         finishPrompt: (accountId, result) => accounts.finishPrompt(accountId, result)
       }
     );
+    // A viewer belongs to one mineflayer connection; close it when that connection ends.
+    inst.on("status", (p: { status?: string }) => {
+      if (p?.status !== "online") stopViewIfStale(inst.config.id, p?.status === "connecting" ? null : inst.bot);
+    });
     // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)
     inst.on(
       "deathAt",

@@ -1,5 +1,4 @@
 import { EventEmitter } from "events";
-import { execFile } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { Authflow, Titles } from "prismarine-auth";
@@ -8,6 +7,9 @@ import { PanelError } from "../../core/errors";
 import { newId } from "../../types";
 import { createLogger } from "../../utils/logger";
 import { redactSecrets } from "../../utils/redact";
+import { restrictToCurrentUser } from "../../security/permissions";
+import { deleteSecretFile, migratePlaintextIn, readSecretJson, SEALED_SUFFIX } from "../../security/secretBox";
+import { encryptedCacheFactory, forgetCachedTokens } from "./encryptedCache";
 import { AUTH_ERRORS, authEnglish, classifyAuthError, type AuthErrorCode } from "./messages";
 
 const log = createLogger("auth");
@@ -80,23 +82,7 @@ function emptyCode(accountId: string): DeviceCodeView {
   };
 }
 
-function safeStorage(): {
-  isEncryptionAvailable?: () => boolean;
-  encryptString?: (s: string) => Buffer;
-  decryptString?: (b: Buffer) => string;
-} | null {
-  try {
-    // Packaged server is forked with ELECTRON_RUN_AS_NODE, so this is usually absent.
-    // When the module is actually available, cache JSON is sealed at rest.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require("electron") as { safeStorage?: ReturnType<typeof safeStorage> };
-    const api = electron.safeStorage;
-    if (!api?.isEncryptionAvailable?.() || !api.encryptString || !api.decryptString) return null;
-    return api;
-  } catch {
-    return null;
-  }
-}
+const CACHE_FILE = /[_-](mca|live|msal|xbl|mcs|bed|pfb)-cache\.json$/;
 
 export class AccountStore extends EventEmitter {
   private accounts: StoredAccount[] = [];
@@ -145,7 +131,10 @@ export class AccountStore extends EventEmitter {
       log.error("Could not read accounts.json, starting empty", redactSecrets(String(err)));
       this.accounts = [];
     }
-    for (const row of this.accounts) row.hasCache = this.cachePresent(row.id);
+    for (const row of this.accounts) {
+      this.seal(row.id);
+      row.hasCache = this.cachePresent(row.id);
+    }
     this.persist();
   }
 
@@ -264,6 +253,7 @@ export class AccountStore extends EventEmitter {
   private beginFlow(accountId: string, socketId?: string, botId?: string): Promise<DeviceCodeView> {
     this.unseal(accountId);
     const dir = this.cacheDir(accountId);
+    fs.mkdirSync(dir, { recursive: true });
     const preserveCache = this.cachePresent(accountId);
     this.dismissed.delete(accountId);
     this.pending.set(accountId, {
@@ -289,7 +279,7 @@ export class AccountStore extends EventEmitter {
         }
       };
       const timer = setTimeout(() => fail("auth.timeout"), 30_000);
-      const flow = new Authflow(accountId, dir, FLOW_OPTIONS, (code) => {
+      const flow = new Authflow(accountId, encryptedCacheFactory(dir), FLOW_OPTIONS, (code) => {
         const pending = this.pending.get(accountId);
         if (!pending || pending.aborted || this.dismissed.has(accountId)) return;
         const view: DeviceCodeView = {
@@ -480,19 +470,19 @@ export class AccountStore extends EventEmitter {
     this.unseal(accountId);
   }
 
-  /** Seal after the bot process is done writing tokens. No-op without Electron safeStorage. */
+  /**
+   * Encrypts any plaintext token cache left in the account folder (older
+   * versions, or a run without a key). Live writes already go through the
+   * encrypted cache, so this is a migration step.
+   */
   seal(accountId: string) {
-    const api = safeStorage();
-    if (!api?.encryptString) return;
-    const dir = this.cacheDir(accountId);
-    if (!fs.existsSync(dir)) return;
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith(".json")) continue;
-      const file = path.join(dir, name);
-      const raw = fs.readFileSync(file);
-      fs.writeFileSync(file + ".enc", api.encryptString(raw.toString("utf8")));
-      fs.rmSync(file, { force: true });
-    }
+    migratePlaintextIn(this.cacheDir(accountId), CACHE_FILE);
+  }
+
+  /** Cache factory for prismarine-auth / mineflayer `profilesFolder`. */
+  cacheFactory(accountId: string) {
+    this.must(accountId);
+    return encryptedCacheFactory(this.cacheDir(accountId));
   }
 
   hasCache(accountId: string): boolean {
@@ -506,18 +496,8 @@ export class AccountStore extends EventEmitter {
   }
 
   private unseal(accountId: string) {
-    const api = safeStorage();
-    if (!api?.decryptString) return;
-    const dir = this.cacheDir(accountId);
-    if (!fs.existsSync(dir)) return;
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith(".json.enc")) continue;
-      const sealed = path.join(dir, name);
-      const plain = sealed.slice(0, -4);
-      if (fs.existsSync(plain)) continue;
-      const decoded = api.decryptString(fs.readFileSync(sealed));
-      fs.writeFileSync(plain, decoded, { encoding: "utf8", mode: 0o600 });
-    }
+    // Name kept for call sites: reading now happens in memory, so this only migrates.
+    this.seal(accountId);
   }
 
   private clearAuthError(accountId: string) {
@@ -553,19 +533,20 @@ export class AccountStore extends EventEmitter {
   private cachePresent(accountId: string): boolean {
     const dir = this.cacheDir(accountId);
     if (!fs.existsSync(dir)) return false;
-    return fs.readdirSync(dir).some((name) => {
-      if (!/[_-](mca|live|msal|xbl)-cache\.json(\.enc)?$/.test(name)) return false;
-      try {
-        if (name.endsWith(".enc")) return fs.statSync(path.join(dir, name)).size > 16;
-        const parsed = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as unknown;
-        return Boolean(parsed && typeof parsed === "object" && Object.keys(parsed as object).length > 0);
-      } catch {
-        return false;
-      }
+    const names = new Set(
+      fs.readdirSync(dir).map((name) => (name.endsWith(SEALED_SUFFIX) ? name.slice(0, -SEALED_SUFFIX.length) : name))
+    );
+    return [...names].some((name) => {
+      if (!CACHE_FILE.test(name)) return false;
+      const parsed = readSecretJson<unknown>(path.join(dir, name), null);
+      return Boolean(parsed && typeof parsed === "object" && Object.keys(parsed as object).length > 0);
     });
   }
 
   private wipeCache(accountId: string) {
+    const dir = this.cacheDir(accountId);
+    forgetCachedTokens(dir);
+    if (fs.existsSync(dir)) for (const name of fs.readdirSync(dir)) deleteSecretFile(path.join(dir, name.replace(/\.sealed$/, "")));
     fs.rmSync(this.cacheDir(accountId), { recursive: true, force: true });
   }
 
@@ -584,24 +565,7 @@ export class AccountStore extends EventEmitter {
   }
 
   private lockDown(dir: string) {
-    try {
-      if (process.platform === "win32") {
-        const user = process.env.USERNAME;
-        if (!user) return;
-        execFile(
-          "icacls",
-          [dir, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`],
-          { windowsHide: true },
-          () => {
-            /* user-only ACL is best effort */
-          }
-        );
-        return;
-      }
-      fs.chmodSync(dir, 0o700);
-    } catch (err) {
-      log.warn("Could not restrict auth cache permissions", redactSecrets(String(err)));
-    }
+    restrictToCurrentUser(dir);
   }
 
   private persist() {

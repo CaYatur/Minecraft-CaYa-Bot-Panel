@@ -10,6 +10,7 @@ import { useAppStore } from "../stores/useAppStore";
 
 export function Dashboard() {
   const bots = useAppStore((s) => s.bots);
+  const snapshotLoaded = useAppStore((s) => s.snapshotLoaded);
   const servers = useAppStore((s) => s.servers);
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
@@ -57,7 +58,9 @@ export function Dashboard() {
         </div>
       </div>
 
-      {list.length === 0 ? (
+      {!snapshotLoaded ? (
+        <p className="text-sm text-zinc-500" aria-busy="true">{t("common.loading")}</p>
+      ) : list.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 text-zinc-500">
           <BotLogo className="h-12 w-12 opacity-70" />
           <p className="text-sm">{t("dashboard.empty")}</p>

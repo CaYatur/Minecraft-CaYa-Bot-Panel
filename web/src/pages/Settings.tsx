@@ -10,6 +10,7 @@ export function Settings() {
   const bots = useAppStore((s) => s.bots);
   const servers = useAppStore((s) => s.servers);
   const connected = useAppStore((s) => s.connected);
+  const secrets = useAppStore((s) => s.secrets);
   const { t, preference, locale, systemLocale, setLocalePreference } = useI18n();
   const list = Object.values(bots);
   const onlineCount = list.filter((b) => b.status === "online").length;
@@ -93,6 +94,16 @@ export function Settings() {
             <li className="flex items-center justify-between gap-2">
               <span className="text-zinc-400">{t("settings.serverProfiles")}</span>
               <span className="mono text-zinc-200">{servers.length}</span>
+            </li>
+            <li className="flex items-center justify-between gap-2">
+              <span className="text-zinc-400">{t("settings.version")}</span>
+              <span className="mono text-zinc-200">v{__APP_VERSION__}</span>
+            </li>
+            <li className="flex items-center justify-between gap-2">
+              <span className="text-zinc-400">{t("settings.secretsStorage")}</span>
+              <span className={secrets?.encrypted ? "text-emerald-300" : "text-amber-300"}>
+                {secrets == null ? t("common.unknown") : secrets.encrypted ? t("settings.secretsEncrypted") : t("settings.secretsPlain")}
+              </span>
             </li>
             <li className="flex items-center justify-between gap-2">
               <span className="text-zinc-400">{t("settings.listening")}</span>

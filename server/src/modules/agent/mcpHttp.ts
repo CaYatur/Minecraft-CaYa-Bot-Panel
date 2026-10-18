@@ -29,6 +29,14 @@ interface JsonRpcMsg {
 
 const log = createLogger("mcp");
 
+/** GET that asks for HTML and carries no MCP session or stream headers. */
+export function isBrowserNavigation(req: { headers: Record<string, string | string[] | undefined> }): boolean {
+  const accept = String(req.headers.accept ?? "").toLowerCase();
+  if (!accept.includes("text/html")) return false;
+  if (accept.includes("text/event-stream")) return false;
+  return !req.headers["mcp-session-id"] && !req.headers["mcp-protocol-version"];
+}
+
 export function createMcpRouter(manager: BotManager, agents: AgentService): Router {
   const r = Router();
   const sessions = new Set<string>();
@@ -80,7 +88,10 @@ export function createMcpRouter(manager: BotManager, agents: AgentService): Rout
   });
 
   // no server-initiated SSE stream — spec allows 405 here
-  r.get("/", (_req, res) => {
+  r.get("/", (req, res, next) => {
+    // A browser opening or reloading the panel's /mcp page is a navigation,
+    // not an MCP client: hand it to the SPA fallback.
+    if (isBrowserNavigation(req)) return next();
     res.status(405).json(rpcError(null, -32000, "SSE stream not offered; use POST."));
   });
   r.delete("/", (_req, res) => {

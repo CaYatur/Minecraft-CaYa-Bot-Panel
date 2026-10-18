@@ -3,9 +3,11 @@ import type { MessageTree } from "../types";
 export const en: MessageTree = {
   app: {
     name: "Minecraft CaYa Bot Panel",
-    nameShort: "CaYa Bot Panel",
-    roadmap: "Roadmap: TODO.md",
-    principleI1: "System messages are never written to game chat (I1)."
+    nameShort: "CaYa Bot Panel"
+  },
+  secrets: {
+    title: "Secrets are not encrypted.",
+    body: "Microsoft sign-ins, the Discord token, the MCP token and login passwords are stored as plain files in the data folder. Use the desktop app on an account with a working OS keychain to encrypt them."
   },
   errorBoundary: {
     title: "An error occurred in the panel",
@@ -21,6 +23,7 @@ export const en: MessageTree = {
     settings: "Settings"
   },
   connection: {
+    lostBanner: "Connection to the panel backend was lost. Data on screen may be out of date; reconnecting…",
     connected: "Connected",
     disconnected: "Disconnected",
     apiConnected: "API connection",
@@ -97,6 +100,10 @@ export const en: MessageTree = {
     allChatEmpty: "No chat messages yet"
   },
   settings: {
+    version: "Version",
+    secretsStorage: "Stored secrets",
+    secretsEncrypted: "Encrypted",
+    secretsPlain: "Not encrypted",
     title: "Settings",
     botsOnline: "{online}/{total} bots online",
     system: "System",
@@ -121,6 +128,8 @@ export const en: MessageTree = {
     aboutLicense: "MIT licensed"
   },
   servers: {
+    portInvalid: "Port must be a number from 1 to 65535.",
+    hostInvalid: "Enter a host name or IP without http:// or spaces.",
     title: "Servers",
     add: "+ Add server",
     empty: "No server profiles yet.",
@@ -538,6 +547,18 @@ export const en: MessageTree = {
     summaryAttacked: "attack · {source}",
     summaryFollowOut: "follow out of range (>{radius}m)",
     advanced: {
+      moveUp: "Move up",
+      moveDown: "Move down",
+      matchContains: "contains",
+      matchStarts: "starts with",
+      matchRegex: "regex",
+      phMessage: "message",
+      phNotification: "notification",
+      phStatus: "Task: {task}",
+      phValue: "value",
+      toPanel: "panel",
+      toChat: "chat",
+      toBoth: "both",
       editorMode: "Editor mode",
       simpleMode: "Simple",
       advancedMode: "Advanced flow",
@@ -1199,6 +1220,8 @@ export const en: MessageTree = {
     failed: "Failed"
   },
   mcp: {
+    reveal: "Show",
+    hide: "Hide",
     title: "MCP / AI",
     subtitle: "Connect bots to an AI model: an in-game agent via Ollama, or MCP clients like Claude Code.",
     masterEnable: "Enable MCP system",
@@ -1419,6 +1442,33 @@ export const en: MessageTree = {
     uptime: "Online {now}s · total {total}s · sessions {sessions} · drops {drops}",
     password: "Login password",
     passwordSaved: "Password saved",
+    passwordMissing: "No password saved.",
+    passwordReplace: "New password (replaces the saved one)",
+    removePassword: "Remove password",
+    removePasswordConfirm: "Remove the saved login password for this bot?",
+    passwordRemoved: "Password removed",
+    templateNeedsPassword: "A custom command must contain {password}.",
+    viewStop: "Close 3D view",
+    viewStarting: "Opening…",
+    viewClosed: "The 3D view closed because the bot disconnected or the view timed out. Open it again.",
+    viewNeedsOnline: "The bot must be online to open the view.",
+    webhookInvalid: "Enter a Discord webhook link: https://discord.com/api/webhooks/…",
+    webhookReplace: "New webhook URL (replaces the saved one)",
+    removeWebhook: "Remove webhook",
+    removeWebhookConfirm: "Remove the saved webhook URL? Notifications stop.",
+    removeToken: "Remove bot token",
+    removeTokenConfirm: "Remove the saved Discord bot token? The Discord bot disconnects.",
+    removed: "Removed",
+    savedOk: "Saved",
+    idsInvalid: "Discord IDs must be digits only (15–22 digits).",
+    discordLoadFailed: "Could not load Discord settings.",
+    gateway: {
+      off: "off",
+      connecting: "connecting",
+      ready: "ready",
+      error: "error",
+      unavailable: "unavailable"
+    },
     savePassword: "Save password",
     viewer: "Bot view",
     viewerHelp: "Opens a 3D page of this bot on this computer only. It closes about 20 seconds after you leave this tab. An MCP session does not open this page. It sees the world through the POV screenshot and the text description.",
