@@ -17,6 +17,7 @@ export const tr: MessageTree = {
     schematics: "Yapı şemaları",
     mcp: "MCP / Yapay Zekâ",
     servers: "Sunucular",
+    accounts: "Hesaplar",
     settings: "Ayarlar"
   },
   connection: {
@@ -1293,5 +1294,54 @@ export const tr: MessageTree = {
     step2: "2a. Oyun içi ajan: Ollama kur (ollama.com), tool destekli model indir (ör. `ollama pull qwen2.5`), modeli seç.",
     step3: "2b. Claude Code: aşağıdaki komutu terminale yapıştır — botlar Claude'un araçları olur.",
     step4: "3. Bot Ajanları'ndan en az bir botta Ajan'ı aç; Ajan Sohbeti'nden konuş veya oyun içinden bot adıyla seslen."
+  },
+  accounts: {
+    title: "Hesaplar",
+    intro: "Microsoft hesapları botun online-mode sunuculara girmesini sağlar. Jetonlar bu bilgisayarda kalır; panelde, kayıtlarda veya dışa aktarımda görünmez. Offline botlar eskisi gibi çalışır.",
+    label: "Etiket",
+    labelPlaceholder: "Ana hesap",
+    add: "Microsoft hesabı ekle",
+    empty: "Henüz Microsoft hesabı yok.",
+    signIn: "Giriş yap",
+    rename: "Yeniden adlandır",
+    signOut: "Çıkış yap",
+    remove: "Kaldır",
+    removeConfirm: "{name} kaldırılsın ve kayıtlı giriş silinsin mi?",
+    linked: "Kullanan botlar: {names}",
+    unlinked: "Bir bota atanmamış",
+    codeTitle: "Microsoft girişi",
+    codeHelp: "Bağlantıyı aç, kodu gir ve Minecraft erişimini onayla. Panel şifreni görmez.",
+    codeExpires: "Kalan süre {time}",
+    codeExpired: "Kodun süresi doldu. Girişi yeniden başlat.",
+    copy: "Kodu kopyala",
+    copied: "Kopyalandı",
+    openLink: "Bağlantıyı aç",
+    cancel: "İptal",
+    authMode: "Giriş",
+    offline: "Offline",
+    microsoft: "Microsoft",
+    pickAccount: "Microsoft hesabı",
+    noAccounts: "Önce bir hesap ekle",
+    premium: "Premium",
+    status: {
+      none: "Giriş yok",
+      cached: "Giriş yapıldı",
+      pending: "Kod bekleniyor",
+      error: "İlgilenmen gerek"
+    }
+  },
+  auth: {
+    timeout: "Microsoft cihaz kodu döndürmedi. Ağı kontrol edip yeniden dene.",
+    expired: "Microsoft kodunun süresi doldu. Girişi yeniden başlat.",
+    cancelled: "Microsoft girişi iptal edildi.",
+    noLicense: "Bu Microsoft hesabında Minecraft Java lisansı yok (veya Xbox profili eksik).",
+    child: "Microsoft bu hesabı engelledi (çocuk hesabı veya yaş sınırı).",
+    rateLimit: "Microsoft girişi hız sınırı uyguladı. Birkaç dakika bekleyip yeniden dene.",
+    network: "Microsoft'a bağlanırken ağ hatası oluştu. Bot giriş döngüsünde bırakılmadı.",
+    reauth: "Microsoft oturumunun süresi doldu. Hesaplar'dan yeniden giriş yap. Otomatik yeniden bağlanma yeni kod açmaz.",
+    mismatchOffline: "Bu sunucu Microsoft hesabı istiyor. Botu Microsoft girişine alıp oturum aç.",
+    mismatchPremium: "Bu Microsoft hesabı için premium doğrulama başarısız. Hesaplar'dan yeniden giriş yap.",
+    sessionRejected: "Sunucu Microsoft oturumunu reddetti. Hesaplar'dan yeniden giriş yap.",
+    failed: "Microsoft girişi başarısız oldu."
   }
 };

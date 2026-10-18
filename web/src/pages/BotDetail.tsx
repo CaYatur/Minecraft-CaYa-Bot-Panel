@@ -39,6 +39,7 @@ export function BotDetail() {
   const navigate = useNavigate();
   const bot = useAppStore((s) => s.bots[id]);
   const servers = useAppStore((s) => s.servers);
+  const accounts = useAppStore((s) => s.accounts);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const toast = useAppStore((s) => s.toast);
   const { t, locale } = useI18n();
@@ -46,6 +47,8 @@ export function BotDetail() {
   /** yetkili oyuncular — virgülle ayrılmış metin */
   const [authText, setAuthText] = useState("");
   const [authSaving, setAuthSaving] = useState(false);
+  const [loginMode, setLoginMode] = useState<"offline" | "microsoft">("offline");
+  const [accountId, setAccountId] = useState("");
 
   const TABS: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
     { id: "chat", label: t("botDetail.tabs.chat"), icon: MessageSquare },
@@ -62,7 +65,9 @@ export function BotDetail() {
   useEffect(() => {
     if (!bot) return;
     setAuthText((bot.config.authorizedPlayers ?? []).join(", "));
-  }, [id, bot?.config.authorizedPlayers?.join(",")]);
+    setLoginMode(bot.config.auth === "microsoft" ? "microsoft" : "offline");
+    setAccountId(bot.config.accountId ?? "");
+  }, [id, bot?.config.authorizedPlayers?.join(","), bot?.config.auth, bot?.config.accountId]);
 
   if (!bot) {
     return (
@@ -136,7 +141,24 @@ export function BotDetail() {
     }
   };
 
-  const problem = bot.runtime.kickReason || bot.runtime.lastError;
+  const problem = bot.runtime.errorCode
+    ? t(bot.runtime.errorCode)
+    : bot.runtime.kickReason || bot.runtime.lastError;
+  const linked = accounts.find((row) => row.id === bot.config.accountId);
+  const head = linked?.uuid ? `https://mc-heads.net/avatar/${linked.uuid}/32` : null;
+
+  const saveLogin = async () => {
+    try {
+      await api.patch(`/api/bots/${id}`, {
+        auth: loginMode,
+        accountId: loginMode === "microsoft" ? accountId : null
+      });
+      await refresh();
+      toast("success", t("common.save"));
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div className="flex min-h-full flex-col gap-3 p-4">
@@ -144,7 +166,11 @@ export function BotDetail() {
         <Link to="/" className="text-zinc-500 hover:text-zinc-300">
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        <h1 className="text-xl font-bold text-zinc-100">{bot.config.username}</h1>
+        {head && <img src={head} alt="" width={28} height={28} className="h-7 w-7 rounded bg-zinc-800" />}
+        <h1 className="text-xl font-bold text-zinc-100">{linked?.username || bot.config.username}</h1>
+        {bot.config.auth === "microsoft" && (
+          <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] text-indigo-300">{t("accounts.premium")}</span>
+        )}
         <StatusBadge status={bot.status} />
         <span className="text-xs text-zinc-500">
           {server
@@ -184,6 +210,43 @@ export function BotDetail() {
       {problem && bot.status !== "online" && (
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{problem}</div>
       )}
+
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("accounts.authMode")}
+          <select
+            value={loginMode}
+            onChange={(e) => setLoginMode(e.target.value === "microsoft" ? "microsoft" : "offline")}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+          >
+            <option value="offline">{t("accounts.offline")}</option>
+            <option value="microsoft">{t("accounts.microsoft")}</option>
+          </select>
+        </label>
+        {loginMode === "microsoft" && (
+          <label className="flex min-w-[12rem] flex-col gap-1 text-xs text-zinc-400">
+            {t("accounts.pickAccount")}
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+            >
+              <option value="">{t("accounts.pickAccount")}</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.username || account.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button type="button" onClick={() => void saveLogin()} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500">
+          {t("common.save")}
+        </button>
+        <Link to="/accounts" className="text-xs text-indigo-300 hover:underline">
+          {t("accounts.title")}
+        </Link>
+      </div>
 
       <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
         <StatBar

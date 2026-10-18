@@ -10,9 +10,14 @@ import { StatusBadge } from "./StatusBadge";
 
 export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProfile }) {
   const toast = useAppStore((s) => s.toast);
+  const accounts = useAppStore((s) => s.accounts);
   const { t, locale } = useI18n();
+  const account = accounts.find((row) => row.id === bot.config.accountId);
+  const head = account?.uuid ? `https://mc-heads.net/avatar/${account.uuid}/32` : null;
   const running = bot.status !== "stopped";
-  const problem = bot.runtime.kickReason || bot.runtime.lastError;
+  const problem = bot.runtime.errorCode
+    ? t(bot.runtime.errorCode)
+    : bot.runtime.kickReason || bot.runtime.lastError;
   // ana envanter + hotbar doluluk (36 slot) — 30+ olunca kartta uyarı rozeti
   let invUsed: number | null = null;
   if (bot.inventory) {
@@ -32,7 +37,15 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
     <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 transition-colors hover:border-zinc-700">
       <div className="flex items-start justify-between gap-2">
         <Link to={`/bots/${bot.config.id}`} className="group min-w-0">
-          <div className="truncate font-semibold text-zinc-100 group-hover:text-indigo-300">{bot.config.username}</div>
+          <div className="flex items-center gap-2">
+            {head && <img src={head} alt="" width={20} height={20} className="h-5 w-5 rounded bg-zinc-800" />}
+            <div className="truncate font-semibold text-zinc-100 group-hover:text-indigo-300">
+              {account?.username || bot.config.username}
+            </div>
+            {bot.config.auth === "microsoft" && (
+              <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] text-indigo-300">{t("accounts.premium")}</span>
+            )}
+          </div>
           <div className="truncate text-xs text-zinc-500">
             {server ? `${server.name} · ${server.host}:${server.port}` : t("botCard.noServer")}
           </div>

@@ -22,6 +22,8 @@ export const EV = {
   MCP_STATUS: "mcp:status",
   MCP_ACTIVITY: "mcp:activity",
   MCP_CHAT: "mcp:chat",
+  AUTH_CODE: "auth:code",
+  AUTH_DONE: "auth:done",
 
   // panel -> server
   SEND_CHAT: "bot:sendChat",

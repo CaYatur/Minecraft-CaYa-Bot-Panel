@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { BrainCircuit, Globe, LayoutGrid, Settings2, SlidersHorizontal, Wrench } from "lucide-react";
+import { BrainCircuit, Globe, LayoutGrid, Settings2, SlidersHorizontal, UserRound, Wrench } from "lucide-react";
 import { BotLogo } from "./BotLogo";
+import { MicrosoftAuthDialog } from "./MicrosoftAuthDialog";
 import { ProtocolNotice } from "./ProtocolNotice";
 import { useI18n } from "../i18n/useI18n";
 import { useAppStore } from "../stores/useAppStore";
@@ -18,6 +19,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { to: "/schematics", label: t("nav.schematics"), icon: LayoutGrid },
     { to: "/mcp", label: t("nav.mcp"), icon: BrainCircuit },
     { to: "/servers", label: t("nav.servers"), icon: Globe },
+    { to: "/accounts", label: t("nav.accounts"), icon: UserRound },
     { to: "/settings", label: t("nav.settings"), icon: Wrench }
   ];
 
@@ -95,6 +97,8 @@ export function Layout({ children }: { children: ReactNode }) {
         <ProtocolNotice />
         {children}
       </main>
+
+      <MicrosoftAuthDialog />
 
       {/* toasts */}
       <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-80 flex-col gap-2">

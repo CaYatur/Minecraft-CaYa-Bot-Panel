@@ -168,11 +168,17 @@ export interface MovementConfig {
   preferParkourOverBridge?: boolean;
 }
 
+export type BotAuthType = "offline" | "microsoft";
+
 export interface BotConfig {
   id: string;
   username: string;
   serverId: string;
   autostart: boolean;
+  /** offline (default) or Microsoft device-code auth */
+  auth?: BotAuthType;
+  /** id in data/auth/accounts.json — tokens are never stored here */
+  accountId?: string | null;
   /** players allowed to trigger chat-command automations (İ3) */
   authorizedPlayers: string[];
   inventory: {
@@ -239,6 +245,8 @@ export interface BotRuntimeState {
   ping: number;
   kickReason?: string;
   lastError?: string;
+  /** stable i18n key when lastError is an auth failure */
+  errorCode?: string;
 }
 
 export type ChatKind = "player" | "whisper" | "server";
@@ -397,6 +405,7 @@ export interface StateSnapshot {
   supportedVersions: string[];
   rules?: unknown[];
   worldMemory?: { chests: unknown[]; ores: unknown[] };
+  accounts?: unknown[];
 }
 
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;
@@ -423,6 +432,8 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     username,
     serverId,
     autostart: false,
+    auth: "offline",
+    accountId: null,
     authorizedPlayers: [],
     inventory: { autoBestGear: true, bannedItems: [], keepItems: [] },
     combat: {

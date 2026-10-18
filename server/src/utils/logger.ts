@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { LOGS_DIR } from "../config/paths";
 import type { LogEntry, LogLevel } from "../types";
+import { redactSecrets } from "./redact";
 
 const CONSOLE_COLORS: Record<LogLevel, string> = {
   debug: "\x1b[90m",
@@ -29,6 +30,11 @@ class LogHub {
   }
 
   push(entry: LogEntry) {
+    entry = {
+      ...entry,
+      message: redactSecrets(entry.message),
+      detail: entry.detail ? redactSecrets(entry.detail) : entry.detail
+    };
     this.ring.push(entry);
     if (this.ring.length > RING_CAP) this.ring.splice(0, this.ring.length - RING_CAP);
 

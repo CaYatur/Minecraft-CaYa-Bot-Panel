@@ -21,7 +21,7 @@
 
 - **Node.js 18 or newer** — Node.js 22 LTS is recommended.
 - A **Minecraft Java Edition** server that you own or are allowed to use bots on.
-- The current bot login mode is **offline authentication**. Premium/Microsoft authentication is not implemented yet.
+- Bots can join with **offline** names or a **Microsoft** account (device code). See [Microsoft accounts](docs/microsoft-auth.md).
 
 ### 1. Download and install
 
@@ -252,7 +252,7 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 
 | Category | Tools |
 |---|---|
-| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all` |
+| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all`, `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status` |
 | Chat | `send_chat`, `send_whisper` |
 | Movement | `goto`, `goto_player`, `follow_player`, `goto_waypoint`, `interact_block` |
 | Gathering | `collect_wood`, `mine_ore`, `collect_blocks`, `collect_drops`, `hunt_animals` |
@@ -919,7 +919,7 @@ MLG behavior is sensitive to latency, server TPS, inventory selection, anti-chea
 ## Current limitations
 
 - Minecraft **Bedrock Edition** is not supported.
-- Microsoft/premium authentication is not implemented in the current bot connection flow.
+- Microsoft sign-in uses the device-code flow and a local token cache. See [docs/microsoft-auth.md](docs/microsoft-auth.md). The panel still has no multi-user web login.
 - The web panel does not yet include user accounts or remote-access security.
 - JSON persistence is intended for local/small deployments; a database may be preferable for large installations.
 - Minecraft physics and anti-cheat behavior vary between server implementations and versions.

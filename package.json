@@ -21,7 +21,8 @@
     "test:combat": "node scripts/combat-test.mjs",
     "test:full": "node scripts/full-suite.mjs",
     "test:grok": "node scripts/grok-smoke-all.mjs",
-    "test:all": "node scripts/combat-test.mjs && node scripts/full-suite.mjs && node scripts/smoke.mjs && node scripts/movement-test.mjs && node scripts/inventory-test.mjs && node scripts/grok-smoke-all.mjs",
+    "test:auth": "tsx scripts/auth-unit.ts",
+    "test:all": "npm run test:auth && node scripts/combat-test.mjs && node scripts/full-suite.mjs && node scripts/smoke.mjs && node scripts/movement-test.mjs && node scripts/inventory-test.mjs && node scripts/grok-smoke-all.mjs",
     "electron:dev": "electron .",
     "dist:win": "npm run build && electron-builder --win nsis portable"
   },

@@ -17,6 +17,8 @@ export const EV = {
   MCP_STATUS: "mcp:status",
   MCP_ACTIVITY: "mcp:activity",
   MCP_CHAT: "mcp:chat",
+  AUTH_CODE: "auth:code",
+  AUTH_DONE: "auth:done",
   SEND_CHAT: "bot:sendChat",
   BOT_ACTION: "bot:action"
 } as const;

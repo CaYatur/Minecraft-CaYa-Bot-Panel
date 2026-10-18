@@ -19,6 +19,11 @@ import {
   loadParsedSchematic
 } from "../modules/build";
 import { getCatalog } from "../modules/catalog/minecraftCatalog";
+import {
+  accounts,
+  assertMicrosoftUrl,
+  openExternalUrl
+} from "../modules/auth/accounts";
 import { getVersionSyncStatus, installPublishedMineflayer } from "../modules/versions/sync";
 import type { AgentService } from "../modules/agent";
 import { runInventoryOp } from "../modules/inventory";
@@ -63,6 +68,74 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     })
   );
 
+  // ---- Microsoft accounts (issue #27) ------------------------------------------
+  r.get(
+    "/accounts",
+    h((_req, res) => {
+      res.json(manager.snapshot([]).accounts ?? []);
+    })
+  );
+  r.post(
+    "/accounts/login",
+    h(async (req, res) => {
+      const label = String(req.body?.label ?? "").trim();
+      const view = await accounts.startLogin(label, socketId(req));
+      res.json(view);
+    })
+  );
+  r.post(
+    "/accounts/:id/login",
+    h(async (req, res) => {
+      const view = await accounts.startRelogin(req.params.id!, socketId(req));
+      res.json(view);
+    })
+  );
+  r.get(
+    "/accounts/:id/login",
+    h((req, res) => {
+      res.json(accounts.loginStatus(req.params.id!, socketId(req)));
+    })
+  );
+  r.post(
+    "/accounts/:id/cancel",
+    h((req, res) => {
+      accounts.cancel(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+  r.patch(
+    "/accounts/:id",
+    h((req, res) => {
+      res.json(accounts.rename(req.params.id!, String(req.body?.label ?? "")));
+    })
+  );
+  r.post(
+    "/accounts/:id/sign-out",
+    h((req, res) => {
+      accounts.signOut(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+  r.delete(
+    "/accounts/:id",
+    h((req, res) => {
+      const id = req.params.id!;
+      for (const bot of manager.bots.values()) {
+        if (bot.config.accountId === id && bot.status !== "stopped") bot.stop();
+      }
+      accounts.remove(id);
+      res.json({ ok: true });
+    })
+  );
+  r.post(
+    "/system/open-url",
+    h((req, res) => {
+      const url = assertMicrosoftUrl(String(req.body?.url ?? ""));
+      openExternalUrl(url.toString());
+      res.json({ ok: true });
+    })
+  );
+
   // ---- servers ----------------------------------------------------------------
   r.post(
     "/servers",
@@ -88,9 +161,9 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/bots",
     h((req, res) => {
-      const { username, serverId, autostart, startNow } = req.body ?? {};
-      const inst = manager.createBot({ username, serverId, autostart });
-      if (startNow) inst.start();
+      const { username, serverId, autostart, startNow, auth, accountId } = req.body ?? {};
+      const inst = manager.createBot({ username, serverId, autostart, auth, accountId });
+      if (startNow) manager.startBot(inst.config.id, socketId(req));
       res.json(inst.getSnapshot());
     })
   );
@@ -124,7 +197,7 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/bots/:id/start",
     h((req, res) => {
-      manager.startBot(req.params.id!);
+      manager.startBot(req.params.id!, socketId(req));
       res.json({ ok: true });
     })
   );
@@ -643,6 +716,11 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
 }
 
 /** PanelError → anlamlı HTTP durumu; diğerleri 500 */
+function socketId(req: Request): string | undefined {
+  const header = req.get("x-caya-socket");
+  return header?.trim() || undefined;
+}
+
 export function restErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (err instanceof PanelError) {
     res.status(err.httpStatus).json({ error: err.message });

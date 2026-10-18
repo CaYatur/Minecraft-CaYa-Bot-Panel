@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import type { StateSnapshot } from "../lib/types";
@@ -13,6 +14,7 @@ function initialServerId(servers: { id: string }[]): string {
 export function AddBotModal({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const servers = useAppStore((s) => s.servers);
+  const accounts = useAppStore((s) => s.accounts);
   const supportedVersions = useAppStore((s) => s.supportedVersions);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const toast = useAppStore((s) => s.toast);
@@ -20,6 +22,8 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
   const defaultSid = useMemo(() => initialServerId(servers), [servers]);
 
   const [username, setUsername] = useState("CaYa_1");
+  const [auth, setAuth] = useState<"offline" | "microsoft">("offline");
+  const [accountId, setAccountId] = useState("");
   const [count, setCount] = useState(1);
   const [serverId, setServerId] = useState(defaultSid);
   const [autostart, setAutostart] = useState(false);
@@ -33,8 +37,15 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
   const [version, setVersion] = useState("auto");
   const [serverName, setServerName] = useState("");
 
+  const selectedAccount = accounts.find((row) => row.id === accountId);
+  const effectiveCount = auth === "microsoft" ? 1 : count;
+  const effectiveUsername = auth === "microsoft" && selectedAccount?.username ? selectedAccount.username : username;
   const canSubmit =
-    Boolean(username.trim()) && !busy && !needsServerPick && (!isNewServer || Boolean(host.trim()));
+    Boolean(effectiveUsername.trim()) &&
+    !busy &&
+    !needsServerPick &&
+    (!isNewServer || Boolean(host.trim())) &&
+    (auth !== "microsoft" || Boolean(accountId));
 
   const submit = async () => {
     if (needsServerPick) {
@@ -53,17 +64,24 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
         });
         sid = profile.id;
       }
-      if (count > 1) {
-        await api.post("/api/bots/bulk", { template: username, count, serverId: sid, autostart, startNow });
+      if (effectiveCount > 1) {
+        await api.post("/api/bots/bulk", { template: username, count: effectiveCount, serverId: sid, autostart, startNow });
       } else {
-        await api.post("/api/bots", { username, serverId: sid, autostart, startNow });
+        await api.post("/api/bots", {
+          username: effectiveUsername,
+          serverId: sid,
+          autostart,
+          startNow,
+          auth,
+          accountId: auth === "microsoft" ? accountId : null
+        });
       }
       applySnapshot(await api.get<StateSnapshot>("/api/state"));
       toast(
         "success",
-        count > 1
-          ? t("addBot.createdMany", { n: count })
-          : t("addBot.createdOne", { name: username })
+        effectiveCount > 1
+          ? t("addBot.createdMany", { n: effectiveCount })
+          : t("addBot.createdOne", { name: effectiveUsername })
       );
       onClose();
     } catch (e) {
@@ -99,15 +117,49 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-zinc-400">
-              {count > 1 ? t("addBot.usernameTemplate") : t("addBot.username")}
+              {effectiveCount > 1 ? t("addBot.usernameTemplate") : t("addBot.username")}
             </span>
             <input
-              value={username}
+              value={auth === "microsoft" && selectedAccount?.username ? selectedAccount.username : username}
               onChange={(e) => setUsername(e.target.value)}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
-              placeholder={count > 1 ? "CaYa_{n}" : "CaYa_1"}
+              disabled={auth === "microsoft" && Boolean(selectedAccount?.username)}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500 disabled:opacity-60"
+              placeholder={effectiveCount > 1 ? "CaYa_{n}" : "CaYa_1"}
             />
           </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-zinc-400">{t("accounts.authMode")}</span>
+            <select
+              value={auth}
+              onChange={(e) => setAuth(e.target.value === "microsoft" ? "microsoft" : "offline")}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
+            >
+              <option value="offline">{t("accounts.offline")}</option>
+              <option value="microsoft">{t("accounts.microsoft")}</option>
+            </select>
+          </label>
+
+          {auth === "microsoft" && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-zinc-400">{t("accounts.pickAccount")}</span>
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
+              >
+                <option value="">{accounts.length === 0 ? t("accounts.noAccounts") : t("accounts.pickAccount")}</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.username || account.label}
+                  </option>
+                ))}
+              </select>
+              <Link to="/accounts" onClick={onClose} className="text-[11px] text-indigo-300 hover:underline">
+                {t("accounts.title")}
+              </Link>
+            </label>
+          )}
 
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-zinc-400">{t("addBot.count")}</span>
@@ -115,7 +167,8 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
               type="number"
               min={1}
               max={50}
-              value={count}
+              value={effectiveCount}
+              disabled={auth === "microsoft"}
               onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
               className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
             />
@@ -222,8 +275,8 @@ export function AddBotModal({ onClose }: { onClose: () => void }) {
           >
             {busy
               ? t("addBot.creating")
-              : count > 1
-                ? t("addBot.createN", { n: count })
+              : effectiveCount > 1
+                ? t("addBot.createN", { n: effectiveCount })
                 : t("addBot.create")}
           </button>
         </div>

@@ -17,6 +17,7 @@ export const en: MessageTree = {
     schematics: "Schematics",
     mcp: "MCP / AI",
     servers: "Servers",
+    accounts: "Accounts",
     settings: "Settings"
   },
   connection: {
@@ -1293,5 +1294,54 @@ export const en: MessageTree = {
     step2: "2a. In-game agent: install Ollama (ollama.com), pull a tool-capable model (e.g. `ollama pull qwen2.5`), pick it.",
     step3: "2b. Claude Code: paste the command below into a terminal — the bots become Claude's tools.",
     step4: "3. Enable Agent for at least one bot under Bot Agents; talk via Agent Chat or address the bot by name in game."
+  },
+  accounts: {
+    title: "Accounts",
+    intro: "Microsoft accounts let a bot join online-mode servers. Tokens stay on this computer and are never shown in the panel, logs, or exports. Offline bots are unchanged.",
+    label: "Label",
+    labelPlaceholder: "Main account",
+    add: "Add Microsoft account",
+    empty: "No Microsoft accounts yet.",
+    signIn: "Sign in",
+    rename: "Rename",
+    signOut: "Sign out",
+    remove: "Remove",
+    removeConfirm: "Remove {name} and delete its saved login?",
+    linked: "Used by {names}",
+    unlinked: "Not assigned to a bot",
+    codeTitle: "Microsoft sign-in",
+    codeHelp: "Open the link, enter the code, and approve Minecraft access. This panel never sees your password.",
+    codeExpires: "Expires in {time}",
+    codeExpired: "Code expired. Start sign-in again.",
+    copy: "Copy code",
+    copied: "Copied",
+    openLink: "Open link",
+    cancel: "Cancel",
+    authMode: "Login",
+    offline: "Offline",
+    microsoft: "Microsoft",
+    pickAccount: "Microsoft account",
+    noAccounts: "Add an account first",
+    premium: "Premium",
+    status: {
+      none: "Not signed in",
+      cached: "Signed in",
+      pending: "Waiting for code",
+      error: "Needs attention"
+    }
+  },
+  auth: {
+    timeout: "Microsoft did not return a device code. Check the network and try again.",
+    expired: "The Microsoft device code expired. Start sign-in again.",
+    cancelled: "Microsoft sign-in was cancelled.",
+    noLicense: "This Microsoft account does not have a Minecraft Java license (or the Xbox profile is missing).",
+    child: "Microsoft blocked this account (child account or age restriction).",
+    rateLimit: "Microsoft rate-limited the sign-in. Wait a few minutes and try again.",
+    network: "Network error while contacting Microsoft. The bot was not left in a login loop.",
+    reauth: "Microsoft session expired. Sign in again from Accounts. Auto-reconnect will not open a new device code.",
+    mismatchOffline: "This server requires a Microsoft account. Switch the bot to Microsoft auth and sign in.",
+    mismatchPremium: "Premium verification failed for this Microsoft account. Sign in again from Accounts.",
+    sessionRejected: "The server rejected the Microsoft session. Sign in again from Accounts.",
+    failed: "Microsoft sign-in failed."
   }
 };
