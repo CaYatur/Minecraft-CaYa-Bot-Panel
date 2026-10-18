@@ -4,7 +4,7 @@ import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
 import { antiAfkAllowed, antiAfkMode, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
-import { nextBackoffMs, sessionIsStable } from "../modules/alwaysOn/backoff";
+
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, passwordRepeat, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
 import { hasLoginSecret, readLoginSecret } from "../modules/alwaysOn/secrets";
@@ -1194,7 +1194,7 @@ export class BotInstance extends EventEmitter {
     });
 
     bot.on("kicked", (reason: unknown) => {
-      const text = chatComponentToText(reason) || String(reason);
+      const text = chatComponentToText(reason) || "Kicked by the server";
       const authMode = this.config.auth === "microsoft" ? "microsoft" : "offline";
       const classified = classifyKick(text, authMode);
       this.runtime.kickReason = classified.message;
@@ -1232,18 +1232,15 @@ export class BotInstance extends EventEmitter {
       this.scheduleReconnect();
     });
 
-    bot.on("end", (reason: string) => {
-      this.log.info(`Connection closed (${reason || "unknown"})`);
+    bot.on("end", (reason: unknown) => {
+      const closed = chatComponentToText(reason) || (typeof reason === "string" ? reason : "") || this.runtime.kickReason || "closed";
+      this.log.info(`Connection closed (${closed})`);
       if (this.tasks.currentSummary) {
         this.log.warn("Active tasks cancelled due to lost connection (task persistence: Phase 10)");
       }
       this.tasks.cancelAll("connection lost");
-      const onlineMs = this.spawnedAt ? Date.now() - this.spawnedAt : 0;
-      const kind = classifyDisconnect(reason || this.runtime.kickReason || "closed").kind;
-      markSessionEnd(this.config.id, { kind, text: redactGameCommand(reason || this.runtime.kickReason || "closed") });
-      if (this.config.alwaysOn?.enabled && sessionIsStable(onlineMs, this.config.alwaysOn.backoff.stableMs)) {
-        this.reconnectAttempt = 0;
-      }
+      const kind = classifyDisconnect(closed).kind;
+      markSessionEnd(this.config.id, { kind, text: redactGameCommand(closed) });
       this.spawnedAt = null;
       this.stopAntiAfk();
       this.teardownBot();
@@ -1557,21 +1554,7 @@ export class BotInstance extends EventEmitter {
 
   private scheduleReconnect() {
     if (!this.wantsRunning || this.authInteraction || this.reconnectTimer) return;
-    const always = this.config.alwaysOn;
-    if (always?.enabled && always.backoff.maxAttempts > 0 && this.reconnectAttempt >= always.backoff.maxAttempts) {
-      this.wantsRunning = false;
-      this.log.warn("Reconnect stopped: attempt limit reached");
-      this.setStatus("error");
-      return;
-    }
-    const delay = always?.enabled
-      ? nextBackoffMs({
-          attempt: this.reconnectAttempt,
-          baseMs: always.backoff.baseMs,
-          maxMs: always.backoff.maxMs,
-          jitter: always.backoff.jitter
-        })
-      : RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
+    const delay = RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
     this.reconnectAttempt++;
     this.nextRetryAt = Date.now() + delay;
     this.setStatus("reconnecting");

@@ -27,7 +27,6 @@ import {
 } from "../modules/auth/accounts";
 import { getVersionSyncStatus, installPublishedMineflayer } from "../modules/versions/sync";
 import { writeLoginSecret } from "../modules/alwaysOn/secrets";
-import { sleepingServerAlwaysOn } from "../types";
 import { discordPublicState, testWebhook, updateDiscordSettings } from "../modules/discord/hub";
 import { validateTemplate, templateFromRules } from "../modules/templates/schema";
 import { deleteUserTemplate, getTemplate, listTemplates, saveUserTemplate } from "../modules/templates/store";
@@ -221,14 +220,6 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/always-on",
     h((req, res) => {
       res.json(manager.mustGet(req.params.id!).alwaysOnStatus());
-    })
-  );
-  r.post(
-    "/bots/:id/always-on/preset",
-    h((req, res) => {
-      if (req.body?.preset !== "sleeping_server") throw new PanelError("Unknown preset");
-      const inst = manager.updateBotConfig(req.params.id!, { alwaysOn: sleepingServerAlwaysOn() });
-      res.json(inst.alwaysOnStatus());
     })
   );
   r.put(

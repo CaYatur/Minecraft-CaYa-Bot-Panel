@@ -17,44 +17,73 @@ const TRANSLATE_MAP: Record<string, string> = {
   "disconnect.spam": "Kicked for spam (raise the chat rate limit)."
 };
 
-/** recursively extract plain text from a chat component (string | object | json string) */
+const NBT_SCALARS = new Set(["byte", "short", "int", "long", "float", "double", "string"]);
+
+/** Modern disconnect packets store the reason as NBT, not a JSON chat string. */
+function unwrapNbt(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(unwrapNbt);
+  if (!value || typeof value !== "object") return value;
+  const tag = value as { type?: unknown; value?: unknown };
+  if (typeof tag.type !== "string" || !("value" in tag)) return value;
+  if (tag.type === "compound" && tag.value && typeof tag.value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(tag.value as Record<string, unknown>)) out[key] = unwrapNbt(child);
+    return out;
+  }
+  if (tag.type === "list" && tag.value && typeof tag.value === "object") {
+    const inner = (tag.value as { value?: unknown }).value;
+    return Array.isArray(inner) ? inner.map(unwrapNbt) : unwrapNbt(inner);
+  }
+  if (NBT_SCALARS.has(tag.type)) return tag.value;
+  return value;
+}
+
+/** recursively extract plain text from a chat component (string | object | json string | NBT) */
 export function chatComponentToText(reason: unknown): string {
+  const text = readChat(reason).replace(/\s+/g, " ").trim();
+  return text === "[object Object]" ? "" : text;
+}
+
+function readChat(reason: unknown): string {
   if (reason == null) return "";
   if (typeof reason === "string") {
     const trimmed = reason.trim();
     if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith('"')) {
       try {
-        return chatComponentToText(JSON.parse(trimmed));
+        return readChat(JSON.parse(trimmed));
       } catch {
         return reason;
       }
     }
     return reason;
   }
-  if (Array.isArray(reason)) return reason.map(chatComponentToText).join("");
+  if (Array.isArray(reason)) return reason.map(readChat).join("");
   if (typeof reason === "object") {
+    const unwrapped = unwrapNbt(reason);
+    if (unwrapped !== reason) return readChat(unwrapped);
     const obj = reason as Record<string, unknown>;
-    // prismarine ChatMessage instance
-    if (typeof (obj as any).toString === "function" && (obj as any).json !== undefined) {
+    if (obj.json !== undefined) {
       try {
         const s = String(reason);
         if (s && s !== "[object Object]") return s;
       } catch {
-        /* fall through */
+        /* fall through to the raw component */
       }
+      return readChat(obj.json);
     }
     let out = "";
     if (typeof obj.translate === "string") {
       const mapped = TRANSLATE_MAP[obj.translate];
-      const params = Array.isArray(obj.with) ? obj.with.map(chatComponentToText).filter(Boolean).join(", ") : "";
+      const params = Array.isArray(obj.with) ? obj.with.map(readChat).filter(Boolean).join(", ") : "";
       out += mapped ?? obj.translate + (params ? ` (${params})` : "");
       if (mapped && params) out += ` (${params})`;
     }
     if (typeof obj.text === "string") out += obj.text;
-    if (Array.isArray(obj.extra)) out += obj.extra.map(chatComponentToText).join("");
+    if (Array.isArray(obj.extra)) out += obj.extra.map(readChat).join("");
     return out;
   }
-  return String(reason);
+  const s = String(reason);
+  return s === "[object Object]" ? "" : s;
 }
 
 /** map low-level connection errors to actionable English messages */

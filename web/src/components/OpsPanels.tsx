@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
+import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
 export function AlwaysOnCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { enabled?: boolean; antiAfk?: { enabled?: boolean; mode?: string } } } | null>(null);
+  const autostart = useAppStore((s) => Boolean(s.bots[botId]?.config.autostart));
+  const applySnapshot = useAppStore((s) => s.applySnapshot);
+  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { antiAfk?: { enabled?: boolean; mode?: string } } } | null>(null);
 
   const load = async () => {
     try {
@@ -23,6 +26,7 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
   const patch = async (body: unknown) => {
     try {
       await api.patch(`/api/bots/${botId}`, body);
+      applySnapshot(await api.get<StateSnapshot>("/api/state"));
       await load();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
@@ -34,8 +38,8 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
       <p className="text-sm leading-relaxed text-zinc-400">{t("ops.alwaysOnHelp")}</p>
       <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-200">
         <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
-          <input type="checkbox" checked={Boolean(status?.config?.enabled)} onChange={(e) => void patch({ alwaysOn: { enabled: e.target.checked } })} />
-          {t("ops.enabled")}
+          <input type="checkbox" checked={autostart} onChange={(e) => void patch({ autostart: e.target.checked })} />
+          {t("botDetail.autostart")}
         </label>
         <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
           <input type="checkbox" checked={Boolean(status?.config?.antiAfk?.enabled)} onChange={(e) => void patch({ alwaysOn: { antiAfk: { enabled: e.target.checked } } })} />
@@ -60,12 +64,6 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
         )}
       </div>
       {status?.config?.antiAfk?.enabled && <p className="text-xs text-zinc-500">{t("ops.antiAfkHelp")}</p>}
-      <div className="flex flex-col gap-1">
-        <button type="button" className="w-fit cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800" onClick={() => void api.post(`/api/bots/${botId}/always-on/preset`, { preset: "sleeping_server" }).then(load).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}>
-          {t("ops.sleepingPreset")}
-        </button>
-        <p className="text-xs text-zinc-500">{t("ops.sleepingPresetHelp")}</p>
-      </div>
       <p className="text-xs text-zinc-500">
         {t("ops.uptime", {
           now: Math.round((status?.uptime?.currentMs ?? 0) / 1000),

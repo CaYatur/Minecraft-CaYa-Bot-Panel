@@ -15,6 +15,7 @@ import { BUNDLED_TEMPLATES } from "../server/src/modules/templates/bundled";
 import { validateTemplate } from "../server/src/modules/templates/schema";
 import { allowSend, escapeDiscordMentions, isAllowlisted, sayIsBlocked, shouldBridgeDiscord, shouldBridgeMinecraft } from "../server/src/modules/discord/logic";
 import { postWebhook } from "../server/src/modules/discord/hub";
+import { chatComponentToText } from "../server/src/utils/chatText";
 
 let failures = 0;
 const ok = (name: string) => console.log(`  ok ${name}`);
@@ -39,6 +40,9 @@ function unit() {
 
   assert("login prompt", detectLoginPrompt("/login <password>") === "login");
   assert("register prompt", detectLoginPrompt("Please /register") === "register");
+  assert("both commands use login", detectLoginPrompt("Please /register or /login <password>") === "login");
+  assert("unregistered account uses register", detectLoginPrompt("You are not registered. Use /register") === "register");
+  assert("kick nbt is readable", chatComponentToText({ type: "compound", value: { text: { type: "string", value: "Kicked for idling" } } }) === "Kicked for idling");
   assert("success wins over login", detectLoginPrompt("Successfully logged in") === "success");
   assert("wrong password", detectLoginPrompt("Wrong password") === "wrong_password");
   assert("password is redacted", redactGameCommand("/login hunter2").includes("••••") && !redactGameCommand("/login hunter2").includes("hunter2"));

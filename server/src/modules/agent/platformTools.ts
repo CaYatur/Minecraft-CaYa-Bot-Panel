@@ -1,5 +1,4 @@
 import type { AgentToolContext, AgentToolDef } from "./tools";
-import { sleepingServerAlwaysOn } from "../../types";
 import { writeLoginSecret } from "../alwaysOn/secrets";
 import { discordPublicState, notifyCustom, recentBridgeLines, updateDiscordSettings } from "../discord/hub";
 import { validateTemplate, templateFromRules } from "../templates/schema";
@@ -22,7 +21,7 @@ const json = (value: unknown) => JSON.stringify(value);
 export const PLATFORM_TOOLS: AgentToolDef[] = [
   {
     name: "always_on_get",
-    description: "Read 24/7 mode, reconnect state, and uptime. Passwords are not included.",
+    description: "Read autostart, anti-AFK, and uptime. Passwords are not included.",
     category: "info",
     inputSchema: { type: "object", properties: {} },
     async execute(ctx) {
@@ -31,16 +30,11 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "always_on_set",
-    description: "Enable or disable 24/7 mode, backoff, and anti-AFK. Does not accept a password.",
+    description: "Turn anti-AFK on or off. A started bot already reconnects after a drop. Does not accept a password.",
     category: "info",
     inputSchema: {
       type: "object",
       properties: {
-        enabled: { type: "boolean" },
-        baseMs: { type: "number" },
-        maxMs: { type: "number" },
-        maxAttempts: { type: "number", description: "0 means retry forever" },
-        jitter: { type: "number" },
         antiAfk: { type: "boolean" },
         intervalMs: { type: "number" }
       }
@@ -51,14 +45,6 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
       ctx.manager.updateBotConfig(ctx.inst.config.id, {
         alwaysOn: {
           ...current,
-          enabled: args.enabled === undefined ? current.enabled : Boolean(args.enabled),
-          backoff: {
-            ...current.backoff,
-            baseMs: Number(args.baseMs ?? current.backoff.baseMs),
-            maxMs: Number(args.maxMs ?? current.backoff.maxMs),
-            maxAttempts: Number(args.maxAttempts ?? current.backoff.maxAttempts),
-            jitter: Number(args.jitter ?? current.backoff.jitter)
-          },
           antiAfk: {
             enabled: args.antiAfk === undefined ? current.antiAfk.enabled : Boolean(args.antiAfk),
             intervalMs: Number(args.intervalMs ?? current.antiAfk.intervalMs),
@@ -66,17 +52,6 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
           }
         }
       });
-      return json(ctx.inst.alwaysOnStatus());
-    }
-  },
-  {
-    name: "always_on_apply_preset",
-    description: "Apply the sleeping-server preset: longer backoff and anti-AFK. Does not change autostart.",
-    category: "info",
-    inputSchema: { type: "object", properties: { preset: { type: "string", enum: ["sleeping_server"] } }, required: ["preset"] },
-    async execute(ctx, args) {
-      if (str(args, "preset") !== "sleeping_server") throw new Error("Unknown preset.");
-      ctx.manager.updateBotConfig(ctx.inst.config.id, { alwaysOn: sleepingServerAlwaysOn() });
       return json(ctx.inst.alwaysOnStatus());
     }
   },

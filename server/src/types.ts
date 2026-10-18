@@ -197,16 +197,6 @@ export function defaultAlwaysOn(): AlwaysOnConfig {
   };
 }
 
-export function sleepingServerAlwaysOn(): AlwaysOnConfig {
-  return {
-    enabled: true,
-    preset: "sleeping_server",
-    backoff: { baseMs: 15_000, maxMs: 180_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
-    antiAfk: { enabled: true, intervalMs: 40_000, mode: "mixed" },
-    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "" }
-  };
-}
-
 export interface BotConfig {
   id: string;
   username: string;

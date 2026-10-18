@@ -15,8 +15,12 @@ export function detectLoginPrompt(plainText: string, extraPattern = ""): LoginPr
       /* ignore a broken extra pattern */
     }
   }
-  if (/\/register\b|\/reg\b|not\s+registered|(kayıt|kayit)\s+ol/i.test(p)) return "register";
-  if (/\/login\b|\/l\b|please.{0,40}(login|log in)|lütfen.{0,40}(giriş|login)/i.test(p)) return "login";
+  const unregistered = /not\s+registered|isn.?t\s+registered|(kayıt|kayit)\s+(ol|yok|edilmem)/i.test(p);
+  const mentionsRegister = /\/register\b|\/reg\b/i.test(p);
+  const mentionsLogin = /\/login\b|\/l\b|please.{0,40}(login|log in)|lütfen.{0,40}(giriş|login)/i.test(p);
+  if (unregistered) return "register";
+  if (mentionsLogin) return "login";
+  if (mentionsRegister) return "register";
   return "none";
 }
 
