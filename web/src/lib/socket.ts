@@ -70,7 +70,15 @@ socket.on(EV.MCP_STATUS, (p: McpStatusPayload) => store().setMcpStatus(p));
 socket.on(EV.AUTH_CODE, (p: { accountId: string; botId?: string | null; userCode: string; verificationUri: string; expiresAt: number; message: string }) => {
   store().setMsaPrompt(p);
 });
-socket.on(EV.AUTH_DONE, (p: { ok?: boolean }) => {
+socket.on(EV.AUTH_DONE, (p: { ok?: boolean; phase?: string; errorCode?: string; accountId?: string }) => {
+  if (p?.phase === "joining") {
+    store().setMsaPhase("joining");
+    return;
+  }
+  if (p?.phase === "error" && p.errorCode) {
+    store().setMsaPhase("error", p.errorCode, p.accountId);
+    return;
+  }
   if (p?.ok) store().clearMsaPrompt();
 });
 

@@ -363,7 +363,9 @@ export class BotManager extends EventEmitter {
         noteError: (accountId, code) => {
           if (code in AUTH_ERRORS) accounts.noteError(accountId, code as AuthErrorCode);
         },
-        seal: (accountId) => accounts.seal(accountId)
+        seal: (accountId) => accounts.seal(accountId),
+        markJoining: (accountId) => accounts.markJoining(accountId),
+        finishPrompt: (accountId, result) => accounts.finishPrompt(accountId, result)
       }
     );
     // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)

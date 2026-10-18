@@ -34,6 +34,8 @@ function unit() {
   assert("microsoft invalid session stops reconnect", premium.stop && premium.code === "auth.sessionRejected");
   const other = classifyKick("Server is full.", "offline");
   assert("unrelated kick does not stop reconnect", !other.stop);
+  const taken = classifyKick("multiplayer.disconnect.name_taken", "microsoft");
+  assert("name taken stops reconnect", taken.stop && taken.code === "auth.nameTaken");
 
   let rejected = false;
   try {
@@ -54,6 +56,22 @@ function unit() {
   store.remove(row.id);
   assert("remove deletes cache folder", !fs.existsSync(path.join(dir, row.id)));
   assert("remove drops the account", store.publicView([]).length === 0);
+
+  const kept = store.createRecord("Kept");
+  const cacheDir = path.join(dir, kept.id);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(path.join(cacheDir, "f9f0cf_mca-cache.json"), JSON.stringify({ session: true }));
+  store.publishBotCode(kept.id, { user_code: "AB12", verification_uri: "https://www.microsoft.com/link", expires_in: 90 });
+  store.cancel(kept.id);
+  const keptView = store.publicView([]).find((account) => account.id === kept.id);
+  assert("cancel keeps a signed-in account usable", keptView?.tokenStatus === "cached" && !keptView.errorCode);
+  assert("cancel does not delete the saved cache", fs.existsSync(path.join(cacheDir, "f9f0cf_mca-cache.json")));
+
+  const fresh = store.createRecord("Fresh");
+  store.cancel(fresh.id);
+  const freshView = store.publicView([]).find((account) => account.id === fresh.id);
+  assert("cancel without a cache needs sign-in", freshView?.tokenStatus === "error" && freshView.errorCode === "auth.cancelled");
+
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

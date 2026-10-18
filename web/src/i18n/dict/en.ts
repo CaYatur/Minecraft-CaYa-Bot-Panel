@@ -1303,6 +1303,7 @@ export const en: MessageTree = {
     add: "Add Microsoft account",
     empty: "No Microsoft accounts yet.",
     signIn: "Sign in",
+    signInAgain: "Sign in again",
     rename: "Rename",
     signOut: "Sign out",
     remove: "Remove",
@@ -1311,6 +1312,10 @@ export const en: MessageTree = {
     unlinked: "Not assigned to a bot",
     codeTitle: "Microsoft sign-in",
     codeHelp: "Open the link, enter the code, and approve Minecraft access. This panel never sees your password.",
+    switchTitle: "Microsoft labels this sign-in “Minecraft for Nintendo Switch”. That is the normal Minecraft Java login. It does not buy or start the Switch edition.",
+    joining: "Signed in. Joining the server…",
+    errorTitle: "Could not finish",
+    close: "Close",
     codeExpires: "Expires in {time}",
     codeExpired: "Code expired. Start sign-in again.",
     copy: "Copy code",
@@ -1342,6 +1347,8 @@ export const en: MessageTree = {
     mismatchOffline: "This server requires a Microsoft account. Switch the bot to Microsoft auth and sign in.",
     mismatchPremium: "Premium verification failed for this Microsoft account. Sign in again from Accounts.",
     sessionRejected: "The server rejected the Microsoft session. Sign in again from Accounts.",
+    nameTaken: "Signed in with Microsoft, but this player is already in the game. Stop the other session, then start the bot again.",
+    cancelledKept: "Sign-in was cancelled. This account stays signed in until you choose Sign out.",
     failed: "Microsoft sign-in failed."
   }
 };

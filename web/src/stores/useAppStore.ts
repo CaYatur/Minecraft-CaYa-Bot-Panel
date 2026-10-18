@@ -45,6 +45,7 @@ interface AppState {
   setConnected(v: boolean): void;
   setMcpStatus(p: McpStatusPayload): void;
   setMsaPrompt(p: DeviceCodePrompt): void;
+  setMsaPhase(phase: "joining" | "error", errorCode?: string, accountId?: string): void;
   clearMsaPrompt(): void;
   applySnapshot(s: StateSnapshot): void;
   patchBot(botId: string, patch: Partial<BotSnapshot>): void;
@@ -81,7 +82,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConnected: (v) => set({ connected: v }),
 
   setMcpStatus: (p) => set({ mcpStatus: p }),
-  setMsaPrompt: (p) => set({ msaPrompt: p }),
+  setMsaPrompt: (p) => set({ msaPrompt: { ...p, phase: p.phase ?? "code" } }),
+  setMsaPhase: (phase, errorCode, accountId) =>
+    set((st) => {
+      if (!st.msaPrompt && phase === "error" && errorCode) {
+        return {
+          msaPrompt: {
+            accountId: accountId || "",
+            userCode: "",
+            verificationUri: "",
+            expiresAt: 0,
+            message: "",
+            phase: "error",
+            errorCode
+          }
+        };
+      }
+      if (!st.msaPrompt) return {};
+      return { msaPrompt: { ...st.msaPrompt, phase, errorCode: errorCode ?? st.msaPrompt.errorCode } };
+    }),
   clearMsaPrompt: () => set({ msaPrompt: null }),
 
   applySnapshot: (s) =>

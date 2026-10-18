@@ -7,7 +7,7 @@ Bots can join online-mode servers with a Microsoft account. Offline bots stay on
 1. Open **Accounts** in the panel.
 2. Enter a label and choose **Add Microsoft account**.
 3. The dialog shows a device code and a link (`https://www.microsoft.com/link`).
-4. Use **Copy code** and **Open link**. Approve the Minecraft Java license on that account.
+4. Use **Copy code** and **Open link**. Approve the Minecraft Java license on that account. Microsoft shows the app as **Minecraft for Nintendo Switch**. That is the normal Java sign-in title this panel uses. It does not buy or launch the Switch edition.
 5. After the profile loads, the account shows the premium username and a skin head.
 6. Create a bot, or open a bot and set **Login** to **Microsoft**, then pick the account and save.
 7. Start the bot. The next panel restart reconnects with the saved cache and does not ask for a code again.
@@ -18,7 +18,9 @@ If the refresh token expires, auto-reconnect stops and asks you to sign in again
 
 Add each account separately. Assign them to different bots. Starting a second bot on an account that is already connecting or online is rejected, because the server would kick one of the sessions.
 
-**Sign out** deletes the token cache and keeps the account row. **Remove** deletes the cache and switches linked bots back to offline auth.
+A signed-in account shows **Sign in again**. Starting that and then pressing **Cancel** keeps the saved login until you press **Sign out**. **Sign out** deletes the token cache and keeps the account row. **Remove** deletes the cache and switches linked bots back to offline auth.
+
+If Microsoft accepts the account but the server rejects the join (for example the same player is already online), the dialog stays open and shows that error. Closing it does not sign the account out.
 
 ## What is stored
 

@@ -34,6 +34,8 @@ export interface DeviceCodePrompt {
   verificationUri: string;
   expiresAt: number;
   message: string;
+  phase?: "code" | "joining" | "error";
+  errorCode?: string | null;
 }
 
 export interface BotConfig {

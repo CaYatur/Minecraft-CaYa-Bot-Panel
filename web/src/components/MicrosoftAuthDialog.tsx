@@ -21,7 +21,13 @@ export function MicrosoftAuthDialog() {
 
   if (!prompt) return null;
 
+  const phase = prompt.phase ?? "code";
+
   const close = async () => {
+    if (phase === "error") {
+      clear();
+      return;
+    }
     try {
       await api.post(`/api/accounts/${prompt.accountId}/cancel`);
     } catch {
@@ -60,26 +66,39 @@ export function MicrosoftAuthDialog() {
         className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
       >
         <h2 id="msa-title" className="text-lg font-semibold text-zinc-100">
-          {t("accounts.codeTitle")}
+          {phase === "error" ? t("accounts.errorTitle") : t("accounts.codeTitle")}
         </h2>
-        <p className="mt-2 text-sm text-zinc-400">{t("accounts.codeHelp")}</p>
-        <div className="mt-4 rounded-lg border border-indigo-900/50 bg-indigo-950/30 px-4 py-3 text-center">
-          <div className="font-mono text-2xl tracking-[0.3em] text-indigo-200">{prompt.userCode}</div>
-          <div className={`mt-1 text-xs ${left === 0 ? "text-red-300" : "text-zinc-500"}`}>
-            {left === 0 ? t("accounts.codeExpired") : t("accounts.codeExpires", { time: `${minutes}:${seconds}` })}
-          </div>
-        </div>
-        <p className="mt-3 break-all text-xs text-zinc-500">{prompt.verificationUri}</p>
+        {phase === "error" ? (
+          <p className="mt-3 text-sm text-red-300">{t(prompt.errorCode || "auth.failed")}</p>
+        ) : phase === "joining" ? (
+          <p className="mt-3 text-sm text-zinc-300">{t("accounts.joining")}</p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-zinc-400">{t("accounts.codeHelp")}</p>
+            <p className="mt-2 text-sm text-zinc-400">{t("accounts.switchTitle")}</p>
+            <div className="mt-4 rounded-lg border border-indigo-900/50 bg-indigo-950/30 px-4 py-3 text-center">
+              <div className="font-mono text-2xl tracking-[0.3em] text-indigo-200">{prompt.userCode}</div>
+              <div className={`mt-1 text-xs ${left === 0 ? "text-red-300" : "text-zinc-500"}`}>
+                {left === 0 ? t("accounts.codeExpired") : t("accounts.codeExpires", { time: `${minutes}:${seconds}` })}
+              </div>
+            </div>
+            <p className="mt-3 break-all text-xs text-zinc-500">{prompt.verificationUri}</p>
+          </>
+        )}
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button type="button" onClick={() => void close()} className="rounded-lg px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-800">
-            {t("accounts.cancel")}
+            {phase === "error" ? t("accounts.close") : t("accounts.cancel")}
           </button>
-          <button type="button" onClick={() => void copy()} className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-700">
-            {copied ? t("accounts.copied") : t("accounts.copy")}
-          </button>
-          <button type="button" onClick={() => void open()} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">
-            {t("accounts.openLink")}
-          </button>
+          {phase === "code" && (
+            <>
+              <button type="button" onClick={() => void copy()} className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-700">
+                {copied ? t("accounts.copied") : t("accounts.copy")}
+              </button>
+              <button type="button" onClick={() => void open()} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+                {t("accounts.openLink")}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

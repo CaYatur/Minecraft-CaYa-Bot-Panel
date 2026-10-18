@@ -54,6 +54,8 @@ interface PendingLogin {
   botId?: string;
   view: DeviceCodeView;
   aborted: boolean;
+  /** A cache already existed when this attempt started, or Microsoft has since signed in. */
+  preserveCache: boolean;
 }
 
 interface BotLink {
@@ -67,6 +69,16 @@ const FLOW_OPTIONS = {
   deviceType: "Nintendo",
   flow: "live" as const
 };
+
+function emptyCode(accountId: string): DeviceCodeView {
+  return {
+    accountId,
+    userCode: "",
+    verificationUri: "https://www.microsoft.com/link",
+    expiresAt: 0,
+    message: ""
+  };
+}
 
 function safeStorage(): {
   isEncryptionAvailable?: () => boolean;
@@ -89,6 +101,8 @@ function safeStorage(): {
 export class AccountStore extends EventEmitter {
   private accounts: StoredAccount[] = [];
   private readonly pending = new Map<string, PendingLogin>();
+  /** Account ids whose in-flight device code the user already cancelled. */
+  private readonly dismissed = new Set<string>();
   private loaded = false;
 
   constructor(readonly rootDir: string) {
@@ -250,12 +264,25 @@ export class AccountStore extends EventEmitter {
   private beginFlow(accountId: string, socketId?: string, botId?: string): Promise<DeviceCodeView> {
     this.unseal(accountId);
     const dir = this.cacheDir(accountId);
+    const preserveCache = this.cachePresent(accountId);
+    this.dismissed.delete(accountId);
+    this.pending.set(accountId, {
+      socketId,
+      botId,
+      aborted: false,
+      preserveCache,
+      view: emptyCode(accountId)
+    });
     return new Promise((resolve, reject) => {
       let settled = false;
-      let aborted = false;
       const fail = (code: AuthErrorCode, detail?: string) => {
-        aborted = true;
-        this.fail(accountId, code, detail);
+        if (this.dismissed.has(accountId)) return;
+        const pending = this.pending.get(accountId);
+        if (pending?.preserveCache || this.cachePresent(accountId)) this.clearAuthError(accountId);
+        else this.fail(accountId, code, detail);
+        this.pending.delete(accountId);
+        this.emit("done", { socketId, accountId, ok: false, phase: "error", errorCode: code });
+        this.emit("updated");
         if (!settled) {
           settled = true;
           reject(new PanelError(authEnglish(code, detail)));
@@ -263,6 +290,8 @@ export class AccountStore extends EventEmitter {
       };
       const timer = setTimeout(() => fail("auth.timeout"), 30_000);
       const flow = new Authflow(accountId, dir, FLOW_OPTIONS, (code) => {
+        const pending = this.pending.get(accountId);
+        if (!pending || pending.aborted || this.dismissed.has(accountId)) return;
         const view: DeviceCodeView = {
           accountId,
           userCode: String(code.user_code || ""),
@@ -270,7 +299,7 @@ export class AccountStore extends EventEmitter {
           expiresAt: Date.now() + Math.max(30, Number(code.expires_in) || 900) * 1000,
           message: redactSecrets(String(code.message || "Sign in with the code."))
         };
-        this.pending.set(accountId, { socketId, botId, view, aborted: false });
+        pending.view = view;
         this.emit("code", { socketId, botId, ...view });
         this.emit("updated");
         log.info(`Device code issued for account ${accountId.slice(0, 8)}`);
@@ -285,26 +314,37 @@ export class AccountStore extends EventEmitter {
         .then((result) => {
           clearTimeout(timer);
           const pending = this.pending.get(accountId);
-          if (aborted || pending?.aborted) {
-            this.wipeCache(accountId);
+          if (this.dismissed.has(accountId) || pending?.aborted) {
+            this.dismissed.delete(accountId);
+            if (!preserveCache) this.wipeCache(accountId);
+            else this.clearAuthError(accountId);
             this.pending.delete(accountId);
-            this.fail(accountId, "auth.cancelled");
             return;
           }
           this.rememberProfile(accountId, result.profile);
           this.pending.delete(accountId);
           this.seal(accountId);
-          this.emit("done", { socketId, accountId, ok: true });
+          this.emit("done", { socketId, accountId, ok: true, phase: "success" });
           this.emit("updated");
           log.success(`Microsoft profile saved for account ${accountId.slice(0, 8)}`);
         })
         .catch((err: unknown) => {
           clearTimeout(timer);
+          if (this.dismissed.has(accountId)) {
+            this.dismissed.delete(accountId);
+            if (!preserveCache) this.wipeCache(accountId);
+            else this.clearAuthError(accountId);
+            this.pending.delete(accountId);
+            return;
+          }
           const code = classifyAuthError(err);
           const detail = redactSecrets(err instanceof Error ? err.message : String(err));
+          const keep = preserveCache || this.cachePresent(accountId);
           this.pending.delete(accountId);
-          this.fail(accountId, code, detail);
-          this.emit("done", { socketId, accountId, ok: false, errorCode: code });
+          if (keep) this.clearAuthError(accountId);
+          else this.fail(accountId, code, detail);
+          this.emit("done", { socketId, accountId, ok: false, phase: "error", errorCode: code });
+          this.emit("updated");
           if (!settled) {
             settled = true;
             reject(new PanelError(authEnglish(code, detail)));
@@ -328,7 +368,13 @@ export class AccountStore extends EventEmitter {
       expiresAt: Date.now() + Math.max(30, Number(code.expires_in) || 900) * 1000,
       message: redactSecrets(String(code.message || "Sign in with the code."))
     };
-    this.pending.set(accountId, { socketId, botId, view, aborted: false });
+    this.pending.set(accountId, {
+      socketId,
+      botId,
+      view,
+      aborted: false,
+      preserveCache: this.cachePresent(accountId)
+    });
     this.emit("code", { socketId, botId, ...view });
     this.emit("updated");
     log.info(`Device code issued while connecting bot ${botId?.slice(0, 8) ?? "?"}`);
@@ -338,9 +384,45 @@ export class AccountStore extends EventEmitter {
   cancel(id: string) {
     const pending = this.pending.get(id);
     if (pending) pending.aborted = true;
+    const preserve = Boolean(pending?.preserveCache) || this.cachePresent(id);
+    this.dismissed.add(id);
     this.pending.delete(id);
-    this.fail(id, "auth.cancelled");
+    if (preserve) this.clearAuthError(id);
+    else this.fail(id, "auth.cancelled");
     this.emit("cancelled", { accountId: id, botId: pending?.botId });
+    this.emit("updated");
+  }
+
+  /** Microsoft accepted the account and the bot is now joining. Keeps the dialog, hides the code. */
+  markJoining(accountId: string) {
+    const pending = this.pending.get(accountId);
+    if (!pending) return;
+    pending.preserveCache = true;
+    this.emit("done", { socketId: pending.socketId, accountId, ok: true, phase: "joining" });
+  }
+
+  /**
+   * Closes a device code that mineflayer opened while connecting.
+   * A join failure (name already online) does not delete a saved sign-in.
+   */
+  finishPrompt(accountId: string, result: { ok: boolean; errorCode?: string }) {
+    const pending = this.pending.get(accountId);
+    if (!pending) return;
+    const socketId = pending.socketId;
+    const preserve = pending.preserveCache || this.cachePresent(accountId);
+    this.pending.delete(accountId);
+    this.dismissed.delete(accountId);
+    if (result.ok) {
+      this.clearAuthError(accountId);
+      this.emit("done", { socketId, accountId, ok: true, phase: "success" });
+      this.emit("updated");
+      return;
+    }
+    const code = result.errorCode && result.errorCode in AUTH_ERRORS ? (result.errorCode as AuthErrorCode) : "auth.failed";
+    const keepSession = preserve || code === "auth.nameTaken" || code === "auth.cancelledKept";
+    if (keepSession) this.clearAuthError(accountId);
+    else this.fail(accountId, code);
+    this.emit("done", { socketId, accountId, ok: false, phase: "error", errorCode: code });
     this.emit("updated");
   }
 
@@ -438,6 +520,18 @@ export class AccountStore extends EventEmitter {
     }
   }
 
+  private clearAuthError(accountId: string) {
+    const row = this.get(accountId);
+    if (!row) return;
+    row.hasCache = this.cachePresent(accountId);
+    if (row.hasCache) {
+      row.errorCode = null;
+      row.lastError = null;
+    }
+    row.updatedAt = Date.now();
+    this.persist();
+  }
+
   private fail(accountId: string, code: AuthErrorCode, detail?: string) {
     const row = this.get(accountId);
     if (!row) return;
@@ -460,7 +554,7 @@ export class AccountStore extends EventEmitter {
     const dir = this.cacheDir(accountId);
     if (!fs.existsSync(dir)) return false;
     return fs.readdirSync(dir).some((name) => {
-      if (!/-(mca|live|msal)-cache\.json(\.enc)?$/.test(name)) return false;
+      if (!/[_-](mca|live|msal|xbl)-cache\.json(\.enc)?$/.test(name)) return false;
       try {
         if (name.endsWith(".enc")) return fs.statSync(path.join(dir, name)).size > 16;
         const parsed = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as unknown;

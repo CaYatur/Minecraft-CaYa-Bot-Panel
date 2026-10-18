@@ -1303,6 +1303,7 @@ export const tr: MessageTree = {
     add: "Microsoft hesabı ekle",
     empty: "Henüz Microsoft hesabı yok.",
     signIn: "Giriş yap",
+    signInAgain: "Tekrar giriş yap",
     rename: "Yeniden adlandır",
     signOut: "Çıkış yap",
     remove: "Kaldır",
@@ -1311,6 +1312,10 @@ export const tr: MessageTree = {
     unlinked: "Bir bota atanmamış",
     codeTitle: "Microsoft girişi",
     codeHelp: "Bağlantıyı aç, kodu gir ve Minecraft erişimini onayla. Panel şifreni görmez.",
+    switchTitle: "Microsoft bu girişi “Minecraft for Nintendo Switch” olarak gösterir. Bu, panelin kullandığı normal Minecraft Java girişidir. Switch sürümünü satın almaz veya başlatmaz.",
+    joining: "Giriş yapıldı. Sunucuya bağlanılıyor…",
+    errorTitle: "Tamamlanamadı",
+    close: "Kapat",
     codeExpires: "Kalan süre {time}",
     codeExpired: "Kodun süresi doldu. Girişi yeniden başlat.",
     copy: "Kodu kopyala",
@@ -1342,6 +1347,8 @@ export const tr: MessageTree = {
     mismatchOffline: "Bu sunucu Microsoft hesabı istiyor. Botu Microsoft girişine alıp oturum aç.",
     mismatchPremium: "Bu Microsoft hesabı için premium doğrulama başarısız. Hesaplar'dan yeniden giriş yap.",
     sessionRejected: "Sunucu Microsoft oturumunu reddetti. Hesaplar'dan yeniden giriş yap.",
+    nameTaken: "Microsoft girişi başarılı, fakat bu oyuncu zaten oyunda. Diğer oturumu kapatıp botu yeniden başlat.",
+    cancelledKept: "Giriş iptal edildi. Çıkış yapana kadar bu hesap kullanılabilir.",
     failed: "Microsoft girişi başarısız oldu."
   }
 };

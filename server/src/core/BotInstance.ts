@@ -35,7 +35,7 @@ import type {
   TaskSummary
 } from "../types";
 import { defaultRuntime } from "../types";
-import { classifyKick } from "../modules/auth/messages";
+import { AUTH_ERRORS, classifyAuthError, classifyKick } from "../modules/auth/messages";
 import { chatComponentToText, friendlyError } from "../utils/chatText";
 import { createLogger, type BotLogger } from "../utils/logger";
 import { ChatRateLimiter } from "./ChatRateLimiter";
@@ -88,6 +88,8 @@ export class BotInstance extends EventEmitter {
   controlEpoch = 0;
   /** set when a device code is showing or refresh must not loop */
   private authInteraction = false;
+  /** Device-code dialog is open for this connect and still needs a result. */
+  private devicePromptOpen = false;
   private connectSocketId: string | undefined;
 
   constructor(
@@ -107,6 +109,8 @@ export class BotInstance extends EventEmitter {
       rememberProfile(accountId: string, profile: { name: string; uuid: string }): void;
       noteError(accountId: string, code: string): void;
       seal(accountId: string): void;
+      markJoining(accountId: string): void;
+      finishPrompt(accountId: string, result: { ok: boolean; errorCode?: string }): void;
     }
   ) {
     super();
@@ -1044,6 +1048,7 @@ export class BotInstance extends EventEmitter {
           return;
         }
         this.authInteraction = true;
+        this.devicePromptOpen = true;
         this.authBridge?.publishCode(accountId, code, this.connectSocketId, this.config.id);
         this.log.info("Waiting for Microsoft device-code sign-in");
       };
@@ -1073,6 +1078,7 @@ export class BotInstance extends EventEmitter {
   private hookBotEvents(bot: Bot) {
     bot.once("login", () => {
       this.authInteraction = false;
+      if (this.devicePromptOpen && this.config.accountId) this.authBridge?.markJoining(this.config.accountId);
       this.log.info("Logged in to server, waiting for spawn…");
     });
 
@@ -1086,6 +1092,7 @@ export class BotInstance extends EventEmitter {
       if (this.config.auth === "microsoft" && this.config.accountId && bot.username) {
         const uuid = String((bot as unknown as { player?: { uuid?: string } }).player?.uuid ?? "").replace(/-/g, "");
         this.authBridge?.rememberProfile(this.config.accountId, { name: bot.username, uuid });
+        this.closeDevicePrompt({ ok: true });
       }
       this.updateDimension();
       this.setStatus("online");
@@ -1147,14 +1154,24 @@ export class BotInstance extends EventEmitter {
         this.wantsRunning = false;
         this.authInteraction = true;
       }
+      if (this.devicePromptOpen) {
+        this.closeDevicePrompt({ ok: false, errorCode: classified.code ?? "auth.failed" });
+      }
     });
 
     bot.on("error", (err: Error) => {
       const msg = friendlyError(err);
       this.runtime.lastError = msg;
       this.log.error("Connection error", msg);
-      if (this.authInteraction) {
+      if (this.authInteraction || this.devicePromptOpen) {
         this.wantsRunning = false;
+        if (this.devicePromptOpen) {
+          const classified = classifyKick(msg, this.config.auth === "microsoft" ? "microsoft" : "offline");
+          const code = classified.code ?? classifyAuthError(err);
+          this.runtime.errorCode = code;
+          this.runtime.lastError = classified.code ? classified.message : AUTH_ERRORS[code];
+          this.closeDevicePrompt({ ok: false, errorCode: code });
+        }
         if (this.status !== "kicked") this.setStatus("error");
         return;
       }
@@ -1169,6 +1186,7 @@ export class BotInstance extends EventEmitter {
       }
       this.tasks.cancelAll("connection lost");
       this.teardownBot();
+      if (this.devicePromptOpen) this.closeDevicePrompt({ ok: false, errorCode: this.runtime.errorCode ?? "auth.failed" });
       if (this.wantsRunning) {
         this.scheduleReconnect();
       } else {
@@ -1456,6 +1474,13 @@ export class BotInstance extends EventEmitter {
         /* noop */
       }
     }
+  }
+
+  private closeDevicePrompt(result: { ok: boolean; errorCode?: string }) {
+    if (!this.devicePromptOpen || !this.config.accountId) return;
+    this.devicePromptOpen = false;
+    const code = result.errorCode && result.errorCode in AUTH_ERRORS ? result.errorCode : result.errorCode ? "auth.failed" : undefined;
+    this.authBridge?.finishPrompt(this.config.accountId, { ok: result.ok, errorCode: code });
   }
 
   private failAuth(code: string, message: string) {

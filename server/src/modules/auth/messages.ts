@@ -13,6 +13,8 @@ export const AUTH_ERRORS = {
   "auth.mismatchOffline": "This server requires a Microsoft account. Switch the bot to Microsoft auth and sign in.",
   "auth.mismatchPremium": "Premium verification failed for this Microsoft account. Sign in again from Accounts.",
   "auth.sessionRejected": "The server rejected the Microsoft session. Sign in again from Accounts.",
+  "auth.nameTaken": "Signed in with Microsoft, but this player is already in the game. Stop the other session, then start the bot again.",
+  "auth.cancelledKept": "Sign-in was cancelled. This account stays signed in until you choose Sign out.",
   "auth.failed": "Microsoft sign-in failed."
 } as const;
 
@@ -54,6 +56,9 @@ export function classifyKick(
   if (session) {
     const code = auth === "microsoft" ? "auth.sessionRejected" : "auth.mismatchOffline";
     return { code, stop: true, message: AUTH_ERRORS[code] };
+  }
+  if (lower.includes("name_taken") || lower.includes("already connected") || lower.includes("already online")) {
+    return { code: "auth.nameTaken", stop: true, message: AUTH_ERRORS["auth.nameTaken"] };
   }
   return { stop: false, message: text };
 }

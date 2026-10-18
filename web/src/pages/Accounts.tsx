@@ -144,7 +144,7 @@ export function Accounts() {
                     className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
                     onClick={() => void startLogin(account)}
                   >
-                    {t("accounts.signIn")}
+                    {t(account.tokenStatus === "cached" || account.username ? "accounts.signInAgain" : "accounts.signIn")}
                   </button>
                   <button
                     type="button"
