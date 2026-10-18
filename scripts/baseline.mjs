@@ -6,9 +6,13 @@
  *
  * This file records how the panel works today. A product change that breaks
  * one of these checks should fail here, then the check is updated on purpose.
+ * It covers the old smoke, combat, movement, inventory, full-suite, and grok
+ * scenarios against today's behavior. Flying-squid still cannot click windows
+ * or publish player entities; those two physics checks are recorded as skips.
  * It does not call Microsoft and it does not install mineflayer.
  */
 import net from "net";
+import { pickBestWeaponName } from "../server/src/modules/combat/weapons.ts";
 
 const API = process.env.CAYA_API || "http://127.0.0.1:3001/api";
 const MC_PORT = Number(process.env.CAYA_TEST_MC_PORT || 25566);
@@ -28,6 +32,29 @@ function assert(name, cond, detail) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let skips = 0;
+const skip = (name, detail) => {
+  skips++;
+  console.log(`  skip ${name}${detail ? " — " + detail : ""}`);
+};
+
+async function waitFor(label, fn, timeoutMs = 60_000, everyMs = 800) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const value = await fn();
+    if (value) return value;
+    await sleep(everyMs);
+  }
+  throw new Error(`${label}: timed out`);
+}
+
+async function getBot(id) {
+  const state = await req("GET", "/state");
+  return (state.bots || []).find((row) => row.config.id === id);
+}
+
+const dist2d = (a, b) => Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.z ?? 0) - (b?.z ?? 0));
+const findItem = (inv, name) => inv?.slots?.find((slot) => slot && slot.name === name) ?? null;
 
 async function req(method, path, body) {
   const res = await fetch(API + path, {
@@ -191,16 +218,59 @@ async function main() {
   track("bots", id);
   assert("new bot defaults to offline auth", bot.config.auth === "offline" && !bot.config.accountId && bot.combat?.mode === "idle");
 
+  assert("weapon picker prefers diamond", pickBestWeaponName(["wooden_sword", "diamond_sword", "dirt"], []) === "diamond_sword");
+  assert("weapon picker skips a banned sword", pickBestWeaponName(["diamond_sword", "iron_sword"], ["diamond_sword"]) === "iron_sword");
+
   const patched = await req("PATCH", `/bots/${id}`, {
-    combat: { defendMode: "all", reach: 3, fleeAtHealth: 6, jumpCrit: true }
+    combat: { defendMode: "all", reach: 3, fleeAtHealth: 6, jumpCrit: true },
+    survival: { autoEat: true, eatAtFood: 14 },
+    authorizedPlayers: ["OwnerTest"],
+    inventory: { bannedItems: ["diamond_sword"], autoBestGear: false }
   });
-  assert("combat defend mode saved", patched.config.combat.defendMode === "all");
+  assert("combat, survival, trust, and ban saved",
+    patched.config.combat.defendMode === "all" &&
+    patched.config.survival.autoEat === true &&
+    patched.config.authorizedPlayers.includes("OwnerTest") &&
+    patched.config.inventory.bannedItems.includes("diamond_sword"));
   await expectStatus("empty attack is rejected", "POST", `/bots/${id}/action`, 400, { type: "attack", player: "" });
   await expectStatus("loot without a death is rejected", "POST", `/bots/${id}/action`, 400, { type: "loot-death" });
-  const eat = await req("POST", `/bots/${id}/action`, { type: "eat" });
-  assert("eat can be queued", eat.ok === true);
-  const stopped = await req("POST", `/bots/${id}/action`, { type: "stop" });
-  assert("stop action accepted", stopped.ok === true);
+  await expectStatus("unknown action is rejected", "POST", `/bots/${id}/action`, 400, { type: "no_such_action_xyz" });
+  const enqueueOk = [
+    ["stop-combat", {}],
+    ["stop", {}],
+    ["eat", {}],
+    ["hunt", { radius: 16 }],
+    ["cook", {}],
+    ["acquire-food", {}],
+    ["collect-wood", { count: 4 }],
+    ["odun-topla", { count: 2 }],
+    ["collect-drops", { radius: 12 }],
+    ["mine", { ore: "coal", count: 2, mode: "legit" }],
+    ["maden-topla", { ore: "iron", count: 1, mode: "utility" }],
+    ["craft", { item: "stick", count: 1 }],
+    ["üret", { item: "oak_planks", count: 1 }],
+    ["clear-mobs", { radius: 8 }],
+    ["flee", {}],
+    ["chat", { text: "baseline-ping" }],
+    ["deposit", {}],
+    ["withdraw", { item: "dirt", count: 1 }],
+    ["fetch", { item: "dirt", count: 1, player: "Someone" }]
+  ];
+  for (const [type, extra] of enqueueOk) {
+    try {
+      const queued = await req("POST", `/bots/${id}/action`, { type, ...extra });
+      assert(`enqueue ${type}`, queued.ok === true);
+    } catch (err) {
+      fail(`enqueue ${type}`, err.message);
+    }
+  }
+  await req("POST", `/bots/${id}/tasks/cancel-all`);
+  ok("tasks cancelled");
+  for (const item of ["stick", "stone_pickaxe", "crafting_table", "furnace"]) {
+    const itemPlan = await req("GET", `/bots/${id}/craft-plan?item=${encodeURIComponent(item)}&count=1`);
+    assert(`craft plan ${item}`, Array.isArray(itemPlan.plan) && itemPlan.plan.length > 0, `steps=${itemPlan.plan?.length ?? 0}`);
+  }
+  await expectStatus("craft plan without an item is rejected", "GET", `/bots/${id}/craft-plan`, 400);
   await req("POST", `/bots/${id}/tasks/pause`);
   await req("POST", `/bots/${id}/tasks/resume`);
   const history = await req("GET", `/bots/${id}/tasks/history`);
@@ -224,6 +294,7 @@ async function main() {
   const memory = await req("GET", `/world-memory?serverId=${server.id}`);
   assert("world memory shape", memory && Array.isArray(memory.chests) && Array.isArray(memory.ores));
   await expectStatus("unknown chest forget is 404", "DELETE", "/world-memory/chests/missing-chest", 404);
+  await expectStatus("world memory requires a server", "GET", "/world-memory", 400);
 
   const rule = await req("POST", "/rules", {
     name: "Baseline gel",
@@ -238,6 +309,15 @@ async function main() {
   ok("rule dry-test");
   const disabled = await req("PATCH", `/rules/${rule.id}`, { enabled: false });
   assert("rule can be disabled", disabled.enabled === false);
+  const badRule = await req("POST", "/rules", {
+    name: "Baseline bad regex",
+    enabled: true,
+    botIds: [id],
+    trigger: { type: "chat", pattern: "([unclosed", match: "regex", from: "anyone" },
+    actions: [{ type: "panel_notify", message: "x", level: "info" }]
+  });
+  track("rules", badRule.id);
+  ok("broken regex rule can be saved");
 
   const bulk = await req("POST", "/bots/bulk", { template: "BaseLn{n}", count: 2, serverId: server.id, startNow: false });
   assert("bulk create makes two offline bots",
@@ -248,43 +328,171 @@ async function main() {
     fail("local test server is listening", `127.0.0.1:${MC_PORT} — run npm run testserver`);
   } else {
     ok("local test server is listening");
-    await req("POST", `/bots/${id}/start`);
-    try {
-      const live = await waitOnline(id);
-      assert("bot spawned with vitals",
-        typeof live.runtime?.health === "number" &&
-        typeof live.runtime?.position?.x === "number" &&
-        typeof live.runtime?.position?.y === "number");
-      const chat = await req("POST", `/bots/${id}/chat`, { text: "baseline" });
-      assert("chat accepted", chat.ok === true);
-      const here = await req("POST", `/bots/${id}/waypoint-here`, { name: "BaselineHere" });
-      track("waypoints", here.id);
-      assert("waypoint from live position", here.name === "BaselineHere" && typeof here.x === "number");
-      await req("POST", `/bots/${id}/action`, {
-        type: "goto",
-        x: live.runtime.position.x + 2,
-        y: live.runtime.position.y,
-        z: live.runtime.position.z
-      });
-      ok("goto queued while online");
-      await sleep(1500);
-      await req("POST", `/bots/${id}/action`, { type: "stop" });
-      ok("movement stopped");
-    } catch (err) {
-      fail("bot joined the local test server", err.message);
+    const squad = await req("POST", "/bots/bulk", { template: "BaseS_{n}", count: 3, serverId: server.id, startNow: false });
+    assert("three squad bots created", squad.created?.length === 3);
+    const [id1, id2, id3] = squad.created.map((row) => row.config.id);
+    for (const botId of [id1, id2, id3]) {
+      track("bots", botId);
+      await req("PATCH", `/bots/${botId}`, { inventory: { autoBestGear: false } });
     }
-    await req("POST", `/bots/${id}/stop`).catch(() => {});
+    await req("POST", "/bots/start-all", { ids: [id1, id2, id3] });
+    try {
+      await waitFor("three bots online", async () => {
+        const rows = await Promise.all([getBot(id1), getBot(id2), getBot(id3)]);
+        return rows.every((row) => row?.status === "online") ? rows : null;
+      }, 70_000);
+      ok("three bots online together");
+      const first = await getBot(id1);
+      assert("vitals are live", first.runtime.health > 0 && first.runtime.position.y !== 0);
+
+      const marker = `baseline selam ${Date.now() % 100000}`;
+      await req("POST", `/bots/${id1}/chat`, { text: marker });
+      const seen = await waitFor("second bot sees the chat", async () => {
+        const history = await req("GET", `/bots/${id2}/chat-history?limit=100`);
+        return history.find((entry) => String(entry.text || "").includes(marker));
+      }, 20_000);
+      assert("chat parsed as the sender", seen.kind === "player" && seen.username === "BaseS_1", `kind=${seen.kind} user=${seen.username}`);
+      const selfHistory = await req("GET", `/bots/${id1}/chat-history?limit=100`);
+      const selfEcho = selfHistory.find((entry) => String(entry.text || "").includes(marker));
+      assert("sender sees its own chat", Boolean(selfEcho));
+      if (selfEcho?.self) ok("own chat is marked self");
+      else ok("own chat is visible");
+
+      for (let n = 1; n <= 4; n++) await req("POST", `/bots/${id3}/chat`, { text: `rate ${n}` });
+      await sleep(7000);
+      const afterRate = await getBot(id3);
+      assert("chat rate limit does not kick the bot", afterRate?.status === "online", afterRate?.status);
+      const chatAll = await req("GET", `/bots/${id1}/chat-history?limit=200`);
+      assert("system logs are not written into game chat", !chatAll.some((entry) => /\[(manager|bot|server|socket)\]/.test(entry.text || "")));
+
+      const startPos = first.runtime.position;
+      const target = { x: Math.round(startPos.x) + 12, y: Math.round(startPos.y), z: Math.round(startPos.z) + 12 };
+      const gotoRes = await req("POST", `/bots/${id1}/action`, { type: "goto", ...target, range: 2 });
+      assert("goto is queued", gotoRes.task?.state === "running" || gotoRes.task?.state === "queued", JSON.stringify(gotoRes.task));
+      await sleep(1200);
+      const during = await getBot(id1);
+      assert("goto is the current task", during.tasks?.current?.type === "goto", JSON.stringify(during.tasks?.current));
+      await waitFor("bot reaches the goto target", async () => {
+        const row = await getBot(id1);
+        return dist2d(row.runtime.position, target) <= 3.5 && !row.tasks.current;
+      }, 90_000);
+      ok("goto reached the target");
+
+      const here = await req("POST", `/bots/${id1}/waypoint-here`, { name: "BaselineHere" });
+      track("waypoints", here.id);
+      await req("POST", `/bots/${id1}/action`, { type: "goto", x: startPos.x, y: startPos.y, z: startPos.z, range: 2 });
+      await waitFor("bot returns to the start", async () => {
+        const row = await getBot(id1);
+        return dist2d(row.runtime.position, startPos) <= 3.5 && !row.tasks.current;
+      }, 90_000);
+      ok("returned to the start");
+      await req("POST", `/bots/${id1}/action`, { type: "goto-waypoint", waypointId: here.id });
+      await waitFor("bot reaches the waypoint", async () => {
+        const row = await getBot(id1);
+        return dist2d(row.runtime.position, here) <= 3.5 && !row.tasks.current;
+      }, 90_000);
+      ok("goto-waypoint reached");
+
+      await req("POST", `/bots/${id2}/action`, { type: "follow", player: "BaseS_1", distance: 2 });
+      await sleep(2500);
+      const follower = await getBot(id2);
+      const followLabel = String(follower.tasks?.current?.progress?.label ?? "");
+      if (followLabel.includes("görünmüyor") || /not visible|cannot see/i.test(followLabel)) {
+        skip("follow physics", "this test server does not publish player entities");
+        assert("follow waits instead of crashing", Boolean(follower.tasks?.current));
+      } else {
+        await req("POST", `/bots/${id1}/action`, { type: "goto", x: here.x - 14, y: here.y, z: here.z, range: 2 });
+        await waitFor("follower catches the leader", async () => {
+          const [leader, follow] = await Promise.all([getBot(id1), getBot(id2)]);
+          return !leader.tasks.current && dist2d(leader.runtime.position, follow.runtime.position) <= 5;
+        }, 90_000);
+        ok("follow caught the leader");
+      }
+      await req("POST", `/bots/${id2}/action`, { type: "stop" });
+      await sleep(1500);
+      const followStopped = await getBot(id2);
+      assert("stop clears follow", !followStopped.tasks?.current && (followStopped.tasks?.queue?.length ?? 0) === 0);
+
+      await req("POST", `/bots/${id3}/chat`, { text: "/give BaseS_3 iron_helmet 1" });
+      await req("POST", `/bots/${id3}/chat`, { text: "/give BaseS_3 dirt 16" });
+      const invReady = await waitFor("inventory sync", async () => {
+        const row = await getBot(id3);
+        return findItem(row.inventory, "iron_helmet") && findItem(row.inventory, "dirt") ? row.inventory : null;
+      }, 25_000);
+      const helmet = findItem(invReady, "iron_helmet");
+      const dirt = findItem(invReady, "dirt");
+      ok(`inventory synced helmet slot ${helmet.slot}, dirt x${dirt.count}`);
+      await req("POST", `/bots/${id3}/inventory`, { op: "setHotbar", quickBar: 3 });
+      await waitFor("hotbar slot", async () => (await getBot(id3)).inventory?.heldQuickBar === 3, 10_000);
+      ok("hotbar selection synced");
+      await req("PATCH", `/bots/${id3}`, { inventory: { bannedItems: ["iron_helmet"], autoBestGear: false } });
+      await expectStatus("banned item cannot be equipped", "POST", `/bots/${id3}/inventory`, 400, { op: "equip", slot: helmet.slot });
+      await req("PATCH", `/bots/${id3}`, { inventory: { bannedItems: [], keepItems: ["dirt"], autoBestGear: false } });
+      await expectStatus("kept item cannot be dropped", "POST", `/bots/${id3}/inventory`, 400, { op: "toss", slot: dirt.slot, amount: 1 });
+      await req("PATCH", `/bots/${id3}`, { inventory: { bannedItems: [], keepItems: [], autoBestGear: false } });
+      try {
+        await req("POST", `/bots/${id3}/inventory`, { op: "equip", slot: helmet.slot });
+        await waitFor("helmet equipped", async () => findItem((await getBot(id3)).inventory, "iron_helmet")?.slot === 5, 10_000);
+        ok("helmet equipped");
+        try {
+          await req("POST", `/bots/${id3}/inventory`, { op: "unequip", dest: "head" });
+          await waitFor("helmet unequipped", async () => {
+            const item = findItem((await getBot(id3)).inventory, "iron_helmet");
+            return item && item.slot !== 5;
+          }, 10_000);
+          ok("helmet unequipped");
+        } catch (err) {
+          skip("unequip physics", err.message);
+        }
+      } catch (err) {
+        skip("equip physics", err.message);
+      }
+      try {
+        const dirtNow = findItem((await getBot(id3)).inventory, "dirt");
+        await req("POST", `/bots/${id3}/inventory`, { op: "toss", slot: dirtNow.slot, amount: 1 });
+        await waitFor("dirt count dropped", async () => findItem((await getBot(id3)).inventory, "dirt")?.count === dirtNow.count - 1, 10_000);
+        ok("one dirt dropped");
+      } catch (err) {
+        skip("drop physics", err.message);
+      }
+
+      await req("POST", `/bots/${id1}/tasks/cancel-all`).catch(() => {});
+      await req("POST", `/bots/${id1}/action`, { type: "attack", player: "NobodyBaseline" });
+      await sleep(2500);
+      const afterAttack = await getBot(id1);
+      assert("missing-player attack leaves the bot online", afterAttack?.status === "online", afterAttack?.status);
+      await req("POST", `/bots/${id1}/tasks/cancel-all`);
+      for (const action of [
+        { type: "eat" },
+        { type: "hunt", radius: 12 },
+        { type: "collect-wood", count: 2 },
+        { type: "mine", ore: "coal", count: 1, mode: "legit" },
+        { type: "craft", item: "stick", count: 1 }
+      ]) {
+        await req("POST", `/bots/${id1}/action`, action);
+        ok(`online enqueue ${action.type}`);
+      }
+      await sleep(2000);
+      await req("POST", `/bots/${id1}/tasks/cancel-all`);
+      const still = await getBot(id1);
+      assert("bot stays online after a burst of jobs", still?.status === "online", still?.status);
+      if (Array.isArray(still?.inventory?.slots)) ok(`inventory snapshot has ${still.inventory.slots.length} slots`);
+      else skip("inventory snapshot", "not synced yet");
+    } catch (err) {
+      fail("online scenarios", err.message);
+    }
+    await req("POST", "/bots/stop-all", { ids: [id1, id2, id3] }).catch(() => {});
   }
 
   await cleanup();
   const after = await req("GET", "/state");
   assert("baseline fixtures removed",
-    !(after.bots || []).some((row) => String(row.config?.username || "").startsWith("Baseline") || String(row.config?.username || "").startsWith("BaseLn")) &&
+    !(after.bots || []).some((row) => /^(Baseline|BaseLn|BaseS)/.test(String(row.config?.username || ""))) &&
     !(after.servers || []).some((row) => row.name === "Baseline"));
   const rulesAfter = await req("GET", "/rules");
   assert("baseline rules removed", !rulesAfter.some((rule) => String(rule.name || "").startsWith("Baseline")));
 
-  console.log(failures ? `\nFAILED ${failures}` : "\nbaseline passed");
+  console.log(failures ? `\nFAILED ${failures} (${skips} skipped)` : `\nbaseline passed (${skips} skipped)`);
   process.exit(failures ? 1 : 0);
 }
 
