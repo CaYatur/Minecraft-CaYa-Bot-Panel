@@ -174,7 +174,14 @@ export interface AlwaysOnConfig {
   enabled: boolean;
   preset: "custom" | "sleeping_server";
   backoff: { baseMs: number; maxMs: number; maxAttempts: number; jitter: number; stableMs: number };
-  antiAfk: { enabled: boolean; intervalMs: number; mode: "mixed" | "look" | "sneak" | "jump" | "swing" | "step" };
+  antiAfk: {
+    enabled: boolean;
+    /** Milliseconds between moves. */
+    intervalMs: number;
+    /** Milliseconds sneak, jump, and step stay held. */
+    holdMs: number;
+    mode: "mixed" | "look" | "sneak" | "jump" | "swing" | "step";
+  };
   loginPlugin: {
     enabled: boolean;
     delayMs: number;
@@ -196,7 +203,7 @@ export function defaultAlwaysOn(): AlwaysOnConfig {
     enabled: false,
     preset: "custom",
     backoff: { baseMs: 5_000, maxMs: 120_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
-    antiAfk: { enabled: false, intervalMs: 45_000, mode: "mixed" },
+    antiAfk: { enabled: false, intervalMs: 45_000, holdMs: 400, mode: "mixed" },
     loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "", sendMode: "prompt", registered: false }
   };
 }
@@ -206,6 +213,8 @@ export interface BotConfig {
   username: string;
   serverId: string;
   autostart: boolean;
+  /** Extra seconds to wait after the panel opens before this bot joins. */
+  autostartDelaySec?: number;
   /** offline (default) or Microsoft device-code auth */
   auth?: BotAuthType;
   /** id in data/auth/accounts.json — tokens are never stored here */
@@ -465,6 +474,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     username,
     serverId,
     autostart: false,
+    autostartDelaySec: 0,
     auth: "offline",
     accountId: null,
     authorizedPlayers: [],

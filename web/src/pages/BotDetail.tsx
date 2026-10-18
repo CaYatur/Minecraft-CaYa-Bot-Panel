@@ -219,6 +219,9 @@ export function BotDetail() {
       {problem && bot.status !== "online" && (
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{problem}</div>
       )}
+      {bot.config.alwaysOn?.antiAfk?.enabled && (
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">{t("ops.antiAfkHelp")}</div>
+      )}
 
       <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
         <StatBar

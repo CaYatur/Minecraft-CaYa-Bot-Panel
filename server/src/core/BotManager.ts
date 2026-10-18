@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
+import { antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec } from "../modules/alwaysOn/antiAfk";
 import { loginSendMode, normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
 import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
 import { stopAllViews, stopView } from "../modules/view/session";
@@ -227,8 +228,20 @@ export class BotManager extends EventEmitter {
       inst.config.serverId = serverId;
       if (inst.status !== "stopped") this.log.warn("Server changed — restart the bot for it to take effect");
     }
+    const antiAfkWasOn = Boolean(inst.config.alwaysOn?.antiAfk.enabled);
     inst.config = mergeConfig(inst.config, rest as Partial<BotConfig>);
+    if (inst.config.autostartDelaySec !== undefined) {
+      inst.config.autostartDelaySec = clampAutostartDelaySec(inst.config.autostartDelaySec);
+    }
+    const afk = inst.config.alwaysOn?.antiAfk;
+    if (afk) {
+      afk.enabled = Boolean(afk.enabled);
+      afk.intervalMs = clampAntiAfkInterval(afk.intervalMs);
+      afk.holdMs = clampAntiAfkHold(afk.holdMs);
+      afk.mode = antiAfkMode(afk.mode);
+    }
     if (patch.alwaysOn) inst.syncAntiAfk();
+    if (!antiAfkWasOn && afk?.enabled) inst.resetAllWork("Anti-AFK locked other actions");
     if (patch.auth !== undefined || patch.accountId !== undefined) {
       this.applyAuth(inst.config, inst.config.auth, inst.config.accountId, inst.config.username, id);
     }
@@ -284,7 +297,7 @@ export class BotManager extends EventEmitter {
           this.log.warn(`Could not start ${inst.config.username}`, inst.runtime.lastError);
           this.emit("changed");
         }
-      }, i * BULK_START_STAGGER_MS);
+      }, i * BULK_START_STAGGER_MS + clampAutostartDelaySec(inst.config.autostartDelaySec) * 1000);
     });
     return targets.length;
   }

@@ -43,6 +43,8 @@ export interface BotConfig {
   username: string;
   serverId: string;
   autostart: boolean;
+  autostartDelaySec?: number;
+  alwaysOn?: { antiAfk?: { enabled?: boolean } };
   auth?: BotAuthType;
   accountId?: string | null;
   authorizedPlayers: string[];

@@ -4,12 +4,18 @@ import { api } from "../lib/api";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
+const fieldClass = "rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-50";
+
 export function AlwaysOnCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
   const autostart = useAppStore((s) => Boolean(s.bots[botId]?.config.autostart));
+  const delaySec = useAppStore((s) => Number(s.bots[botId]?.config.autostartDelaySec ?? 0));
   const applySnapshot = useAppStore((s) => s.applySnapshot);
-  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { antiAfk?: { enabled?: boolean; mode?: string } } } | null>(null);
+  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { antiAfk?: { enabled?: boolean; mode?: string; intervalMs?: number; holdMs?: number } } } | null>(null);
+  const [delayDraft, setDelayDraft] = useState("0");
+  const [intervalDraft, setIntervalDraft] = useState("45");
+  const [holdDraft, setHoldDraft] = useState("400");
 
   const load = async () => {
     try {
@@ -23,6 +29,17 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
     void load();
   }, [botId]);
 
+  useEffect(() => {
+    setDelayDraft(String(delaySec));
+  }, [delaySec]);
+
+  useEffect(() => {
+    const afk = status?.config?.antiAfk;
+    if (!afk) return;
+    setIntervalDraft(String(Math.round((afk.intervalMs ?? 45_000) / 1000)));
+    setHoldDraft(String(afk.holdMs ?? 400));
+  }, [status?.config?.antiAfk?.intervalMs, status?.config?.antiAfk?.holdMs]);
+
   const patch = async (body: unknown) => {
     try {
       await api.patch(`/api/bots/${botId}`, body);
@@ -33,25 +50,64 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
     }
   };
 
+  const antiAfkOn = Boolean(status?.config?.antiAfk?.enabled);
+  const commitDelay = () => {
+    const next = Math.min(300, Math.max(0, Math.round(Number(delayDraft) || 0)));
+    setDelayDraft(String(next));
+    if (next !== delaySec) void patch({ autostartDelaySec: next });
+  };
+  const commitInterval = () => {
+    const sec = Math.min(600, Math.max(5, Math.round(Number(intervalDraft) || 45)));
+    setIntervalDraft(String(sec));
+    if (sec * 1000 !== (status?.config?.antiAfk?.intervalMs ?? 45_000)) {
+      void patch({ alwaysOn: { antiAfk: { intervalMs: sec * 1000 } } });
+    }
+  };
+  const commitHold = () => {
+    const ms = Math.min(2_000, Math.max(100, Math.round(Number(holdDraft) || 400)));
+    setHoldDraft(String(ms));
+    if (ms !== (status?.config?.antiAfk?.holdMs ?? 400)) {
+      void patch({ alwaysOn: { antiAfk: { holdMs: ms } } });
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm leading-relaxed text-zinc-400">{t("ops.alwaysOnHelp")}</p>
-      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-200">
-        <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+        <label className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
           <input type="checkbox" checked={autostart} onChange={(e) => void patch({ autostart: e.target.checked })} />
           {t("botDetail.autostart")}
         </label>
-        <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
-          <input type="checkbox" checked={Boolean(status?.config?.antiAfk?.enabled)} onChange={(e) => void patch({ alwaysOn: { antiAfk: { enabled: e.target.checked } } })} />
+        <p className="text-xs leading-relaxed text-zinc-500">{t("ops.autostartHelp")}</p>
+        <label className="flex w-40 flex-col gap-1 text-xs text-zinc-400">
+          {t("ops.autostartDelay")}
+          <input
+            type="number"
+            min={0}
+            max={300}
+            value={delayDraft}
+            disabled={!autostart}
+            onChange={(e) => setDelayDraft(e.target.value)}
+            onBlur={commitDelay}
+            className={fieldClass}
+          />
+        </label>
+        <p className="text-xs leading-relaxed text-zinc-500">{t("ops.autostartRetry")}</p>
+      </section>
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+        <label className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
+          <input type="checkbox" checked={antiAfkOn} onChange={(e) => void patch({ alwaysOn: { antiAfk: { enabled: e.target.checked } } })} />
           {t("ops.antiAfk")}
         </label>
-        {status?.config?.antiAfk?.enabled && (
+        <div className="flex flex-wrap gap-3">
           <label className="flex flex-col gap-1 text-xs text-zinc-400">
             {t("ops.antiAfkMode")}
             <select
-              value={status.config.antiAfk.mode || "mixed"}
+              value={status?.config?.antiAfk?.mode || "mixed"}
+              disabled={!antiAfkOn}
               onChange={(e) => void patch({ alwaysOn: { antiAfk: { mode: e.target.value } } })}
-              className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
+              className={`cursor-pointer ${fieldClass}`}
             >
               <option value="mixed">{t("ops.antiAfkMixed")}</option>
               <option value="look">{t("ops.antiAfkLook")}</option>
@@ -61,9 +117,36 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
               <option value="step">{t("ops.antiAfkStep")}</option>
             </select>
           </label>
-        )}
-      </div>
-      {status?.config?.antiAfk?.enabled && <p className="text-xs text-zinc-500">{t("ops.antiAfkHelp")}</p>}
+          <label className="flex w-36 flex-col gap-1 text-xs text-zinc-400">
+            {t("ops.antiAfkInterval")}
+            <input
+              type="number"
+              min={5}
+              max={600}
+              value={intervalDraft}
+              disabled={!antiAfkOn}
+              onChange={(e) => setIntervalDraft(e.target.value)}
+              onBlur={commitInterval}
+              className={fieldClass}
+            />
+          </label>
+          <label className="flex w-36 flex-col gap-1 text-xs text-zinc-400">
+            {t("ops.antiAfkHold")}
+            <input
+              type="number"
+              min={100}
+              max={2000}
+              step={50}
+              value={holdDraft}
+              disabled={!antiAfkOn}
+              onChange={(e) => setHoldDraft(e.target.value)}
+              onBlur={commitHold}
+              className={fieldClass}
+            />
+          </label>
+        </div>
+        <p className="text-xs leading-relaxed text-zinc-500">{t("ops.antiAfkHelp")}</p>
+      </section>
       <p className="text-xs text-zinc-500">
         {t("ops.uptime", {
           now: Math.round((status?.uptime?.currentMs ?? 0) / 1000),

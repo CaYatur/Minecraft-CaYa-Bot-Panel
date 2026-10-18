@@ -1,4 +1,5 @@
 import type { AgentToolContext, AgentToolDef } from "./tools";
+import { antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec } from "../alwaysOn/antiAfk";
 import { loginSendMode } from "../alwaysOn/loginPrompt";
 import { writeLoginSecret } from "../alwaysOn/secrets";
 import { discordPublicState, notifyCustom, recentBridgeLines, updateDiscordSettings } from "../discord/hub";
@@ -31,25 +32,32 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "always_on_set",
-    description: "Turn anti-AFK on or off. A started bot already reconnects after a drop. Does not accept a password.",
+    description: "Set autostart and anti-AFK. Anti-AFK locks other actions while it is on. Does not accept a password.",
     category: "info",
     inputSchema: {
       type: "object",
       properties: {
+        autostart: { type: "boolean" },
+        autostartDelaySec: { type: "number", description: "Extra seconds before this bot joins after the panel opens. 0 to 300." },
         antiAfk: { type: "boolean" },
-        intervalMs: { type: "number" }
+        intervalMs: { type: "number", description: "Milliseconds between anti-AFK moves. 5000 to 600000." },
+        holdMs: { type: "number", description: "Milliseconds sneak, jump, and step stay held. 100 to 2000." },
+        mode: { type: "string", description: "mixed, look, sneak, jump, swing, or step." }
       }
     },
     async execute(ctx, args) {
       const current = ctx.inst.config.alwaysOn;
       if (!current) throw new Error("Always-on config is missing.");
       ctx.manager.updateBotConfig(ctx.inst.config.id, {
+        autostart: args.autostart === undefined ? ctx.inst.config.autostart : Boolean(args.autostart),
+        autostartDelaySec: clampAutostartDelaySec(args.autostartDelaySec ?? ctx.inst.config.autostartDelaySec),
         alwaysOn: {
           ...current,
           antiAfk: {
             enabled: args.antiAfk === undefined ? current.antiAfk.enabled : Boolean(args.antiAfk),
-            intervalMs: Number(args.intervalMs ?? current.antiAfk.intervalMs),
-            mode: current.antiAfk.mode
+            intervalMs: clampAntiAfkInterval(args.intervalMs ?? current.antiAfk.intervalMs),
+            holdMs: clampAntiAfkHold(args.holdMs ?? current.antiAfk.holdMs),
+            mode: antiAfkMode(args.mode === undefined ? current.antiAfk.mode : args.mode)
           }
         }
       });

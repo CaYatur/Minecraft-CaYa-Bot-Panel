@@ -610,17 +610,21 @@ getRuntime(): CombatRuntime {
         q.some((t) => t.type === "follow" && t.label === wantLabel));
     if (already) return;
     this.cancelTasksOfType("follow");
-    const summary = this.instance.tasks.enqueue(
-      {
-        type: "follow",
-        label: wantLabel,
-        priority: PRIORITY.USER,
-        params: { player, distance },
-        requeueOnPreempt: true
-      },
-      () => (token, report) => runFollow(this.instance, player, distance, token, report)
-    );
-    this.followTaskId = summary.id;
+    try {
+      const summary = this.instance.tasks.enqueue(
+        {
+          type: "follow",
+          label: wantLabel,
+          priority: PRIORITY.USER,
+          params: { player, distance },
+          requeueOnPreempt: true
+        },
+        () => (token, report) => runFollow(this.instance, player, distance, token, report)
+      );
+      this.followTaskId = summary.id;
+    } catch (err) {
+      this.log().debug("Follow not started", err instanceof Error ? err.message : String(err));
+    }
   }
 
   private ensureAttackTask(player: string) {
@@ -634,8 +638,12 @@ getRuntime(): CombatRuntime {
       return;
     }
     this.cancelTasksOfType("attack");
-    const summary = this.enqueueAttackPlayer(player);
-    this.attackTaskId = summary.id;
+    try {
+      const summary = this.enqueueAttackPlayer(player);
+      this.attackTaskId = summary.id;
+    } catch (err) {
+      this.log().debug("Attack not started", err instanceof Error ? err.message : String(err));
+    }
   }
 
   /** takip/koruma bitişinde doğru moda dön */

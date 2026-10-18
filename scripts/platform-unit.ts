@@ -6,7 +6,7 @@ import * as http from "http";
 import { nextBackoffMs, sessionIsStable } from "../server/src/modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, looksLikePlayerChat, normalizeLoginTemplate, redactGameCommand, unpromptedLoginKind } from "../server/src/modules/alwaysOn/loginPrompt";
-import { antiAfkAllowed, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
+import { antiAfkAllowed, antiAfkAllowsAction, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
 import { runWithLocalViewerServer } from "../server/src/modules/view/session";
 import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
@@ -56,6 +56,10 @@ function unit() {
   assert("custom command must keep the placeholder", (() => { try { normalizeLoginTemplate("/login hunter2"); return false; } catch { return normalizeLoginTemplate("/l {password}") === "/l {password}"; } })());
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
   assert("anti-afk mode repeats one action", pickAntiAfkAction(() => 0.99, "look") === "look" && pickAntiAfkAction(() => 0.99, "mixed") === "jump");
+  assert("anti-afk interval stays between 5s and 10min", clampAntiAfkInterval(1000) === 5_000 && clampAntiAfkInterval(9_000_000) === 600_000 && clampAntiAfkInterval(12_000) === 12_000);
+  assert("anti-afk hold stays between 100ms and 2s", clampAntiAfkHold(10) === 100 && clampAntiAfkHold(9_000) === 2_000 && clampAntiAfkHold(750) === 750);
+  assert("anti-afk lock allows chat and blocks goto", antiAfkAllowsAction("chat") && antiAfkAllowsAction("stop") && !antiAfkAllowsAction("goto"));
+  assert("autostart delay stays between 0 and 300 seconds", clampAutostartDelaySec(-4) === 0 && clampAutostartDelaySec(900) === 300 && clampAutostartDelaySec(12) === 12);
 
   const allowed = new Set(ACTION_META.map((row) => row.type));
   for (const template of BUNDLED_TEMPLATES) {

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
-import { antiAfkAllowed, antiAfkMode, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
+import { ANTI_AFK_LOCK, antiAfkAllowed, antiAfkAllowsAction, antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, loginSendMode, passwordRepeat, redactGameCommand, unpromptedLoginKind } from "../modules/alwaysOn/loginPrompt";
@@ -132,6 +132,7 @@ export class BotInstance extends EventEmitter {
     this.craft = new CraftService(this);
     this.build = new BuildService(this);
     this.farm = new FarmService(this);
+    this.tasks.setBlocked(() => (this.config.alwaysOn?.antiAfk.enabled ? ANTI_AFK_LOCK : null));
     this.tasks.on("taskAbort", (_summary, reason) => {
       this.invalidateControl(String(reason ?? "task abort"));
     });
@@ -525,6 +526,9 @@ export class BotInstance extends EventEmitter {
    */
   enqueueAction(action: Record<string, unknown>): TaskSummary | null {
     const type = String(action.type ?? "");
+    if (this.config.alwaysOn?.antiAfk.enabled && !antiAfkAllowsAction(type)) {
+      throw new Error(ANTI_AFK_LOCK);
+    }
     if (this.config.combat.hunter?.enabled && !["chat", "stop", "stop-combat", "cancel-task"].includes(type)) {
       throw new Error("Hunter modu açık: diğer işlemler kilitli, LLM yalnızca sohbet edebilir");
     }
@@ -1700,7 +1704,7 @@ export class BotInstance extends EventEmitter {
     this.stopAntiAfk();
     const cfg = this.config.alwaysOn?.antiAfk;
     if (!cfg?.enabled) return;
-    const interval = Math.max(15_000, cfg.intervalMs || 45_000);
+    const interval = clampAntiAfkInterval(cfg.intervalMs);
     this.antiAfkTimer = setInterval(() => this.tickAntiAfk(), interval);
   }
 
@@ -1717,12 +1721,13 @@ export class BotInstance extends EventEmitter {
     const onGround = bot.entity?.onGround !== false;
     if (!antiAfkAllowed({ enabled, taskRunning: Boolean(this.tasks.currentSummary), onGround })) return;
     const action = pickAntiAfkAction(Math.random, antiAfkMode(this.config.alwaysOn?.antiAfk.mode));
+    const hold = clampAntiAfkHold(this.config.alwaysOn?.antiAfk.holdMs);
     try {
       if (action === "look") void bot.look(bot.entity.yaw + (Math.random() - 0.5) * 0.8, 0, true);
-      else if (action === "sneak") this.pulseControl(bot, "sneak", 400);
-      else if (action === "jump") this.pulseControl(bot, "jump", 250);
+      else if (action === "sneak") this.pulseControl(bot, "sneak", hold);
+      else if (action === "jump") this.pulseControl(bot, "jump", hold);
       else if (action === "swing") bot.swingArm("right");
-      else this.pulseControl(bot, "forward", 180);
+      else this.pulseControl(bot, "forward", hold);
     } catch {
       /* bot may already be closing */
     }

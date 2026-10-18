@@ -86,9 +86,17 @@ export class TaskQueue extends EventEmitter {
   private history: TaskSummary[] = [];
   /** pause(): kuyruk tutulur — resume()'a dek yeni görev ÇALIŞTIRILMAZ (kuyruğa eklenebilir) */
   private held = false;
+  /** When set, a non-null string refuses every new task. */
+  private blocked: (() => string | null) | null = null;
+
+  setBlocked(check: (() => string | null) | null) {
+    this.blocked = check;
+  }
 
   /** runner'ı üreten fabrika alınır — görev ÇALIŞMA anında taze bot referansı kurabilsin */
   enqueue(def: TaskDef, makeRunner: () => TaskRunner): TaskSummary {
+    const reason = this.blocked?.();
+    if (reason) throw new Error(reason);
     const task: InternalTask = {
       id: newId(),
       seq: this.seq++,
