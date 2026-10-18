@@ -1,3 +1,4 @@
+import { PanelError } from "../../core/errors";
 import { createLogger } from "../../utils/logger";
 import {
   allowSend,
@@ -6,6 +7,7 @@ import {
   formatDiscordLine,
   formatMinecraftLine,
   isAllowlisted,
+  isDiscordWebhookUrl,
   sayIsBlocked,
   shouldBridgeDiscord,
   shouldBridgeMinecraft
@@ -41,27 +43,33 @@ export function discordPublicState() {
 
 export function updateDiscordSettings(patch: Partial<DiscordSettings> & { token?: string | null; webhookUrl?: string | null }): ReturnType<typeof discordPublicState> {
   const { token, webhookUrl, ...rest } = patch;
+  if (webhookUrl && !isDiscordWebhookUrl(webhookUrl)) {
+    throw new PanelError("Webhook URL must be a https://discord.com/api/webhooks/... link.");
+  }
   if (Object.keys(rest).length) writeDiscordSettings(rest);
   if (token !== undefined || webhookUrl !== undefined) writeDiscordSecrets({ token, webhookUrl });
   if (token !== undefined) void connectDiscord().catch((err) => log.warn("Discord reconnect failed", String(err)));
   return discordPublicState();
 }
 
-export async function postWebhook(url: string, content: string): Promise<{ ok: boolean; error?: string }> {
+export async function postWebhook(url: string, content: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; error?: string }> {
   const body = escapeDiscordMentions(content).slice(0, 1900);
+  if (!isDiscordWebhookUrl(url)) return { ok: false, error: "Only Discord webhook URLs can be used." };
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: body, allowed_mentions: { parse: [] } })
+      body: JSON.stringify({ content: body, allowed_mentions: { parse: [] } }),
+      redirect: "error"
     });
     if (res.status === 429) {
       const data = (await res.json().catch(() => ({}))) as { retry_after?: number };
       await new Promise((r) => setTimeout(r, Math.min(5_000, Math.ceil((data.retry_after ?? 1) * 1000))));
-      const retry = await fetch(url, {
+      const retry = await fetchImpl(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: body, allowed_mentions: { parse: [] } })
+        body: JSON.stringify({ content: body, allowed_mentions: { parse: [] } }),
+        redirect: "error"
       });
       if (!retry.ok) return { ok: false, error: `Discord answered ${retry.status}` };
       return { ok: true };
@@ -84,6 +92,7 @@ export function notifyCustom(botName: string, text: string): void {
 export async function testWebhook(url?: string): Promise<{ ok: boolean; error?: string }> {
   const target = url?.trim() || readDiscordSecrets().webhookUrl;
   if (!target) return { ok: false, error: "No webhook URL is saved." };
+  if (!isDiscordWebhookUrl(target)) return { ok: false, error: "Only Discord webhook URLs can be used." };
   const result = await postWebhook(target, "CaYa Bot Panel webhook test");
   if (!result.ok) log.warn("Webhook test failed", result.error);
   else log.info("Webhook test sent");

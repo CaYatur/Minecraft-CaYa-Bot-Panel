@@ -1,4 +1,5 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage } = require("electron");
+const crypto = require("crypto");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
@@ -254,6 +255,35 @@ function waitForServer(port, attempt = 0) {
   });
 }
 
+/**
+ * Data key for secrets at rest. The forked server runs as plain Node and has
+ * no keychain access, so the main process keeps a random 32-byte key that is
+ * itself protected by the OS keychain (safeStorage), and passes it to the
+ * server over the fork IPC channel. Returns { key, reason }.
+ */
+function loadSecretKey() {
+  try {
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return { key: null, reason: "keychain-unavailable" };
+    }
+    const file = path.join(app.getPath("userData"), "secret-key.bin");
+    if (fs.existsSync(file)) {
+      const hex = safeStorage.decryptString(fs.readFileSync(file));
+      const key = Buffer.from(hex, "hex");
+      if (key.length === 32) return { key, reason: null };
+      logLine("WARN: secret key file is invalid; secrets sealed with it cannot be read");
+      return { key: null, reason: "key-invalid" };
+    }
+    const key = crypto.randomBytes(32);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, safeStorage.encryptString(key.toString("hex")), { mode: 0o600 });
+    return { key, reason: null };
+  } catch (err) {
+    logLine(`WARN: secret key unavailable: ${err && err.message ? err.message : err}`);
+    return { key: null, reason: "key-error" };
+  }
+}
+
 function startServer(port) {
   const root = resourceRoot();
   const serverEntry = path.join(root, "server", "dist", "index.js");
@@ -286,7 +316,8 @@ function startServer(port) {
     ELECTRON_RUN_AS_NODE: "1",
     CAYA_PORT: String(port),
     CAYA_HOST: HOST,
-    CAYA_DATA_DIR: dataDir
+    CAYA_DATA_DIR: dataDir,
+    CAYA_SECRET_IPC: "1"
   };
 
   setSplashStatus("Launching backend…");
@@ -296,6 +327,17 @@ function startServer(port) {
     env,
     execPath: process.execPath,
     stdio: ["ignore", "pipe", "pipe", "ipc"]
+  });
+
+  serverProcess.on("message", (msg) => {
+    if (!msg || msg.type !== "caya:secret-key:request") return;
+    const { key, reason } = loadSecretKey();
+    logLine(key ? "secrets: encryption key ready" : `secrets: encryption off (${reason})`);
+    try {
+      serverProcess.send({ type: "caya:secret-key", key: key ? key.toString("base64") : null, reason });
+    } catch (err) {
+      logLine(`WARN: could not send secret key: ${err && err.message ? err.message : err}`);
+    }
   });
 
   serverProcess.stdout?.on("data", (d) => logLine(`[out] ${String(d).trimEnd()}`));

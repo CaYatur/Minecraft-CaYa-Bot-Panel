@@ -448,6 +448,8 @@ export interface StateSnapshot {
   rules?: unknown[];
   worldMemory?: { chests: unknown[]; ores: unknown[] };
   accounts?: unknown[];
+  /** Whether stored secrets are encrypted at rest. */
+  secrets?: { encrypted: boolean; reason: string | null };
 }
 
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;

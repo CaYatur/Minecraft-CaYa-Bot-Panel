@@ -101,6 +101,8 @@ export class BotInstance extends EventEmitter {
   private authInteraction = false;
   /** Device-code dialog is open for this connect and still needs a result. */
   private devicePromptOpen = false;
+  /** Fires when the device code shown to the user has expired without a sign-in. */
+  private deviceCodeTimer: NodeJS.Timeout | null = null;
   private connectSocketId: string | undefined;
 
   constructor(
@@ -110,7 +112,7 @@ export class BotInstance extends EventEmitter {
       serverId: string
     ) => Array<{ x: number; y: number; z: number; dimension: string; items: { name: string; count: number }[] }>,
     private readonly authBridge?: {
-      prepare(accountId: string): { cacheKey: string; profilesFolder: string; hasCache: boolean };
+      prepare(accountId: string): { cacheKey: string; profilesFolder: string | ((opts: { cacheName: string; username: string }) => unknown); hasCache: boolean };
       publishCode(
         accountId: string,
         code: { user_code?: string; verification_uri?: string; expires_in?: number; message?: string },
@@ -1101,6 +1103,13 @@ export class BotInstance extends EventEmitter {
         this.authInteraction = true;
         this.devicePromptOpen = true;
         this.authBridge?.publishCode(accountId, code, this.connectSocketId, this.config.id);
+        if (this.deviceCodeTimer) clearTimeout(this.deviceCodeTimer);
+        const ttlMs = Math.max(30, Number(code.expires_in) || 900) * 1000 + 5_000;
+        this.deviceCodeTimer = setTimeout(() => {
+          this.deviceCodeTimer = null;
+          if (this.devicePromptOpen) this.stopForAuth("auth.expired");
+        }, ttlMs);
+        this.deviceCodeTimer.unref?.();
         this.log.info("Waiting for Microsoft device-code sign-in");
       };
     }
@@ -1229,6 +1238,11 @@ export class BotInstance extends EventEmitter {
           this.runtime.errorCode = code;
           this.runtime.lastError = classified.code ? classified.message : AUTH_ERRORS[code];
           this.closeDevicePrompt({ ok: false, errorCode: code });
+          if (code === "auth.expired" || code === "auth.cancelled") {
+            // The user closed the dialog or let the code run out: this is a stop, not a crash.
+            this.stopForAuth(code);
+            return;
+          }
         }
         if (this.status !== "kicked") this.setStatus("error");
         return;
@@ -1542,10 +1556,32 @@ export class BotInstance extends EventEmitter {
   }
 
   private closeDevicePrompt(result: { ok: boolean; errorCode?: string }) {
+    if (this.deviceCodeTimer) {
+      clearTimeout(this.deviceCodeTimer);
+      this.deviceCodeTimer = null;
+    }
     if (!this.devicePromptOpen || !this.config.accountId) return;
     this.devicePromptOpen = false;
     const code = result.errorCode && result.errorCode in AUTH_ERRORS ? result.errorCode : result.errorCode ? "auth.failed" : undefined;
     this.authBridge?.finishPrompt(this.config.accountId, { ok: result.ok, errorCode: code });
+  }
+
+  /**
+   * Microsoft sign-in was cancelled or the device code expired. The bot goes
+   * to `stopped` (no reconnect) and keeps a clear error for the panel.
+   */
+  stopForAuth(code: "auth.expired" | "auth.cancelled") {
+    if (this.deviceCodeTimer) {
+      clearTimeout(this.deviceCodeTimer);
+      this.deviceCodeTimer = null;
+    }
+    if (this.devicePromptOpen) this.closeDevicePrompt({ ok: false, errorCode: code });
+    const message = AUTH_ERRORS[code];
+    this.stop();
+    this.runtime.errorCode = code;
+    this.runtime.lastError = message;
+    this.log.warn(message);
+    this.setStatus("stopped");
   }
 
   private failAuth(code: string, message: string) {

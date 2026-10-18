@@ -1,4 +1,5 @@
 import * as http from "http";
+import * as os from "os";
 import { createRequire } from "module";
 import type { Bot } from "mineflayer";
 import { createLogger } from "../../utils/logger";
@@ -19,6 +20,47 @@ interface LiveSession {
 }
 
 const sessions = new Map<string, LiveSession>();
+/** Starts in progress, so two clicks (or panel + MCP) cannot open two ports for one bot. */
+const starting = new Map<string, Promise<StartResult>>();
+
+type StartResult = { ok: true; url: string; port: number } | { ok: false; code: string; message: string };
+
+/** The 3D viewer renders on the CPU; keep it off weak or busy machines. */
+export const VIEWER_MIN_FREE_MB = 512;
+
+export function maxViewers(cpuCount = os.cpus().length): number {
+  return Math.max(1, Math.min(3, Math.floor(cpuCount / 2)));
+}
+
+export function viewerResourceCheck(
+  input: { freeMb?: number; cpuCount?: number; running?: number; replacing?: boolean } = {}
+): { ok: true } | { ok: false; code: string; message: string } {
+  const freeMb = input.freeMb ?? Math.round(os.freemem() / 1024 / 1024);
+  const cpuCount = input.cpuCount ?? os.cpus().length;
+  const running = (input.running ?? sessions.size) - (input.replacing ? 1 : 0);
+  if (freeMb < VIEWER_MIN_FREE_MB) {
+    return {
+      ok: false,
+      code: "viewer.memory",
+      message: `Not enough free memory for the 3D view (${freeMb} MB free, ${VIEWER_MIN_FREE_MB} MB needed). The text POV description still works.`
+    };
+  }
+  const cap = maxViewers(cpuCount);
+  if (running >= cap) {
+    return {
+      ok: false,
+      code: "viewer.limit",
+      message: `Only ${cap} 3D view${cap === 1 ? "" : "s"} can run at once on this machine. Close another bot view first.`
+    };
+  }
+  return { ok: true };
+}
+
+/** Closes the view when the bot it was opened for is gone (stop, kick, reconnect). */
+export function stopViewIfStale(botId: string, currentBot: Bot | null | undefined): void {
+  const row = sessions.get(botId);
+  if (row && row.bot !== currentBot) void stopView(botId);
+}
 
 export function viewStatus(botId: string): { running: boolean; url: string | null; port: number | null } {
   const row = sessions.get(botId);
@@ -57,8 +99,23 @@ setInterval(() => {
  * One local page per bot. prismarine-viewer is optional; without it the panel
  * explains that the 3D view is unavailable instead of opening a port.
  */
-export async function startView(botId: string, bot: Bot, version: string): Promise<{ ok: true; url: string; port: number } | { ok: false; code: string; message: string }> {
+export function startView(botId: string, bot: Bot, version: string): Promise<StartResult> {
+  const inFlight = starting.get(botId);
+  if (inFlight) return inFlight;
+  const job = startViewNow(botId, bot, version).finally(() => starting.delete(botId));
+  starting.set(botId, job);
+  return job;
+}
+
+async function startViewNow(botId: string, bot: Bot, version: string): Promise<StartResult> {
   if (!version) return { ok: false, code: "viewer.version", message: "This bot has no Minecraft version yet." };
+  const existing = sessions.get(botId);
+  if (existing && existing.bot === bot) {
+    existing.lastSeen = Date.now();
+    return { ok: true, url: `http://127.0.0.1:${existing.port}`, port: existing.port };
+  }
+  const resources = viewerResourceCheck({ replacing: Boolean(existing) });
+  if (!resources.ok) return resources;
   await stopView(botId);
   let viewer: ((bot: Bot, options: { port: number; firstPerson: boolean }) => void) | undefined;
   try {

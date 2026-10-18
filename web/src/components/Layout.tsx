@@ -4,6 +4,7 @@ import { BrainCircuit, Globe, LayoutGrid, Settings2, SlidersHorizontal, UserRoun
 import { BotLogo } from "./BotLogo";
 import { MicrosoftAuthDialog } from "./MicrosoftAuthDialog";
 import { ProtocolNotice } from "./ProtocolNotice";
+import { SecretsNotice } from "./SecretsNotice";
 import { useI18n } from "../i18n/useI18n";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -94,6 +95,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <SecretsNotice />
         <ProtocolNotice />
         {children}
       </main>

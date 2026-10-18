@@ -5,10 +5,16 @@ import * as path from "path";
 import { Server as SocketServer } from "socket.io";
 import { createRestRouter, restErrorHandler } from "./api/rest";
 import { setupSocket } from "./api/socket";
-import { WEB_DIST_DIR } from "./config/paths";
+import { DATA_DIR, WEB_DIST_DIR } from "./config/paths";
 import { BotManager } from "./core/BotManager";
 import { AgentService } from "./modules/agent";
 import { createMcpRouter } from "./modules/agent/mcpHttp";
+import { migrateLoginSecrets } from "./modules/alwaysOn/secrets";
+import { accounts } from "./modules/auth/accounts";
+import { migrateDiscordSecrets } from "./modules/discord/store";
+import { httpGuard, parseAllowedHosts, socketGuard, type GuardOptions } from "./security/httpGuard";
+import { restrictToCurrentUser } from "./security/permissions";
+import { initSecretBox } from "./security/secretBox";
 import { createLogger } from "./utils/logger";
 
 const PORT = Number(process.env.CAYA_PORT || 3001);
@@ -29,7 +35,7 @@ function readSupportedVersions(): string[] {
   return ["1.8.9", "1.12.2", "1.16.4", "1.17.1", "1.18.2", "1.19.4", "1.20.4", "1.21.1"];
 }
 
-function main() {
+async function main() {
   // İ4 safek ağı: tek bir botun beklenmedik hatası tüm paneli düşürmemeli.
   // Hata yutulmaz — panel loguna ERROR olarak düşer.
   process.on("uncaughtException", (err) => {
@@ -39,7 +45,19 @@ function main() {
     log.error("Unhandled promise rejection (process kept alive)", String(reason));
   });
 
+  // Secrets must be readable before any store loads, so wait for the data key first.
+  await initSecretBox();
+  restrictToCurrentUser(DATA_DIR);
+  try {
+    accounts.load();
+    migrateDiscordSecrets();
+    migrateLoginSecrets();
+  } catch (err) {
+    log.error("Secret migration failed", String(err));
+  }
+
   const supportedVersions = readSupportedVersions();
+  const guard: GuardOptions = { bindHost: HOST, allowedHosts: parseAllowedHosts(process.env.CAYA_ALLOWED_HOSTS) };
 
   const manager = new BotManager();
   manager.boot();
@@ -50,6 +68,8 @@ function main() {
 
   const app = express();
   // şema yükleme base64 for büyük body; diğer rotalar da aynı limit (localhost panel)
+  app.disable("x-powered-by");
+  app.use(["/api", "/mcp", "/socket.io"], httpGuard(guard));
   app.use(express.json({ limit: "32mb" }));
   app.use("/api", createRestRouter(manager, supportedVersions, agents));
   app.use("/api", restErrorHandler);
@@ -67,7 +87,7 @@ function main() {
   }
 
   const httpServer = http.createServer(app);
-  const io = new SocketServer(httpServer);
+  const io = new SocketServer(httpServer, { allowRequest: socketGuard(guard) });
   setupSocket(io, manager, supportedVersions, agents);
 
   httpServer.listen(PORT, HOST, () => {
@@ -84,4 +104,4 @@ function main() {
   process.on("SIGTERM", shutdown);
 }
 
-main();
+void main();

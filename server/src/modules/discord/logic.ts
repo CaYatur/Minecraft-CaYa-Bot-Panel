@@ -72,3 +72,23 @@ export function allowSend(history: number[], now: number, maxPerMinute: number):
   history.push(now);
   return true;
 }
+
+const WEBHOOK_HOSTS = new Set(["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"]);
+
+/**
+ * Only real webhook endpoints may be called: https, a known host, default
+ * port, no credentials, and the /api/webhooks/<id>/<token> path (an optional
+ * /api/v<n>/ prefix is allowed).
+ */
+export function isDiscordWebhookUrl(raw: string | null | undefined): boolean {
+  if (!raw || typeof raw !== "string" || raw.length > 512) return false;
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
+  if (!WEBHOOK_HOSTS.has(url.hostname.toLowerCase())) return false;
+  return /^\/api\/(v\d+\/)?webhooks\/\d{5,30}\/[A-Za-z0-9_-]{20,200}\/?$/.test(url.pathname);
+}

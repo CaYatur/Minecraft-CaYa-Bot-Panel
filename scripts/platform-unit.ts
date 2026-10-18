@@ -101,26 +101,20 @@ function unit() {
   assert("bridge rate limit holds", allowSend(history, 1_000, 1) && !allowSend(history, 1_100, 1));
 }
 
-function webhook(): Promise<void> {
-  return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (chunk) => { body += chunk; });
-      req.on("end", () => {
-        const parsed = JSON.parse(body) as { content?: string; allowed_mentions?: { parse?: string[] } };
-        assert("webhook body escapes mentions and disables pings", parsed.content?.includes("@\u200beveryone") && parsed.allowed_mentions?.parse?.length === 0);
-        res.writeHead(204);
-        res.end();
-      });
-    });
-    server.listen(0, "127.0.0.1", async () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      const result = await postWebhook(`http://127.0.0.1:${port}/hook`, "hello @everyone");
-      assert("local webhook accepts the test", result.ok, result.error);
-      server.close(() => resolve());
-    });
-  });
+async function webhook(): Promise<void> {
+  let calls = 0;
+  let sent: { content?: string; allowed_mentions?: { parse?: string[] } } = {};
+  const fakeFetch = (async (_url: unknown, init?: { body?: unknown }) => {
+    calls++;
+    sent = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(null, { status: 204 });
+  }) as unknown as typeof fetch;
+  const hook = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz0123456789";
+  const result = await postWebhook(hook, "hello @everyone", fakeFetch);
+  assert("webhook test accepts a Discord URL", result.ok, result.error);
+  assert("webhook body escapes mentions and disables pings", Boolean(sent.content?.includes("@\u200beveryone")) && sent.allowed_mentions?.parse?.length === 0);
+  const local = await postWebhook("http://127.0.0.1:9/hook", "x", fakeFetch);
+  assert("webhook refuses non-Discord URLs without a request", !local.ok && calls === 1);
 }
 
 async function viewerBind() {

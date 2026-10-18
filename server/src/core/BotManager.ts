@@ -1,10 +1,11 @@
+import { secretStatus } from "../security/secretBox";
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
 import { antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec } from "../modules/alwaysOn/antiAfk";
 import { loginSendMode, normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
 import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
-import { stopAllViews, stopView } from "../modules/view/session";
+import { stopAllViews, stopView, stopViewIfStale } from "../modules/view/session";
 import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
 import { RuleEngine } from "../modules/automation/RuleEngine";
 import { WorldMemory } from "../modules/world/memory";
@@ -62,7 +63,9 @@ export class BotManager extends EventEmitter {
     });
     accounts.on("cancelled", (info: { accountId: string; botId?: string }) => {
       const inst = info.botId ? this.bots.get(info.botId) : undefined;
-      if (inst && inst.config.accountId === info.accountId && inst.status === "connecting") inst.stop();
+      if (inst && inst.config.accountId === info.accountId && inst.status !== "online" && inst.status !== "stopped") {
+        inst.stopForAuth("auth.cancelled");
+      }
     });
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
@@ -328,6 +331,7 @@ export class BotManager extends EventEmitter {
       if (list.length > 0) waypoints[s.id] = list;
     }
     return {
+      secrets: secretStatus(),
       servers: this.servers,
       bots: [...this.bots.values()].map((b) => b.getSnapshot()),
       waypoints,
@@ -413,7 +417,7 @@ export class BotManager extends EventEmitter {
           accounts.prepareCache(accountId);
           return {
             cacheKey: accounts.cacheKey(accountId),
-            profilesFolder: accounts.cacheDir(accountId),
+            profilesFolder: accounts.cacheFactory(accountId),
             hasCache: accounts.hasCache(accountId)
           };
         },
@@ -431,6 +435,10 @@ export class BotManager extends EventEmitter {
         finishPrompt: (accountId, result) => accounts.finishPrompt(accountId, result)
       }
     );
+    // A viewer belongs to one mineflayer connection; close it when that connection ends.
+    inst.on("status", (p: { status?: string }) => {
+      if (p?.status !== "online") stopViewIfStale(inst.config.id, p?.status === "connecting" ? null : inst.bot);
+    });
     // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)
     inst.on(
       "deathAt",

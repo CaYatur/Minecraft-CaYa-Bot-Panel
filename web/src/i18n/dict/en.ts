@@ -7,6 +7,10 @@ export const en: MessageTree = {
     roadmap: "Roadmap: TODO.md",
     principleI1: "System messages are never written to game chat (I1)."
   },
+  secrets: {
+    title: "Secrets are not encrypted.",
+    body: "Microsoft sign-ins, the Discord token and login passwords are stored as plain files in the data folder. Use the desktop app on an account with a working OS keychain to encrypt them."
+  },
   errorBoundary: {
     title: "An error occurred in the panel",
     reload: "Reload page"
