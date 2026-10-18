@@ -20,7 +20,23 @@ export function detectLoginPrompt(plainText: string, extraPattern = ""): LoginPr
   return "none";
 }
 
-/** Hide /login and /register arguments before chat history, logs, or Discord. */
+export type PasswordRepeat = 1 | 2;
+
+export function passwordRepeat(value: unknown, fallback: PasswordRepeat): PasswordRepeat {
+  return value === 2 || value === "2" ? 2 : value === 1 || value === "1" ? 1 : fallback;
+}
+
+/** Build /login or /register with the password once or twice. The password is not logged here. */
+export function loginPluginCommand(kind: "login" | "register", password: string, repeat: PasswordRepeat): string {
+  const times = repeat === 2 ? 2 : 1;
+  const args = Array.from({ length: times }, () => password).join(" ");
+  return `/${kind} ${args}`;
+}
+
+/** Hide every /login and /register argument before chat history, logs, or Discord. */
 export function redactGameCommand(text: string): string {
-  return text.replace(/(\/(?:login|register|reg|l)\s+)\S+/gi, "$1••••");
+  return text.replace(/(\/(?:login|register|reg|l)\b)(\s+\S+)+/gi, (match, command: string) => {
+    const count = match.slice(command.length).trim().split(/\s+/).filter(Boolean).length;
+    return `${command} ${Array.from({ length: count }, () => "••••").join(" ")}`;
+  });
 }

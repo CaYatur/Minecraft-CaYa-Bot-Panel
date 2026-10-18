@@ -76,29 +76,34 @@ export async function startView(botId: string, bot: Bot, version: string): Promi
     };
   }
   const port = await freePort();
-  const captured: http.Server[] = [];
-  const httpAny = http as unknown as { createServer: typeof http.createServer };
-  const original = httpAny.createServer;
-  httpAny.createServer = ((...args: Parameters<typeof http.createServer>) => {
-    const created = original.apply(http, args);
-    captured.push(created);
-    return created;
-  }) as typeof http.createServer;
+  let server: http.Server | undefined;
   try {
-    viewer(bot, { port, firstPerson: false });
+    await runWithLocalViewerServer(() => {
+      viewer!(bot, { port, firstPerson: false });
+    }, (created) => {
+      server = created;
+    });
   } catch (err) {
-    httpAny.createServer = original;
     const message = err instanceof Error ? err.message : String(err);
     log.warn("Viewer failed to start", message);
+    try {
+      server?.close();
+    } catch {
+      /* not listening */
+    }
     return { ok: false, code: "viewer.version", message: `This Minecraft version cannot be shown in the 3D viewer (${version}). ${message}` };
   }
-  httpAny.createServer = original;
-  const server = captured[0];
+  const viewerApi = (bot as { viewer?: { close?: () => void } }).viewer;
   sessions.set(botId, {
     port,
     bot,
     lastSeen: Date.now(),
     close: () => {
+      try {
+        viewerApi?.close?.();
+      } catch {
+        /* already closed */
+      }
       try {
         server?.close();
       } catch {
@@ -260,6 +265,45 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * prismarine-viewer calls require("http").createServer during startup.
+ * Node 22+ exposes createServer as a getter, so assigning it throws.
+ * Wrap require instead, and force the page onto 127.0.0.1.
+ */
+export async function runWithLocalViewerServer(start: () => void, onServer?: (server: http.Server) => void): Promise<void> {
+  const Module = require("module") as { prototype: { require: NodeJS.Require } };
+  const original = Module.prototype.require;
+  Module.prototype.require = function (this: unknown, id: string) {
+    const loaded = original.apply(this, arguments as unknown as [string]);
+    if (id !== "http" && id !== "node:http") return loaded;
+    return new Proxy(loaded as object, {
+      get(target, prop, receiver) {
+        if (prop !== "createServer") return Reflect.get(target, prop, receiver);
+        const create = Reflect.get(target, prop, receiver) as typeof http.createServer;
+        return (...args: Parameters<typeof http.createServer>) => {
+          const created = create.apply(target, args);
+          onServer?.(created);
+          const listen = created.listen.bind(created);
+          created.listen = ((...listenArgs: unknown[]) => {
+            const [port, host, backlog, callback] = listenArgs;
+            if (typeof host === "function" || host === undefined) {
+              const done = typeof host === "function" ? host : callback;
+              return listen(port as number, "127.0.0.1", done as () => void);
+            }
+            return listen(port as number, host as string, backlog as number, callback as () => void);
+          }) as typeof created.listen;
+          return created;
+        };
+      }
+    });
+  } as NodeJS.Require;
+  try {
+    start();
+  } finally {
+    Module.prototype.require = original;
+  }
 }
 
 function freePort(): Promise<number> {

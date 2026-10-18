@@ -26,7 +26,7 @@ import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { BuildPanel } from "../components/BuildPanel";
-import { AlwaysOnCard, ViewerCard } from "../components/OpsPanels";
+import { AlwaysOnCard, LoginPluginCard, ViewerCard } from "../components/OpsPanels";
 import { NearbyPlayers } from "../components/NearbyPlayers";
 import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
@@ -312,11 +312,13 @@ export function BotDetail() {
           {OPS.map((item) => (
             <button
               key={item.id}
+              type="button"
+              title={item.id === "login" ? t("ops.loginTabHint") : item.id === "always" ? t("ops.alwaysTabHint") : t("ops.viewTabHint")}
               onClick={() => setTab(item.id)}
-              className={`flex items-center gap-1.5 rounded-t-lg px-4 py-2 text-sm transition-colors ${
+              className={`mb-1 flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                 tab === item.id
-                  ? "border border-b-0 border-zinc-800 bg-zinc-900 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "border-indigo-400 bg-indigo-600 text-white"
+                  : "border-zinc-600 bg-zinc-800 text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
               }`}
             >
               <item.icon className="h-3.5 w-3.5" /> {item.label}
@@ -341,7 +343,9 @@ export function BotDetail() {
               {tab === "work" && <GatherCraftPanel botId={id} />}
               {tab === "build" && <BuildPanel botId={id} />}
               {tab === "login" && (
-                <div className="flex flex-wrap items-end gap-2">
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm leading-relaxed text-zinc-400">{t("ops.loginHelp")}</p>
+                  <div className="flex flex-wrap items-end gap-2">
                   <label className="flex flex-col gap-1 text-xs text-zinc-400">
                     {t("accounts.authMode")}
                     <select
@@ -370,12 +374,14 @@ export function BotDetail() {
                       </select>
                     </label>
                   )}
-                  <button type="button" onClick={() => void saveLogin()} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500">
+                  <button type="button" onClick={() => void saveLogin()} className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-800">
                     {t("common.save")}
                   </button>
-                  <Link to="/accounts" className="text-xs text-indigo-300 hover:underline">
+                  <Link to="/accounts" className="rounded-lg px-2 py-1.5 text-sm text-indigo-300 hover:bg-indigo-950 hover:text-white">
                     {t("accounts.title")}
                   </Link>
+                  </div>
+                  <LoginPluginCard botId={id} />
                 </div>
               )}
               {tab === "always" && <AlwaysOnCard botId={id} />}

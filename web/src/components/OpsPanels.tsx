@@ -6,8 +6,7 @@ import { useAppStore } from "../stores/useAppStore";
 export function AlwaysOnCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [status, setStatus] = useState<{ hasPassword?: boolean; uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { enabled?: boolean; antiAfk?: { enabled?: boolean }; loginPlugin?: { enabled?: boolean } } } | null>(null);
-  const [password, setPassword] = useState("");
+  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { enabled?: boolean; antiAfk?: { enabled?: boolean } } } | null>(null);
 
   const load = async () => {
     try {
@@ -31,26 +30,22 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
   };
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-      <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.alwaysOn")}</div>
-      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-300">
-        <label className="flex items-center gap-1.5">
+    <div className="flex flex-col gap-3">
+      <p className="text-sm leading-relaxed text-zinc-400">{t("ops.alwaysOnHelp")}</p>
+      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-200">
+        <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
           <input type="checkbox" checked={Boolean(status?.config?.enabled)} onChange={(e) => void patch({ alwaysOn: { enabled: e.target.checked } })} />
           {t("ops.enabled")}
         </label>
-        <label className="flex items-center gap-1.5">
+        <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 hover:border-indigo-400 hover:bg-zinc-700">
           <input type="checkbox" checked={Boolean(status?.config?.antiAfk?.enabled)} onChange={(e) => void patch({ alwaysOn: { antiAfk: { enabled: e.target.checked } } })} />
           {t("ops.antiAfk")}
         </label>
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={Boolean(status?.config?.loginPlugin?.enabled)} onChange={(e) => void patch({ alwaysOn: { loginPlugin: { enabled: e.target.checked } } })} />
-          {t("ops.loginPlugin")}
-        </label>
-        <button type="button" className="rounded bg-zinc-800 px-2 py-1 text-xs" onClick={() => void api.post(`/api/bots/${botId}/always-on/preset`, { preset: "sleeping_server" }).then(load)}>
+        <button type="button" className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800" onClick={() => void api.post(`/api/bots/${botId}/always-on/preset`, { preset: "sleeping_server" }).then(load)}>
           {t("ops.sleepingPreset")}
         </button>
       </div>
-      <p className="mt-2 text-xs text-zinc-500">
+      <p className="text-xs text-zinc-500">
         {t("ops.uptime", {
           now: Math.round((status?.uptime?.currentMs ?? 0) / 1000),
           total: Math.round((status?.uptime?.totalMs ?? 0) / 1000),
@@ -58,18 +53,81 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
           drops: status?.uptime?.disconnects ?? 0
         })}
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+    </div>
+  );
+}
+
+export function LoginPluginCard({ botId }: { botId: string }) {
+  const { t } = useI18n();
+  const toast = useAppStore((s) => s.toast);
+  const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number } } } | null>(null);
+  const [password, setPassword] = useState("");
+
+  const load = async () => {
+    try {
+      setStatus(await api.get(`/api/bots/${botId}/always-on`));
+    } catch {
+      /* bot may still be loading */
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, [botId]);
+
+  const patch = async (loginPlugin: { enabled?: boolean; loginRepeat?: 1 | 2; registerRepeat?: 1 | 2 }) => {
+    try {
+      await api.patch(`/api/bots/${botId}`, { alwaysOn: { loginPlugin } });
+      await load();
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-zinc-800 pt-3">
+      <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.loginPlugin")}</div>
+      <label className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
+        <input type="checkbox" checked={Boolean(status?.config?.loginPlugin?.enabled)} onChange={(e) => void patch({ enabled: e.target.checked })} />
+        {t("ops.loginPlugin")}
+      </label>
+      <div className="flex flex-wrap gap-3">
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("ops.loginCommand")}
+          <select
+            value={status?.config?.loginPlugin?.loginRepeat === 2 ? "2" : "1"}
+            onChange={(e) => void patch({ loginRepeat: e.target.value === "2" ? 2 : 1 })}
+            className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
+          >
+            <option value="1">{t("ops.loginOnce")}</option>
+            <option value="2">{t("ops.loginTwice")}</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("ops.registerCommand")}
+          <select
+            value={status?.config?.loginPlugin?.registerRepeat === 1 ? "1" : "2"}
+            onChange={(e) => void patch({ registerRepeat: e.target.value === "1" ? 1 : 2 })}
+            className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
+          >
+            <option value="2">{t("ops.registerTwice")}</option>
+            <option value="1">{t("ops.registerOnce")}</option>
+          </select>
+        </label>
+      </div>
+      <p className="text-xs text-zinc-500">{status?.hasPassword ? t("ops.passwordSaved") : t("ops.password")}</p>
+      <div className="flex flex-wrap items-center gap-2">
         <input
           type="password"
           value={password}
-          placeholder={status?.hasPassword ? t("ops.passwordSaved") : t("ops.password")}
+          placeholder={t("ops.password")}
           onChange={(e) => setPassword(e.target.value)}
-          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm"
+          className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
         />
         <button
           type="button"
-          className="rounded bg-indigo-600 px-2 py-1 text-xs text-white"
-          onClick={() => void api.put(`/api/bots/${botId}/login-plugin`, { password }).then(() => { setPassword(""); return load(); })}
+          className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-800"
+          onClick={() => void api.put(`/api/bots/${botId}/login-plugin`, { password }).then(() => { setPassword(""); toast("success", t("ops.passwordSaved")); return load(); }).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
         >
           {t("ops.savePassword")}
         </button>
@@ -94,19 +152,19 @@ export function ViewerCard({ botId }: { botId: string }) {
   }, [url, botId]);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.viewer")}</span>
+    <div className="flex flex-col gap-3">
+      <p className="text-sm leading-relaxed text-zinc-400">{t("ops.viewerHelp")}</p>
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="rounded bg-zinc-800 px-2 py-1 text-xs"
+          className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
           onClick={() => void api.post<{ url: string }>(`/api/bots/${botId}/view/start`).then((row) => setUrl(row.url)).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
         >
           {t("ops.viewStart")}
         </button>
         <button
           type="button"
-          className="rounded bg-zinc-800 px-2 py-1 text-xs"
+          className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
           onClick={() => void api.post(`/api/bots/${botId}/view/describe`).then((row) => setScene(JSON.stringify(row).slice(0, 500))).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
         >
           {t("ops.viewDescribe")}

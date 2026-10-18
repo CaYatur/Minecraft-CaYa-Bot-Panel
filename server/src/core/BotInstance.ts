@@ -6,7 +6,7 @@ import { CHAT_LOGS_DIR } from "../config/paths";
 import { antiAfkAllowed, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 import { nextBackoffMs, sessionIsStable } from "../modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
-import { detectLoginPrompt, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
+import { detectLoginPrompt, loginPluginCommand, passwordRepeat, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
 import { hasLoginSecret, readLoginSecret } from "../modules/alwaysOn/secrets";
 import { markSessionEnd, markSessionStart, uptimeFor } from "../modules/alwaysOn/uptime";
 import {
@@ -142,7 +142,21 @@ export class BotInstance extends EventEmitter {
       (text, hidden) => {
         if (this.bot && this.status === "online") {
           this.bot.chat(text);
-          this.log.debug(hidden ? "Sent a hidden chat command" : `Sent to chat: ${text}`);
+          if (hidden) {
+            const safe = redactGameCommand(text);
+            this.log.info(`Login plugin sent ${safe}`);
+            this.pushChat({
+              ts: Date.now(),
+              botId: this.config.id,
+              kind: "player",
+              username: this.config.username,
+              self: true,
+              text: safe,
+              fullText: `<${this.config.username}> ${safe}`
+            });
+          } else {
+            this.log.debug(`Sent to chat: ${text}`);
+          }
         } else {
           this.log.warn(hidden ? "Bot offline — hidden chat command was not sent" : "Bot offline — chat message could not be sent", hidden ? undefined : text);
         }
@@ -1740,6 +1754,7 @@ export class BotInstance extends EventEmitter {
     const kind = detectLoginPrompt(plain, cfg.extraPattern);
     if (kind === "success") {
       this.loginFailures = 0;
+      this.log.success("Login plugin: the server accepted the login");
       return;
     }
     if (kind === "wrong_password") {
@@ -1758,7 +1773,8 @@ export class BotInstance extends EventEmitter {
         return;
       }
       this.loginSent = true;
-      const command = kind === "register" ? `/register ${password} ${password}` : `/login ${password}`;
+      const repeat = kind === "register" ? passwordRepeat(cfg.registerRepeat, 2) : passwordRepeat(cfg.loginRepeat, 1);
+      const command = loginPluginCommand(kind, password, repeat);
       setTimeout(() => this.sendHiddenChat(command), Math.max(0, cfg.delayMs || 0));
     }
   }

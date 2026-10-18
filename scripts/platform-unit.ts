@@ -5,9 +5,10 @@
 import * as http from "http";
 import { nextBackoffMs, sessionIsStable } from "../server/src/modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
-import { detectLoginPrompt, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
+import { detectLoginPrompt, loginPluginCommand, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
 import { antiAfkAllowed } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
+import { runWithLocalViewerServer } from "../server/src/modules/view/session";
 import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
 import { ACTION_META } from "../server/src/modules/automation/RuleEngine";
 import { BUNDLED_TEMPLATES } from "../server/src/modules/templates/bundled";
@@ -41,6 +42,9 @@ function unit() {
   assert("success wins over login", detectLoginPrompt("Successfully logged in") === "success");
   assert("wrong password", detectLoginPrompt("Wrong password") === "wrong_password");
   assert("password is redacted", redactGameCommand("/login hunter2").includes("••••") && !redactGameCommand("/login hunter2").includes("hunter2"));
+  assert("both password copies are redacted", !redactGameCommand("/register hunter2 hunter2").includes("hunter2") && redactGameCommand("/login one two").split("••••").length === 3);
+  assert("login can repeat the password", loginPluginCommand("login", "secret", 1) === "/login secret" && loginPluginCommand("login", "secret", 2) === "/login secret secret");
+  assert("register can take one password", loginPluginCommand("register", "secret", 1) === "/register secret" && loginPluginCommand("register", "secret", 2) === "/register secret secret");
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
 
   const allowed = new Set(ACTION_META.map((row) => row.type));
@@ -105,6 +109,24 @@ function webhook(): Promise<void> {
   });
 }
 
+async function viewerBind() {
+  let bound = "";
+  const server = await new Promise<http.Server>((resolve, reject) => {
+    void runWithLocalViewerServer(() => {
+      const localHttp = require("http") as typeof http;
+      const local = localHttp.createServer((_req, res) => {
+        res.end("ok");
+      });
+      local.listen(0, () => resolve(local));
+      local.on("error", reject);
+    });
+  });
+  const address = server.address();
+  if (address && typeof address === "object") bound = address.address;
+  server.close();
+  assert("3D viewer page binds to localhost", bound === "127.0.0.1", bound);
+}
+
 function glProbe() {
   const png = renderProbePng();
   const { createCanvas, loadImage } = require("canvas") as {
@@ -130,6 +152,7 @@ function glProbe() {
 
 void (async () => {
   unit();
+  await viewerBind();
   await glProbe();
   await webhook();
   if (failures) {

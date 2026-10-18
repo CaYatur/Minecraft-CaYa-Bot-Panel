@@ -90,7 +90,9 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
         password: { type: "string", description: "Write-only. Empty clears it." },
         delayMs: { type: "number" },
         maxFailures: { type: "number" },
-        extraPattern: { type: "string" }
+        extraPattern: { type: "string" },
+        loginRepeat: { type: "number", description: "1 sends /login password. 2 sends /login password password." },
+        registerRepeat: { type: "number", description: "1 sends /register password. 2 sends /register password password." }
       }
     },
     async execute(ctx, args) {
@@ -105,7 +107,9 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
               enabled: args.enabled === undefined ? current.loginPlugin.enabled : Boolean(args.enabled),
               delayMs: Number(args.delayMs ?? current.loginPlugin.delayMs),
               maxFailures: Number(args.maxFailures ?? current.loginPlugin.maxFailures),
-              extraPattern: args.extraPattern === undefined ? current.loginPlugin.extraPattern : String(args.extraPattern)
+              extraPattern: args.extraPattern === undefined ? current.loginPlugin.extraPattern : String(args.extraPattern),
+              loginRepeat: args.loginRepeat === undefined ? current.loginPlugin.loginRepeat : Number(args.loginRepeat) === 2 ? 2 : 1,
+              registerRepeat: args.registerRepeat === undefined ? current.loginPlugin.registerRepeat : Number(args.registerRepeat) === 2 ? 2 : 1
             }
           }
         });
