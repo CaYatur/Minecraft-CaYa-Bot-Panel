@@ -2,7 +2,7 @@
 
 **Kapsamlı Geliştirme Yol Haritası (TODO / Tek Doğruluk Kaynağı)**
 
-> Son güncelleme: 2026-07-17 · Durum: **Faz 19 ✅* — Tarım sistemi (çapala/ek/hasat/sürekli döngü + ürün sandığı) MCP + otomasyon + panel; watchdog hızlandırma (issue #6) ve doğrulanmış depo transferi (issue #5)**
+> Son güncelleme: 2026-10-18 · Durum: **Faz 20 ✅* — v3.0.5: Microsoft hesabı, 7/24 modu, Discord, şablonlar, bot görünümü, Windows kurulum paketi. Açık: issue #16, #19, #21.**
 
 ---
 
@@ -51,6 +51,11 @@ Tarayıcıdan çalışan bir **kontrol paneli** üzerinden, herhangi bir Minecra
 - ✅ **Gerçekçi** dövüş: hedefe bakarak vurma, menzil/vuruş hızı/görüş hattı kuralları — hile yok.
 - ✅ Engel aşma: zıplama, gerektiğinde feda edilebilir blok koyma, blok kırma.
 - ✅ Çoklu bot koordinasyonu, roller, zamanlanmış görevler, ortak dünya hafızası (ileri fazlar).
+- ✅ Microsoft (premium) device-code girişi ve çoklu hesap önbelleği (Faz 20).
+- ✅ 7/24: tek autostart, başlama gecikmesi, anti-AFK, kopuştan sonra yeniden deneme.
+- ✅ Discord: webhook bildirimleri, guild slash botu, iki yönlü sohbet köprüsü.
+- ✅ Bot görünümü (yerel 3B, sekme açılana dek kapalı) ve MCP birinci şahıs PNG.
+- ✅ Windows NSIS kurulum paketi (`Minecraft.CaYa.Bot.Panel.Setup.3.0.5.exe`).
 
 **Hedef kullanıcı:** Kendi sunucusunu işleten / izinli sunucularda bot çalıştıran tek kişi.
 Panel varsayılan olarak sadece `localhost`'ta dinler.
@@ -84,7 +89,7 @@ Panel varsayılan olarak sadece `localhost`'ta dinler.
 | Otomatik yeme | **mineflayer-auto-eat** | Eşik tabanlı yeme; yiyecek önceliği bizim config'ten. |
 | Zırh | **mineflayer-armor-manager** | "En iyisini giy" otomatiği. |
 | Alet seçimi | **mineflayer-tool** | Kazılacak bloğa en uygun aleti seçer. |
-| 3D izleme (ops.) | **prismarine-viewer** | Bot başına tarayıcıda canlı 3B görünüm (Faz 12). |
+| 3D izleme | **prismarine-viewer** | Bot başına tarayıcıda canlı 3B (Faz 20). Yalnızca localhost; sekme açılana dek kapalı. Paketli uygulamada `canvas` / `gl` kök bağımlılığı. |
 | API sunucusu | **Express + Socket.IO** | REST (CRUD) + canlı olay akışı (durum, sohbet, log, envanter). |
 | Panel | **React + Vite + Tailwind CSS** | Hızlı geliştirme, koyu tema, komponent tabanlı. |
 | Dil | **TypeScript (server + web, strict)** | Devralan AI'ların hata yapmasını derleme aşamasında yakalar. |
@@ -94,7 +99,7 @@ Panel varsayılan olarak sadece `localhost`'ta dinler.
 **Sürüm notu:** Panelde sürüm alanı `auto` (mineflayer algılar) + elle seçim sunar. ViaVersion'lı
 sunucularda otomatik algı bazen yanılır → elle seçim şarttır. Offline modda UUID kullanıcı adından
 türetilir; `online-mode=true` (premium) sunuculara offline auth ile girilemez — panel bu kick'i
-anlaşılır bir hata olarak gösterir. Premium (Microsoft) girişi Backlog'dadır.
+anlaşılır bir hata olarak gösterir. Premium (Microsoft) girişi **Faz 20**'dedir (device-code, çoklu hesap önbelleği).
 
 ---
 
@@ -258,7 +263,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 9 | Üretim: craft zinciri + fırın | ✅ Bitti* (craft uçtan uca Paper) |
 | 10 | Görev sistemi olgunlaştırma + depo/sandık | ✅ Bitti* (sandık fiziği Paper) |
 | 11 | Otomasyon motoru (kural editörü) | ✅ Bitti (API+panel+test; chat tetik Paper/canlı) |
-| 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer/Discord Backlog) |
+| 12 | İleri özellikler ve cila | ✅ Bitti* (roller/ayarlar v1; viewer ve Discord **Faz 20**) |
 | 13 | UX/otomasyon genişletme (yakın oyuncu, katalog, kural formu) | ✅ Bitti* (entity nearby Paper) |
 | 14 | Yapı / şema inşaat (schem + scaffold + bot Yapı sekmesi) | ✅ Bitti* (+ eksik topla/craft, canlı malzeme UI) |
 | 15 | Düşüş kurtarma (su MLG, saman, tekne, merdiven…) | ✅ Bitti* (fiziği Paper) |
@@ -266,6 +271,7 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 | 17 | Yapı motoru yeniden yazımı (issue #3: stok defteri, printer modu, watchdog, onarım, creative, resume) | ✅ Bitti* (fizik detayları Paper) |
 | 18 | MCP / Yapay Zekâ ajan sistemi (Ollama oyun içi ajan + /mcp endpoint + panel MCP sekmesi) | ✅ Bitti* (Ollama e2e flying-squid'de doğrulandı; Paper + büyük model saha) |
 | 19 | Tarım sistemi (till/plant/harvest/farm-cycle + ürün sandığı) + watchdog hızlandırma (issue #6) + doğrulanmış depo (issue #5) | ✅ Bitti* (fizik doğrulaması Paper sahada) |
+| 20 | Hesap, 7/24, Discord, şablon, bot görünümü, Windows paket (v1.0.4 → v3.0.5) | ✅ Bitti* (issue #16, #19, #21 açık) |
 
 ---
 
@@ -415,7 +421,8 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Interval kuralları = zamanlanmış vardiya temeli.
 - [x] Settings sayfası: sistem özeti, ilkeler, localhost notu.
 - [x] Toast/Log bildirimleri mevcut; panel:notify kurallardan.
-- [ ] prismarine-viewer, Discord, PWA, multi-user, 2+ saat sızıntı testi → Backlog / opsiyonel.
+- [x] prismarine-viewer ve Discord → **Faz 20** (v3.0.5).
+- [ ] PWA, çoklu panel kullanıcısı, 2+ saat sızıntı testi → Backlog.
 - [x] **Kabul v1:** panelden bot+kural+görev yönetimi kodsuz; 5 bot 1 saat saha Backlog.
 
 ### Faz 13 — Yakın Oyuncular + Zengin Otomasyon + Sürüm Kataloğu ✅*
@@ -616,6 +623,65 @@ Tüm olay adları `server/src/constants/events.ts` içinde sabittir; iki taraf d
 - [x] Kod denetimi: iptal yolları (pathNear/digCancelable/boundedOp/sleepCancellable 250ms poll) uçtan uca token'lı; watchdog senaryo analizi (poison tek blok ≤40s, tüm-alan-ulaşılamaz → her merdiven turunda ≥1 düşürme → biter).
 - [ ] Paper saha: gerçek sunucuda till/plant/harvest fiziği + farm-cycle uzun koşu + sandık depolama; issue #6 Kule-448 mid-stall cancel saha teyidi.
 
+### Faz 20 — v3.0.5: Hesap, 7/24, Discord, Şablon, Görünüm, Windows Paketi ✅*
+
+> 2026-07-17'den 2026-10-18'e kadar `master`'a inen iş. Sürüm alanları birlikte yürür:
+> kök, `server`, `web` `package.json` ve `package-lock.json` workspace düğümleri. Yayın: **v3.0.5**.
+> v1.0.5 etiketi kaldırıldı. Kurulum varlığı noktalı addır; portable exe yüklenmez. İmzasız.
+
+#### 20.A — Hareket, tarım, avcı (v1.0.4 öncesi düzeltmeler)
+- [x] Kapı, takip, parkur ve merdiven serisi: kapı yüzü, koridor, sprint-jump, avcı (hunter) modu, görüş hattı.
+- [x] Tarım suyu: çukur tabanına kova, kenardan dökme, fazla suyu geri alma, tarla yarıçapı ve sandığa yürüyüş. Döngü tarlayı kendiliğinden büyütmez. Çapala = su + çapa; ek = tohum; hasat = yeniden ek + sandık.
+- [x] Toplama: ağaç kesimi, fidan, yakındaki bloğu `+N`, düşen eşya.
+- [x] MLG: yaprak, çimen, tarla; suyu geri alma.
+- [x] Sözleşme testleri: merdiven tırmanma zorunlu, aynı seviye **4 blok** atlama reddedilir (`parkourMaxGap` 3), MLG senaryosu. flying-squid parkur pisti testin parçası.
+- [x] CI (Node 22): `test:auth`, `test:platform`, `test:movement`, `test:build-rules`, `test:baseline`. Eski smoke / combat / full-suite / inventory scriptleri `test:all` dışında. flying-squid'de follow / equip / drop atlanır.
+
+#### 20.B — Microsoft hesabı (issue #27, kapalı)
+- [x] Device-code akışı, çoklu hesap önbelleği, panele katılma hataları, iptal edilen yeniden girişin korunması.
+- [x] Çıkış onayı; çıkıştan sonra hesap seçimi kapanır.
+- [x] MCP: `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status`.
+
+#### 20.C — 7/24 (issue #28, kapalı; uyuyan sunucu ön ayarı yok)
+- [x] **Tek** `bot.config.autostart` (varsayılan false). Bot başlığında ve 7/24 kartında aynı alan; ikisi de `{autostart}` yollar.
+- [x] `autostartDelaySec` 0–300 (varsayılan 0), toplu start gecikmesinin üstüne eklenir.
+- [x] Başlamış bot kopunca `RECONNECT_DELAYS_MS` (5s, 10s, 30s, 60s) dener. Ban / whitelist / mükerrer / auth kick döngüyü keser.
+- [x] Ayrı bir "düşünce yeniden bağlan" anahtarı **yok**. Uyuyan sunucu ön ayarı **yok**.
+- [x] Anti-AFK: `alwaysOn.antiAfk` (varsayılan kapalı; aralık 5s–10dk, basılı tutma 100–2000 ms; mod mixed/look/sneak/jump/swing/step). Açıkken görev kuyruğu `ANTI_AFK_LOCK` atar. İzinli: sohbet, stop, stop-combat, cancel-task, reset-work, reset-all, işleri-sıfırla, soft-reset, stop-build. Açmak `resetAllWork` çağırır. Ajan, anti-AFK veya avcı açıkken araçları gizler (yalnız sohbet).
+- [x] Giriş eklentisi: `sendMode` prompt / login / register_first; özel şablon `{password}`; parola `data/login-secrets.json`. Oyuncu şeklindeki satır girişi tetiklemez.
+
+#### 20.D — Discord (issue #29, kapalı)
+- [x] İki bağlantı. Webhook tek yön: URL `data/discord-secrets.json` (0o600); gövde `{content, allowed_mentions:{parse:[]}}`. `POST /api/discord/test` tam olarak "CaYa Bot Panel webhook test" yollar.
+- [x] Gerçek bildirim `notifyDiscord` ile, ancak `settings.events[olay]` açıksa ve URL kayıtlıysa. Olaylar varsayılan **hepsi kapalı**: death, disconnect, reconnect, mention, whisper, taskDone, taskFailed, lowHealth. Düşük can 6'nın altında başlar, can 8 ve üstüne çıkana dek kilitli kalır.
+- [x] discord.js botu: token + guildId; hazır olunca guild slash `/bot start|stop|say|status`. Boş kullanıcı **ve** rol listesi her komutu reddeder. `/bot say` satırı `/` ile başlıyorsa `sayAllowsCommands` yokken reddeder.
+- [x] Sohbet köprüsü: Minecraft satırları `[MC]`, Discord satırları `[Discord]` olarak `control.list()[0]` botuna. Dakikada 1–50 (panel kaydı 20). Botun kendi satırları ve bu önekler yankılanmaz. discord.js yoksa gateway `unavailable`; webhook durmaz.
+- [x] Token ve webhook yalnız yazılır. `writeDiscordSettings` events ve bridge'i derin birleştirir. `allow` gelirse `roleIds` dizi olmalıdır; kayıt mevcut `roleIds`'i geri yollar, `[]` ile silmez.
+- [x] i18n anahtarları iç içe (`ops.discordEvent.death`); düz `"discordEvent.death"` görünmez.
+
+#### 20.E — Şablonlar ve bot görünümü (issue #30, kapalı)
+- [x] Otomasyon şablonları: listele, getir, dışa aktar, içe aktar, sil. `template_run` ve `template_stop` **kayıtlı değil**.
+- [x] Canlı 3B: localhost, sekme açılana dek kapalı, `firstPerson: false`. Ekran görüntüsü birinci şahıs.
+- [x] MCP `bot_view_screenshot`: hareketsiz PNG, yaw/pitch radyan, tavan 1280×720, botu oynatmaz. `bot_view_describe|start|stop|status`.
+- [x] Görüntüleyici `canvas` / `gl` / `three` / `prismarine-viewer` paketini `createRequire(__filename)` ile yükler. `canvas` ve `gl` import anında değil, ilk görüntüde (`ensureNative`).
+
+#### 20.F — MCP araç sayısı ve belgeler
+- [x] **87** araç: `tools.ts` 63 + `platformTools.ts` 24. README platform tablosu: `always_on_*`, `login_plugin_set`, `uptime_stats`, `reconnect_*`, `discord_*`, `template_*`, `bot_view_*`.
+- [x] Belgeler: `docs/always-on.md`, `docs/discord.md`, `docs/templates.md`, `docs/viewer.md`.
+
+#### 20.G — Windows kurulum paketi
+- [x] electron-builder 25, Electron 33 (paketli Node 20). `asar: false`. Çıktı `dist-electron` (git'e girmez). NSIS: oneClick kapalı, kurulum klasörü seçilir, masaüstü ve başlat menüsü kısayolu.
+- [x] Kök `dependencies` paketler pakete girer; yalnız server workspace'inde duranlar girmez. Köke alınanlar: `canvas`, `discord.js`, `gl`, `node-canvas-webgl`, `prismarine-viewer` ve mevcut mineflayer yığını.
+- [x] `build.npmRebuild: false` (builder'ın gl derlemesi kırılır). `dist:win`: build → `scripts/patch-nan-msvc.mjs` → `electron-rebuild -f --only canvas,gl` (**tek** `--only`; iki bayrak `argv.o.split` hatası verir) → `electron-builder --win nsis portable` → sistem Node için `canvas` ve `gl` yeniden kurulur. `-w` kullanılmaz.
+- [x] gl bağlantısı: Electron `node.lib` `GetBackingStore`'u libc++ `std::__Cr::shared_ptr` olarak verir; MSVC `std::shared_ptr` arar (LNK2019). Yama `buffer->GetBackingStore()->Data()` yerine `buffer->Data()` yazar. `node_modules` commit edilmez; yama betiği idempotent.
+- [x] Yayınlanan kurulum: `Minecraft.CaYa.Bot.Panel.Setup.3.0.5.exe` (190670438 bayt). electron-builder'ın kendi adı boşlukludur. Kurulum README içermez. Sunucu exe'den `CAYA_PORT` ve `CAYA_DATA_DIR` ile çatallanır. Log: `%AppData%\caya-bot-panel\last-startup.log`.
+- [x] Dar pencerede sekme şeridi `flex-wrap-reverse`: Giriş, 7/24 ve Bot görünümü üstte; Sohbet, Loglar, Envanter, Görevler, Dövüş, Yaşam, İş, Yapı altta. Geniş pencerede tek satır, sol sekmeler, üç işlem düğmesi sağda (`ml-auto`).
+
+#### 20.H — Bu sürümde olmayanlar
+- [ ] Issue **#16** açık: ters merdiven, tavana asılı ve duvara bağlı bloklar.
+- [ ] Issue **#19** açık: sandık üretme yedeği, sandık kaldırma API'si, kademeli lojistik.
+- [ ] Issue **#21** açık: statik Minecraft sürüm bağımlılığı, dinamik manifest yok.
+- [x] Issue #27, #28, #29, #30 GitHub'da **kapalı** (2026-10-18). #28'in uyuyan sunucu parçası yapılmadı (§14).
+
 ---
 
 ## 9. Gerçekçi Dövüş Şartnamesi (İ2'nin Ayrıntısı)
@@ -664,6 +730,7 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - [ ] Her fazın kabul kriteri bu lokal sunucuda elle doğrulanır; doğrulama adımları kısa "test senaryosu" olarak faza eklenmiştir.
 - [ ] Birim testi zorunlu alanlar (vitest): tarif çözümleyici (Faz 9), RuleEngine tetik/koşul değerlendirme (Faz 11), ChatRateLimiter (Faz 3) — dünya gerektirmeyen saf mantık.
 - [ ] Çok botlu yük denemesi (Faz 2 ve 12): 5–10 bot, RAM/CPU gözlemi Log'a.
+- [x] GitHub Actions (Node 22, ubuntu): `npm run test:all` = auth + platform + movement + build-rules + baseline (Faz 20). Eski smoke/combat/full-suite/inventory scriptleri bu komutun dışında. flying-squid'de follow, equip ve drop atlanır.
 
 ---
 
@@ -683,14 +750,19 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - Aynı prosese çok bot: her bot ~50–150 MB; 10+ bot planlanıyorsa Backlog'daki worker izolasyonunu öne çek.
 - **flying-squid test sunucusu sınırları (2026-07-15'te saptandı):** (1) Oyuncu VARLIKLARINI (entity) istemcilere yayınlamıyor — `bot.players[x].entity` hep undefined, dolayısıyla follow/goto-player/dövüş fiziği orada TEST EDİLEMEZ (1.16.1'de tab listesi de boş; 1.8.8'de tab listesi dolu ama entity yine yok). (2) `bot.players[me].ping` hep undefined → panelde ping 0 görünür. (3) Süperflat düz zemin — engel aşma senaryosu kurulamaz. (4) **Pencere tıklamalarına yanıt vermiyor** — `bot.equip/toss/moveSlotItem` orada zaman aşımına düşer ("Server didn't respond to transaction"); dahası ASKIDA KALAN tıklama işlemi mineflayer'da envanter senkronunu da tıkar. Bu yüzden flying-squid'e karşı testlerde `autoBestGear=false` yapılmalı (armor-manager otomatik kuşanmayı deneyip kilitliyor — inventory-test.mjs böyle yapar). `/give` ÇALIŞIR (everybody-op sayesinde) — envanter senkron testleri için kullan. Bu dördü İÇİN gerçek Paper sunucu şart; bağlantı/sohbet/hareket/kazı/senkron testleri için flying-squid yeterli.
 - **Panel (zustand) kuralı:** store seçicisi içinde yeni dizi/obje üretme (`s.x[id] ?? []` YASAK) — "getSnapshot should be cached" sonsuz döngüsüyle tüm sayfayı karartır. Varsayılanı seçici DIŞINDA modül sabitiyle ver (`?? EMPTY`). App kökünde ErrorBoundary var ama kuralı yine de boz*ma*.
-- **HAREKETİN ALTIN KURALI (2026-07-15 kalite turunda kanıtlandı — İHLAL ETME):** pathfinder, aktif goal varken dümenin sahibidir — yürüyüş yönünü kendi verdiği bakışla (yaw) çizer. (1) Rota aktifken `bot.look`/`setControlState` ÇAĞIRMA — bot yanlış yöne yürür, zıplama ıskalar, merdivenden düşer ("geri atılma" hatasının kökü buydu; commit geçmişindeki 8+ look/ladder yaması hep bunun semptomuydu). İnsanî bakış yalnızca `bot.pathfinder.isMoving() === false` iken. (2) Takip/yaklaşmada `setGoal`'ı periyodik YENİLEME — `GoalFollow(dynamic=true)` hedefi kendisi izler; zıplama ortasında rota yeniden hesabı = boşluğa düşme. Yenileme SADECE entity referansı değişince. (3) Pathfinder'da `maxDrop` diye özellik YOK — doğrusu `maxDropDown` (yanlış ad sessizce no-op olur). (4) Takipte `canDig=false` — bot birinin parkurunu/haritasını kazarak izlemesin. Merdiven tırmanma + 1-4 blok boşluk parkuru pathfinder'ın YERLEŞİK yetenekleridir (`allowParkour` yeter) — el yapımı zıplama makinesi yazma.
+- **HAREKETİN ALTIN KURALI (2026-07-15 kalite turunda kanıtlandı — İHLAL ETME):** pathfinder, aktif goal varken dümenin sahibidir — yürüyüş yönünü kendi verdiği bakışla (yaw) çizer. (1) Rota aktifken `bot.look`/`setControlState` ÇAĞIRMA — bot yanlış yöne yürür, zıplama ıskalar, merdivenden düşer ("geri atılma" hatasının kökü buydu; commit geçmişindeki 8+ look/ladder yaması hep bunun semptomuydu). İnsanî bakış yalnızca `bot.pathfinder.isMoving() === false` iken. (2) Takip/yaklaşmada `setGoal`'ı periyodik YENİLEME — `GoalFollow(dynamic=true)` hedefi kendisi izler; zıplama ortasında rota yeniden hesabı = boşluğa düşme. Yenileme SADECE entity referansı değişince. (3) Pathfinder'da `maxDrop` diye özellik YOK — doğrusu `maxDropDown` (yanlış ad sessizce no-op olur). (4) Takipte `canDig=false` — bot birinin parkurunu/haritasını kazarak izlemesin. Merdiven tırmanma pathfinder'ın yerleşik yeteneğidir. **Aynı seviye 4 blok atlama ürün kararıyla kapalıdır (`parkourMaxGap` 3, Faz 20).** El yapımı zıplama makinesi yazma.
+- **Windows paket (2026-10-18):** `canvas` ve `gl` server'ın import'unda değil, ilk ekran görüntüsünde yüklenir. İkisi de kök `package.json` `dependencies` içindedir; yalnız server workspace'inde kalırlarsa kurulu exe "Cannot find module 'canvas'" ile kod 1 düşer. `npmRebuild` true yapılmaz. `electron-rebuild` için `--only canvas,gl` tek argümandır. gl, `scripts/patch-nan-msvc.mjs` ile `ArrayBuffer::Data()` kullanır; `GetBackingStore()` Electron 33 + MSVC'de bağlanmaz.
+- **Discord i18n:** nokta ile bölünen düz anahtar görünmez. Olay metinleri iç içe nesne (`ops.discordEvent.death`). `allow` kaydı `roleIds` dizisini tamamen değiştirir; boş dizi listeyi siler.
 
 ---
 
 ## 13. Backlog (Sıralanmamış Gelecek Fikirleri)
 
-- Premium (Microsoft) hesap girişi (device-code akışı) — online-mode sunucular için.
-- Discord webhook bildirimleri; Discord'dan bot komutu köprüsü.
+- ~~Premium (Microsoft) hesap girişi~~ → **Faz 20** (device-code, çoklu hesap önbelleği). Issue #27 kapalı.
+- ~~Discord webhook, slash bot, sohbet köprüsü~~ → **Faz 20**. Issue #29 kapalı.
+- ~~prismarine-viewer / bot görünümü~~ → **Faz 20**. Canlı 3B localhost ve kapalı başlar; MCP PNG birinci şahıs ve botu oynatmaz. Issue #30 kapalı.
+- ~~7/24 autostart + anti-AFK + giriş eklentisi~~ → **Faz 20**. Uyuyan sunucu ön ayarı ve ikinci yeniden bağlanma anahtarı **yapılmayacak** (§14). Issue #28 kapalı.
+- Açık: issue **#16** (ters / tavana asılı / duvara bağlı blok), **#19** (sandık lojistiği), **#21** (dinamik sürüm manifestosu).
 - ~~Şematik inşaat~~ → **Faz 14** (kendi build modülümüz; prismarine-schematic).
 - ~~Tarım modülü: ekin ek/biç/yeniden ek~~ → **Faz 19** (till/plant/harvest/farm-cycle). Kalan backlog: hayvan üretme, otomatik fırınlanmış yemek stoğu, balıkçılık, su kanalı otomatik yerleştirme, nether wart.
 - Yay/ok ve kalkan kullanımı (gerçekçilik kurallarıyla); trident/riptide yok.
@@ -754,6 +826,13 @@ dönük olmalı ("Sunucu premium doğrulama istiyor — bu panel offline sunucul
 - 2026-07-16 — Otopilot boş tik atmaz: görev/inşaat sürerken bekler, taskEvent/attacked olayları inbox ile erken uyandırır; "GOAL COMPLETE" yanıtı otopilotu kapatır.
 - 2026-07-17 — **İ2 istisnası (kullanıcı kararı):** Utility modu — gerçekçilik-dışı yollar (sunucu komutları, creative uçuş, utility kazı) varsayılan KAPALI ama kendi/izinli sunucular için panelden açılabilir. Dövüş şartnamesi (§9 D1-D8) muaf: utility modu dövüş koduna hiç dokunmaz. Uygulama: `AgentToolDef.gate` + `send_chat` slash-komut kapısı (tek sızıntı yolu da kapatıldı).
 - 2026-07-17 — **Issue #4 kök neden + yapısal çözüm:** TaskQueue.pump runner'ı korumasız await ediyordu — iptali yutan asılı bir await (yanıtsız placeBlock/equip/pencere) `pumping=true` + `current` dolu bırakıp TÜM kuyruğu sonsuza dek zehirliyordu (restart şart olmasının asıl sebebi). Çözüm 3 katman: (1) pump = runner × detach yarışı; iptalden 2sn sonra asılı runner TERK edilir (`taskDetached` log + kuyruk akar, zombi arkada söner); (2) build'deki tüm ham mineflayer await'leri `boundedOp` ile sert zaman aşımına bağlandı (equip 6s, place 6.5s, pencere 8s, dig 10s); (3) re-freeze nabzı 4sn'de kesilmek yerine runner asılı kaldıkça 800ms periyotla sürer (60sn tavan).
+- 2026-09-30 — **Tek autostart.** Kopuş için ikinci anahtar yok. Başlamış bot 5s/10s/30s/60s dener; ban, whitelist, mükerrer giriş ve auth kick döngüyü keser. Uyuyan sunucu ön ayarı yok — issue #28'in o parçası bilinçli olarak yapılmadı.
+- 2026-09-30 — **Parkur tavanı 3 blok.** Aynı seviye 4 blok atlama reddedilir (`parkourMaxGap` 3). Pathfinder'ın daha geniş boşluk iddiası bu kararın altındadır.
+- 2026-09-30 — **Discord iki kanal.** Webhook tek yön ve olaylar varsayılan kapalı. discord.js botu guild slash + sohbet köprüsü. Token ve webhook yaz-only. Boş izin listesi her komutu reddeder.
+- 2026-09-30 — **Bot görünümü yerelde kalır.** 3B sekme açılana dek kapalı, üçüncü şahıs. MCP ekran görüntüsü birinci şahıs PNG'dir ve botun bakışını değiştirmez. `template_run` / `template_stop` kayıtlı değildir.
+- 2026-10-18 — **Windows paket bağımlılıkları kökte.** Server workspace'ine özel paket kuruluma girmez. `canvas` ilk görüntüye kadar yüklenmez. gl, Electron 33 `node.lib` ile MSVC `GetBackingStore` uyuşmadığı için `ArrayBuffer::Data()` yamasından geçer. `npmRebuild` kapalı. `electron-rebuild --only canvas,gl` tek bayraktır.
+- 2026-10-18 — **Dar sekme sırası.** `flex-wrap-reverse`: Giriş, 7/24, Bot görünümü üstte; diğer sekmeler altta. Geniş pencerede tek satır ve üç işlem düğmesi sağda kalır.
+- 2026-10-18 — **Yayın v3.0.5.** v1.0.5 etiketi silindi. Kurulum adı `Minecraft.CaYa.Bot.Panel.Setup.3.0.5.exe`. Portable yüklenmez. Issue #16, #19, #21 açık ve bu sürümde değil. #27–#30 kapalı.
 
 ---
 
@@ -1260,3 +1339,13 @@ malzeme listesi anlık güncellensin; ne topladığını/craft ettiğini yazsın
 **Doğrulama:** typecheck server+web ✓; kod-yolu analizi (iptal zinciri + watchdog senaryoları) ✓. Paper saha fiziği (till/plant/harvest + Kule-448 mid-stall cancel) devralana saha borcu.
 
 **Devralan not:** Tarım aksiyonları TaskQueue tipleri `till|plant|harvest|farm-cycle` — task_done/task_failed tetikleyicileri bunlarla filtrelenebilir. farm-cycle maxCycles verilmezse sonsuzdur; Stop/Reset/stop_all ile biter (sleepCancellable 250ms poll). Depo hatası artık görevde FAIL görünür — eski "depozito bitti" yalanı yok.
+
+### 2026-10-18 — Grok — Faz 20: TODO v3.0.5 ile eşitlendi
+
+**İstek:** TODO 2026-07-17 / Faz 19'da kalmıştı. Güncelle, commit et, mevcut **v3.0.5** yayınını bu commit'e force ile hizala. Kurulum dosyasını yeniden üretme. Issue kapatma. Port 3001'deki paneli yeniden başlatma.
+
+**Yapılanlar:** §7'ye Faz 20 satırı, §8 Faz 20 (20.A–20.H), §1 özet, §3 viewer satırı, §11 CI satırı, §12 paket/parkur/Discord tuzakları, §13'te biten maddelerin üstü çizildi, §14 kararları. Ayrıntı kodda ve README'de; bu kayıt özet.
+
+**Durum (GitHub, bu tarih):** Açık issue yalnızca **#16, #19, #21**. #27 Microsoft, #28 7/24, #29 Discord, #30 görünüm/şablon kapalı. #28'in uyuyan sunucu parçası yapılmadı.
+
+**Sıradaki devralan:** #16 ters/asılı blok, #19 sandık lojistiği, #21 sürüm manifestosu. Paper saha borçları (Faz 4–10 ve Faz 19 fizik) duruyor. PWA, çoklu kullanıcı ve 2 saat sızıntı testi hâlâ backlog.
