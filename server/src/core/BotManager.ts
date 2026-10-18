@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
+import { normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
 import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
 import { stopAllViews, stopView } from "../modules/view/session";
 import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
@@ -205,6 +206,15 @@ export class BotManager extends EventEmitter {
     if (unsafe.alwaysOn?.loginPlugin && "password" in unsafe.alwaysOn.loginPlugin) {
       delete (unsafe.alwaysOn.loginPlugin as { password?: unknown }).password;
     }
+    if (unsafe.alwaysOn?.loginPlugin) {
+      const plugin = unsafe.alwaysOn.loginPlugin;
+      try {
+        if (plugin.loginTemplate !== undefined) plugin.loginTemplate = normalizeLoginTemplate(plugin.loginTemplate);
+        if (plugin.registerTemplate !== undefined) plugin.registerTemplate = normalizeLoginTemplate(plugin.registerTemplate);
+      } catch (err) {
+        throw new PanelError(err instanceof Error ? err.message : String(err), 400);
+      }
+    }
     if (username !== undefined && username !== inst.config.username) {
       const name = String(username).trim();
       this.assertValidNewBot(name, serverId ?? inst.config.serverId, id);
@@ -217,6 +227,7 @@ export class BotManager extends EventEmitter {
       if (inst.status !== "stopped") this.log.warn("Server changed — restart the bot for it to take effect");
     }
     inst.config = mergeConfig(inst.config, rest as Partial<BotConfig>);
+    if (patch.alwaysOn) inst.syncAntiAfk();
     if (patch.auth !== undefined || patch.accountId !== undefined) {
       this.applyAuth(inst.config, inst.config.auth, inst.config.accountId, inst.config.username, id);
     }

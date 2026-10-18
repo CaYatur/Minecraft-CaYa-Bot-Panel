@@ -174,8 +174,17 @@ export interface AlwaysOnConfig {
   enabled: boolean;
   preset: "custom" | "sleeping_server";
   backoff: { baseMs: number; maxMs: number; maxAttempts: number; jitter: number; stableMs: number };
-  antiAfk: { enabled: boolean; intervalMs: number };
-  loginPlugin: { enabled: boolean; delayMs: number; maxFailures: number; extraPattern: string; loginRepeat: 1 | 2; registerRepeat: 1 | 2 };
+  antiAfk: { enabled: boolean; intervalMs: number; mode: "mixed" | "look" | "sneak" | "jump" | "swing" | "step" };
+  loginPlugin: {
+    enabled: boolean;
+    delayMs: number;
+    maxFailures: number;
+    extraPattern: string;
+    loginRepeat: 1 | 2;
+    registerRepeat: 1 | 2;
+    loginTemplate: string;
+    registerTemplate: string;
+  };
 }
 
 export function defaultAlwaysOn(): AlwaysOnConfig {
@@ -183,8 +192,8 @@ export function defaultAlwaysOn(): AlwaysOnConfig {
     enabled: false,
     preset: "custom",
     backoff: { baseMs: 5_000, maxMs: 120_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
-    antiAfk: { enabled: false, intervalMs: 45_000 },
-    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2 }
+    antiAfk: { enabled: false, intervalMs: 45_000, mode: "mixed" },
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "" }
   };
 }
 
@@ -193,8 +202,8 @@ export function sleepingServerAlwaysOn(): AlwaysOnConfig {
     enabled: true,
     preset: "sleeping_server",
     backoff: { baseMs: 15_000, maxMs: 180_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
-    antiAfk: { enabled: true, intervalMs: 40_000 },
-    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2 }
+    antiAfk: { enabled: true, intervalMs: 40_000, mode: "mixed" },
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "" }
   };
 }
 

@@ -5,8 +5,8 @@
 import * as http from "http";
 import { nextBackoffMs, sessionIsStable } from "../server/src/modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
-import { detectLoginPrompt, loginPluginCommand, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
-import { antiAfkAllowed } from "../server/src/modules/alwaysOn/antiAfk";
+import { detectLoginPrompt, loginPluginCommand, normalizeLoginTemplate, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
+import { antiAfkAllowed, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
 import { runWithLocalViewerServer } from "../server/src/modules/view/session";
 import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
@@ -45,7 +45,10 @@ function unit() {
   assert("both password copies are redacted", !redactGameCommand("/register hunter2 hunter2").includes("hunter2") && redactGameCommand("/login one two").split("••••").length === 3);
   assert("login can repeat the password", loginPluginCommand("login", "secret", 1) === "/login secret" && loginPluginCommand("login", "secret", 2) === "/login secret secret");
   assert("register can take one password", loginPluginCommand("register", "secret", 1) === "/register secret" && loginPluginCommand("register", "secret", 2) === "/register secret secret");
+  assert("custom login command uses the placeholder", loginPluginCommand("login", "secret", 1, "/l {password}") === "/l secret");
+  assert("custom command must keep the placeholder", (() => { try { normalizeLoginTemplate("/login hunter2"); return false; } catch { return normalizeLoginTemplate("/l {password}") === "/l {password}"; } })());
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
+  assert("anti-afk mode repeats one action", pickAntiAfkAction(() => 0.99, "look") === "look" && pickAntiAfkAction(() => 0.99, "mixed") === "jump");
 
   const allowed = new Set(ACTION_META.map((row) => row.type));
   for (const template of BUNDLED_TEMPLATES) {

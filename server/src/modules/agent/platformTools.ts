@@ -61,7 +61,8 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
           },
           antiAfk: {
             enabled: args.antiAfk === undefined ? current.antiAfk.enabled : Boolean(args.antiAfk),
-            intervalMs: Number(args.intervalMs ?? current.antiAfk.intervalMs)
+            intervalMs: Number(args.intervalMs ?? current.antiAfk.intervalMs),
+            mode: current.antiAfk.mode
           }
         }
       });
@@ -70,7 +71,7 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "always_on_apply_preset",
-    description: "Apply the sleeping-server preset: longer backoff and anti-AFK.",
+    description: "Apply the sleeping-server preset: longer backoff and anti-AFK. Does not change autostart.",
     category: "info",
     inputSchema: { type: "object", properties: { preset: { type: "string", enum: ["sleeping_server"] } }, required: ["preset"] },
     async execute(ctx, args) {
@@ -92,7 +93,9 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
         maxFailures: { type: "number" },
         extraPattern: { type: "string" },
         loginRepeat: { type: "number", description: "1 sends /login password. 2 sends /login password password." },
-        registerRepeat: { type: "number", description: "1 sends /register password. 2 sends /register password password." }
+        registerRepeat: { type: "number", description: "1 sends /register password. 2 sends /register password password." },
+        loginTemplate: { type: "string", description: "Custom command. Use {password}. Empty uses loginRepeat." },
+        registerTemplate: { type: "string", description: "Custom command. Use {password}. Empty uses registerRepeat." }
       }
     },
     async execute(ctx, args) {
@@ -109,7 +112,9 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
               maxFailures: Number(args.maxFailures ?? current.loginPlugin.maxFailures),
               extraPattern: args.extraPattern === undefined ? current.loginPlugin.extraPattern : String(args.extraPattern),
               loginRepeat: args.loginRepeat === undefined ? current.loginPlugin.loginRepeat : Number(args.loginRepeat) === 2 ? 2 : 1,
-              registerRepeat: args.registerRepeat === undefined ? current.loginPlugin.registerRepeat : Number(args.registerRepeat) === 2 ? 2 : 1
+              registerRepeat: args.registerRepeat === undefined ? current.loginPlugin.registerRepeat : Number(args.registerRepeat) === 2 ? 2 : 1,
+              loginTemplate: args.loginTemplate === undefined ? current.loginPlugin.loginTemplate : String(args.loginTemplate),
+              registerTemplate: args.registerTemplate === undefined ? current.loginPlugin.registerTemplate : String(args.registerTemplate)
             }
           }
         });
@@ -327,7 +332,7 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "bot_view_screenshot",
-    description: "Render a first-person PNG of what this bot sees. Caps at 1280x720. Does not move the bot.",
+    description: "Render a first-person PNG of what this bot sees. This is how an MCP session sees the world. Caps at 1280x720. Does not move the bot. The live 3D page is only for the panel.",
     category: "info",
     inputSchema: {
       type: "object",
@@ -356,7 +361,7 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "bot_view_start",
-    description: "Start the local 3D viewer for this bot. It stops when no client sends a heartbeat.",
+    description: "Start the local 3D page for the panel. An MCP client cannot open that page. Use bot_view_screenshot to see the view.",
     category: "info",
     inputSchema: { type: "object", properties: {} },
     async execute(ctx) {
@@ -379,7 +384,7 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "bot_view_status",
-    description: "Whether a 3D viewer is running for this bot.",
+    description: "Whether the panel 3D page is running. MCP vision uses bot_view_screenshot, not this page.",
     category: "info",
     inputSchema: { type: "object", properties: {} },
     async execute(ctx) {

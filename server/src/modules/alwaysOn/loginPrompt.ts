@@ -26,11 +26,23 @@ export function passwordRepeat(value: unknown, fallback: PasswordRepeat): Passwo
   return value === 2 || value === "2" ? 2 : value === 1 || value === "1" ? 1 : fallback;
 }
 
-/** Build /login or /register with the password once or twice. The password is not logged here. */
-export function loginPluginCommand(kind: "login" | "register", password: string, repeat: PasswordRepeat): string {
+/** Build /login or /register. A template such as `/l {password}` replaces the preset. */
+export function loginPluginCommand(kind: "login" | "register", password: string, repeat: PasswordRepeat, template = ""): string {
+  const custom = template.trim();
+  if (custom) return custom.replaceAll("{password}", password);
   const times = repeat === 2 ? 2 : 1;
   const args = Array.from({ length: times }, () => password).join(" ");
   return `/${kind} ${args}`;
+}
+
+/** Empty is allowed. Otherwise the command must start with / and contain {password}. */
+export function normalizeLoginTemplate(raw: unknown): string {
+  const text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length > 80 || !/^\/[A-Za-z0-9_]+(?:\s+(?:\{password\}|[A-Za-z0-9_.:-]{1,32})){1,6}$/.test(text) || !text.includes("{password}")) {
+    throw new Error("A custom command must start with / and include {password}. Example: /l {password}");
+  }
+  return text;
 }
 
 /** Hide every /login and /register argument before chat history, logs, or Discord. */

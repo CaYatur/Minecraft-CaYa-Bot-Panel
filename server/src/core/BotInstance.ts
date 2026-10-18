@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
-import { antiAfkAllowed, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
+import { antiAfkAllowed, antiAfkMode, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 import { nextBackoffMs, sessionIsStable } from "../modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, passwordRepeat, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
@@ -143,7 +143,9 @@ export class BotInstance extends EventEmitter {
         if (this.bot && this.status === "online") {
           this.bot.chat(text);
           if (hidden) {
-            const safe = redactGameCommand(text);
+            const password = readLoginSecret(this.config.id);
+            const hiddenText = password ? text.split(password).join("••••") : text;
+            const safe = redactGameCommand(hiddenText);
             this.log.info(`Login plugin sent ${safe}`);
             this.pushChat({
               ts: Date.now(),
@@ -1705,6 +1707,11 @@ export class BotInstance extends EventEmitter {
     fs.appendFile(file, JSON.stringify(entry) + "\n", () => {});
   }
 
+  /** Starts or stops the idle timer from the current config. Safe to call while online. */
+  syncAntiAfk() {
+    this.startAntiAfk();
+  }
+
   private startAntiAfk() {
     this.stopAntiAfk();
     const cfg = this.config.alwaysOn?.antiAfk;
@@ -1725,7 +1732,7 @@ export class BotInstance extends EventEmitter {
     if (!bot || this.status !== "online") return;
     const onGround = bot.entity?.onGround !== false;
     if (!antiAfkAllowed({ enabled, taskRunning: Boolean(this.tasks.currentSummary), onGround })) return;
-    const action = pickAntiAfkAction();
+    const action = pickAntiAfkAction(Math.random, antiAfkMode(this.config.alwaysOn?.antiAfk.mode));
     try {
       if (action === "look") void bot.look(bot.entity.yaw + (Math.random() - 0.5) * 0.8, 0, true);
       else if (action === "sneak") this.pulseControl(bot, "sneak", 400);
@@ -1773,8 +1780,9 @@ export class BotInstance extends EventEmitter {
         return;
       }
       this.loginSent = true;
+      const template = kind === "register" ? cfg.registerTemplate : cfg.loginTemplate;
       const repeat = kind === "register" ? passwordRepeat(cfg.registerRepeat, 2) : passwordRepeat(cfg.loginRepeat, 1);
-      const command = loginPluginCommand(kind, password, repeat);
+      const command = loginPluginCommand(kind, password, repeat, template || "");
       setTimeout(() => this.sendHiddenChat(command), Math.max(0, cfg.delayMs || 0));
     }
   }

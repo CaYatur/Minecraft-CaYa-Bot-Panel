@@ -1,7 +1,15 @@
 export type AntiAfkAction = "look" | "sneak" | "jump" | "swing" | "step";
+export type AntiAfkMode = "mixed" | AntiAfkAction;
 
-/** On-ground micro actions. No sprint, fly, or block place. */
-export function pickAntiAfkAction(random: () => number = Math.random): AntiAfkAction {
+const ANTI_AFK_MODES: AntiAfkMode[] = ["mixed", "look", "sneak", "jump", "swing", "step"];
+
+export function antiAfkMode(value: unknown): AntiAfkMode {
+  return ANTI_AFK_MODES.includes(value as AntiAfkMode) ? (value as AntiAfkMode) : "mixed";
+}
+
+/** On-ground micro actions. No sprint, fly, or block place. A mode other than mixed repeats one action. */
+export function pickAntiAfkAction(random: () => number = Math.random, mode: AntiAfkMode = "mixed"): AntiAfkAction {
+  if (mode !== "mixed") return mode;
   const roll = random();
   if (roll < 0.35) return "look";
   if (roll < 0.55) return "sneak";

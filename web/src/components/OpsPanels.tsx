@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { useAppStore } from "../stores/useAppStore";
@@ -6,7 +6,7 @@ import { useAppStore } from "../stores/useAppStore";
 export function AlwaysOnCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { enabled?: boolean; antiAfk?: { enabled?: boolean } } } | null>(null);
+  const [status, setStatus] = useState<{ uptime?: { currentMs: number; totalMs: number; sessions: number; disconnects: number }; config?: { enabled?: boolean; antiAfk?: { enabled?: boolean; mode?: string } } } | null>(null);
 
   const load = async () => {
     try {
@@ -41,9 +41,30 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
           <input type="checkbox" checked={Boolean(status?.config?.antiAfk?.enabled)} onChange={(e) => void patch({ alwaysOn: { antiAfk: { enabled: e.target.checked } } })} />
           {t("ops.antiAfk")}
         </label>
-        <button type="button" className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800" onClick={() => void api.post(`/api/bots/${botId}/always-on/preset`, { preset: "sleeping_server" }).then(load)}>
+        {status?.config?.antiAfk?.enabled && (
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            {t("ops.antiAfkMode")}
+            <select
+              value={status.config.antiAfk.mode || "mixed"}
+              onChange={(e) => void patch({ alwaysOn: { antiAfk: { mode: e.target.value } } })}
+              className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
+            >
+              <option value="mixed">{t("ops.antiAfkMixed")}</option>
+              <option value="look">{t("ops.antiAfkLook")}</option>
+              <option value="sneak">{t("ops.antiAfkSneak")}</option>
+              <option value="jump">{t("ops.antiAfkJump")}</option>
+              <option value="swing">{t("ops.antiAfkSwing")}</option>
+              <option value="step">{t("ops.antiAfkStep")}</option>
+            </select>
+          </label>
+        )}
+      </div>
+      {status?.config?.antiAfk?.enabled && <p className="text-xs text-zinc-500">{t("ops.antiAfkHelp")}</p>}
+      <div className="flex flex-col gap-1">
+        <button type="button" className="w-fit cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800" onClick={() => void api.post(`/api/bots/${botId}/always-on/preset`, { preset: "sleeping_server" }).then(load).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}>
           {t("ops.sleepingPreset")}
         </button>
+        <p className="text-xs text-zinc-500">{t("ops.sleepingPresetHelp")}</p>
       </div>
       <p className="text-xs text-zinc-500">
         {t("ops.uptime", {
@@ -60,8 +81,10 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
 export function LoginPluginCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number } } } | null>(null);
+  const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number; loginTemplate?: string; registerTemplate?: string } } } | null>(null);
   const [password, setPassword] = useState("");
+  const [loginDraft, setLoginDraft] = useState("");
+  const [registerDraft, setRegisterDraft] = useState("");
 
   const load = async () => {
     try {
@@ -72,10 +95,12 @@ export function LoginPluginCard({ botId }: { botId: string }) {
   };
 
   useEffect(() => {
+    setLoginDraft("");
+    setRegisterDraft("");
     void load();
   }, [botId]);
 
-  const patch = async (loginPlugin: { enabled?: boolean; loginRepeat?: 1 | 2; registerRepeat?: 1 | 2 }) => {
+  const patch = async (loginPlugin: { enabled?: boolean; loginRepeat?: 1 | 2; registerRepeat?: 1 | 2; loginTemplate?: string; registerTemplate?: string }) => {
     try {
       await api.patch(`/api/bots/${botId}`, { alwaysOn: { loginPlugin } });
       await load();
@@ -95,26 +120,67 @@ export function LoginPluginCard({ botId }: { botId: string }) {
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
           {t("ops.loginCommand")}
           <select
-            value={status?.config?.loginPlugin?.loginRepeat === 2 ? "2" : "1"}
-            onChange={(e) => void patch({ loginRepeat: e.target.value === "2" ? 2 : 1 })}
+            value={loginDraft || status?.config?.loginPlugin?.loginTemplate ? "custom" : status?.config?.loginPlugin?.loginRepeat === 2 ? "2" : "1"}
+            onChange={(e) => {
+              if (e.target.value === "custom") {
+                setLoginDraft(status?.config?.loginPlugin?.loginTemplate || "/login {password}");
+                return;
+              }
+              setLoginDraft("");
+              void patch({ loginRepeat: e.target.value === "2" ? 2 : 1, loginTemplate: "" });
+            }}
             className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
           >
             <option value="1">{t("ops.loginOnce")}</option>
             <option value="2">{t("ops.loginTwice")}</option>
+            <option value="custom">{t("ops.loginCustom")}</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs text-zinc-400">
           {t("ops.registerCommand")}
           <select
-            value={status?.config?.loginPlugin?.registerRepeat === 1 ? "1" : "2"}
-            onChange={(e) => void patch({ registerRepeat: e.target.value === "1" ? 1 : 2 })}
+            value={registerDraft || status?.config?.loginPlugin?.registerTemplate ? "custom" : status?.config?.loginPlugin?.registerRepeat === 1 ? "1" : "2"}
+            onChange={(e) => {
+              if (e.target.value === "custom") {
+                setRegisterDraft(status?.config?.loginPlugin?.registerTemplate || "/register {password} {password}");
+                return;
+              }
+              setRegisterDraft("");
+              void patch({ registerRepeat: e.target.value === "1" ? 1 : 2, registerTemplate: "" });
+            }}
             className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
           >
             <option value="2">{t("ops.registerTwice")}</option>
             <option value="1">{t("ops.registerOnce")}</option>
+            <option value="custom">{t("ops.loginCustom")}</option>
           </select>
         </label>
       </div>
+      {(loginDraft || status?.config?.loginPlugin?.loginTemplate) && (
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("ops.loginCommand")}
+          <input
+            value={loginDraft || status?.config?.loginPlugin?.loginTemplate || ""}
+            onChange={(e) => setLoginDraft(e.target.value)}
+            onBlur={() => void patch({ loginTemplate: loginDraft || status?.config?.loginPlugin?.loginTemplate || "" })}
+            placeholder="/l {password}"
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
+          />
+        </label>
+      )}
+      {(registerDraft || status?.config?.loginPlugin?.registerTemplate) && (
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("ops.registerCommand")}
+          <input
+            value={registerDraft || status?.config?.loginPlugin?.registerTemplate || ""}
+            onChange={(e) => setRegisterDraft(e.target.value)}
+            onBlur={() => void patch({ registerTemplate: registerDraft || status?.config?.loginPlugin?.registerTemplate || "" })}
+            placeholder="/register {password}"
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
+          />
+        </label>
+      )}
+      <p className="text-xs text-zinc-500">{t("ops.loginTemplateHint")}</p>
       <p className="text-xs text-zinc-500">{status?.hasPassword ? t("ops.passwordSaved") : t("ops.password")}</p>
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -141,6 +207,14 @@ export function ViewerCard({ botId }: { botId: string }) {
   const toast = useAppStore((s) => s.toast);
   const [url, setUrl] = useState<string | null>(null);
   const [scene, setScene] = useState("");
+  const [full, setFull] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onChange = () => setFull(document.fullscreenElement === frameRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   useEffect(() => {
     if (!url) return;
@@ -169,8 +243,26 @@ export function ViewerCard({ botId }: { botId: string }) {
         >
           {t("ops.viewDescribe")}
         </button>
+        {url && (
+          <button
+            type="button"
+            className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
+            onClick={() => {
+              const node = frameRef.current;
+              if (!node) return;
+              if (document.fullscreenElement) void document.exitFullscreen();
+              else void node.requestFullscreen();
+            }}
+          >
+            {full ? t("ops.viewExit") : t("ops.viewFull")}
+          </button>
+        )}
       </div>
-      {url && <iframe title={t("ops.viewer")} src={url} className="h-64 w-full rounded border border-zinc-800 bg-black" />}
+      {url && (
+        <div ref={frameRef} className={full ? "flex h-full w-full flex-col bg-black" : "w-full"}>
+          <iframe title={t("ops.viewer")} src={url} className={full ? "min-h-0 w-full flex-1 border-0" : "aspect-video min-h-[16rem] w-full rounded border border-zinc-800 bg-black sm:min-h-[24rem] lg:aspect-auto lg:h-[min(70vh,40rem)]"} />
+        </div>
+      )}
       {scene && <pre className="mt-2 max-h-32 overflow-auto text-[11px] text-zinc-400">{scene}</pre>}
     </div>
   );
