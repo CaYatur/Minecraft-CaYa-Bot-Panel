@@ -48,6 +48,7 @@ Open:
 2. Return to **Panel** and select **Add Bot**.
 3. Choose the server, bot username, and Minecraft version.
 4. Start the bot and open its detail page.
+5. On that page, **Login** picks a Microsoft account or a server password, **24/7** sets autostart and anti-AFK, and **Bot view** opens the local 3D page.
 
 > The server listens on `127.0.0.1` by default. This is intentional: the panel has powerful bot-control endpoints and should not be exposed publicly without an authentication layer and a reverse proxy.
 
@@ -126,7 +127,7 @@ The build workspace includes transforms, origin selection, live progress, materi
 
 ## What is CaYa Bot Panel?
 
-CaYa Bot Panel is a local web application for creating and operating multiple Minecraft Java bots from one interface. It combines live bot monitoring, inventory management, movement, combat, survival behavior, resource gathering, recursive crafting, schematic construction, and a programmable automation engine.
+CaYa Bot Panel is a local web application for creating and operating multiple Minecraft Java bots from one interface. It combines live bot monitoring, inventory management, movement, combat, survival behavior, resource gathering, recursive crafting, schematic construction, and a programmable automation engine. Microsoft sign-in, 24/7 presence, Discord alerts, and a local first-person view are included.
 
 The project is designed around three principles:
 
@@ -156,6 +157,12 @@ The project is designed around three principles:
 | **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 50+ tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
 | **Localization** | English, Turkish and automatic locale detection |
+| **Microsoft accounts** | Device-code sign-in for online-mode servers, a local token cache, and per-bot offline or Microsoft login |
+| **24/7 mode** | Autostart with an optional delay, reconnect after a drop, and anti-AFK move, interval, and hold settings |
+| **Server login** | `/login` or `/register` when the server asks, on every join, or on the first join, including a custom `{password}` command |
+| **Discord** | Optional death, disconnect, and task alerts, slash commands, and a two-way chat bridge |
+| **Templates** | Import, export, and bundled automation packs that stay off until you enable them |
+| **Bot view** | A localhost 3D page, a still first-person PNG, and a text description of what is in view |
 | **Persistence** | Server profiles, bot profiles, rules, waypoints, schematic indexes and logs stored locally as JSON/files |
 
 ---
@@ -266,6 +273,7 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 | Memory | `remember`, `recall_memories`, `forget_memory` |
 | Waypoints | `save_waypoint_here` |
 | Utility mode *(off by default)* | `server_command`, `fly_to`, plus `mine_ore { utility: true }` |
+| Platform | Always-on, login plugin, uptime, Discord, templates, and bot view. Passwords and tokens are write-only or masked |
 
 ### Creative building without schematics
 
@@ -291,7 +299,7 @@ Off by default. On your **own** server (or one that explicitly allows automation
 
 ## Advanced automation engine
 
-The automation system can be used as a simple trigger-condition-action editor or as a nested workflow engine.
+The automation system can be used as a simple trigger-condition-action editor or as a nested workflow engine. Rule packs can be imported and exported as templates. Bundled examples (Auto farm, AFK fisher, Mob grinder guard, Auto eat and sleep) arrive disabled. See [docs/templates.md](docs/templates.md).
 
 ### Triggers
 
@@ -603,6 +611,7 @@ Available behavior includes:
 - Optional nearby-threat cleave behavior
 - Death-position and loot-recovery support
 - Unreachable-target detection and temporary target suppression
+- Hunter / lock-on, with scan, chase, and flee settings. While it is on, other actions stay locked and chat still works
 
 The project intentionally avoids teleporting, attacking through walls, or instantaneous aim snapping.
 
@@ -682,6 +691,36 @@ A full cancellation operation stops more than the visible queue. It also invalid
 
 ---
 
+## Accounts, 24/7, Discord, and view
+
+These controls live on the bot page and in Settings. Each one stays off until you turn it on.
+
+### Microsoft accounts
+
+Bots can join online-mode servers with a Microsoft account. Offline bots stay offline. Sign in from **Accounts** with the device code. The panel keeps the cache and does not ask again until the session expires or you sign out. One account cannot be online on two bots at once. Details: [docs/microsoft-auth.md](docs/microsoft-auth.md).
+
+### 24/7 mode
+
+The header **Autostart** checkbox and the one on the **24/7** tab are the same setting. When it is on, the bot joins after the panel opens. An optional delay of 0–300 seconds waits before that join.
+
+A bot that is already started retries after a drop or kick: 5 seconds, then 10, 30, and 60. A ban, whitelist, duplicate login, or Microsoft auth failure stops those retries.
+
+Anti-AFK is separate and off by default. The tab sets the move (mixed, look, sneak, jump, swing, or step), the seconds between moves (5–600), and how long sneak, jump, and step stay held (100–2000 ms). While it is on, goto, combat, building, farming, and other tasks are refused. Chat still works. There is no sprint. Details: [docs/always-on.md](docs/always-on.md).
+
+### Server login
+
+The **Login** tab can send a server password in three ways: only when a server line asks, on every join, or register on the first join and login after that. `/login` and `/register` can send the password once, twice, or through a custom command that contains `{password}`. A player line such as `<Steve> /login` does not send the password. The secret stays in `data/login-secrets.json`. Chat shows the command with the password replaced by dots.
+
+### Discord
+
+Discord is optional. A webhook can report death, disconnect, reconnect, mention, whisper, task finished, task failed, and low health. Slash commands need a bot token and a guild id. The chat bridge posts Minecraft lines as `[MC]` and writes Discord lines back as `[Discord]`. Tokens and webhook URLs are stored locally and masked in status. Details: [docs/discord.md](docs/discord.md).
+
+### Bot view
+
+**Bot view** opens a 3D page on `127.0.0.1` only while that tab sends a heartbeat. Closing it stops the page after about 20 seconds. A snapshot is a still first-person PNG, up to 1280×720, and does not turn the bot. `canvas` and headless WebGL ship with the panel. Details: [docs/viewer.md](docs/viewer.md).
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -743,7 +782,10 @@ Minecraft-CaYa-Bot-Panel/
 │     ├─ core/                   BotManager, BotInstance, TaskQueue
 │     ├─ modules/
 │     │  ├─ agent/               MCP endpoint, Ollama agent, tool registry, memory
+│     │  ├─ alwaysOn/            Autostart, anti-AFK, and the login plugin
+│     │  ├─ auth/                Microsoft device-code accounts
 │     │  ├─ automation/          Rules, blueprints and advanced flow nodes
+│     │  ├─ discord/             Webhook events, slash commands, and the chat bridge
 │     │  ├─ build/               Schematic parsing and construction
 │     │  ├─ catalog/             Minecraft item/block catalog
 │     │  ├─ chat/                Chat parsing
@@ -753,6 +795,8 @@ Minecraft-CaYa-Bot-Panel/
 │     │  ├─ inventory/           Inventory actions and snapshots
 │     │  ├─ movement/            Pathfinding, parkour and water assistance
 │     │  ├─ survival/            Food, hazard, water and fall guards
+│     │  ├─ templates/           Automation template import and export
+│     │  ├─ view/                Local 3D page and first-person snapshots
 │     │  └─ world/               Shared world memory
 │     ├─ persistence/            JSON store helpers
 │     ├─ types.ts
@@ -763,7 +807,7 @@ Minecraft-CaYa-Bot-Panel/
 │     ├─ components/             Bot panels and advanced flow editor
 │     ├─ i18n/                   English and Turkish dictionaries
 │     ├─ lib/                    API, sockets and shared UI types
-│     ├─ pages/                  Dashboard, bots, rules, schematics, MCP/AI, servers
+│     ├─ pages/                  Dashboard, bots, accounts, rules, schematics, MCP/AI, servers, settings
 │     ├─ stores/                 Zustand state
 │     └─ App.tsx
 ├─ TODO.md                       Detailed roadmap and design decisions
@@ -837,9 +881,13 @@ data/rules.json         automation rules and advanced flows
 data/waypoints.json     saved coordinates
 data/schematics/        uploaded schematic files and index
 data/logs/              application logs
+data/auth/              Microsoft token cache
+data/login-secrets.json server login passwords
+data/discord-secrets.json Discord webhook and bot token
+data/uptime.json        session uptime and recent disconnects
 ```
 
-Do not commit real server addresses, private player lists, or sensitive operational data to a public repository.
+Do not commit real server addresses, private player lists, token caches, or the secret files above to a public repository.
 
 ---
 
@@ -937,7 +985,7 @@ MLG behavior is sensitive to latency, server TPS, inventory selection, anti-chea
 
 ## Project status
 
-CaYa Bot Panel is under active development. The repository currently contains working implementations for multi-bot lifecycle management, chat, inventory, task queues, movement, combat, survival, gathering, crafting, storage, schematic construction, localization and advanced automation flows.
+CaYa Bot Panel is under active development. The repository currently contains working implementations for multi-bot lifecycle management, Microsoft sign-in, 24/7 presence, Discord alerts, a local bot view, chat, inventory, task queues, movement, combat, survival, gathering, crafting, storage, schematic construction, localization and advanced automation flows.
 
 The detailed development plan, acceptance criteria, design principles and future backlog are maintained in [`TODO.md`](TODO.md).
 
