@@ -84,7 +84,11 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
       }
     },
     async execute(ctx, args) {
-      if (args.password !== undefined) writeLoginSecret(ctx.inst.config.id, String(args.password ?? ""));
+      if (args.password !== undefined) {
+        const password = String(args.password ?? "");
+        if (password.length > 64) throw new Error("Password is too long (64 characters max).");
+        writeLoginSecret(ctx.inst.config.id, password);
+      }
       const current = ctx.inst.config.alwaysOn;
       if (current) {
         ctx.manager.updateBotConfig(ctx.inst.config.id, {

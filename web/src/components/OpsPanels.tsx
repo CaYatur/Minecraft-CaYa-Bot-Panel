@@ -4,6 +4,26 @@ import { api } from "../lib/api";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
+/** Same rule as the server: only real Discord webhook endpoints. */
+export function looksLikeDiscordWebhook(raw: string): boolean {
+  try {
+    const url = new URL(raw.trim());
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (!url.port || url.port === "443") &&
+      ["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"].includes(url.hostname.toLowerCase()) &&
+      /^\/api\/(v\d+\/)?webhooks\/\d{5,30}\/[A-Za-z0-9_-]{20,200}\/?$/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+const SNOWFLAKE = /^\d{15,22}$/;
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 const fieldClass = "rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 focus:border-indigo-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
 export function AlwaysOnCard({ botId }: { botId: string }) {
@@ -164,6 +184,7 @@ export function LoginPluginCard({ botId }: { botId: string }) {
   const toast = useAppStore((s) => s.toast);
   const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number; loginTemplate?: string; registerTemplate?: string; sendMode?: string } } } | null>(null);
   const [password, setPassword] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
   const [loginDraft, setLoginDraft] = useState("");
   const [registerDraft, setRegisterDraft] = useState("");
 
@@ -255,7 +276,15 @@ export function LoginPluginCard({ botId }: { botId: string }) {
           <input
             value={loginDraft || status?.config?.loginPlugin?.loginTemplate || ""}
             onChange={(e) => setLoginDraft(e.target.value)}
-            onBlur={() => void patch({ loginTemplate: loginDraft || status?.config?.loginPlugin?.loginTemplate || "" })}
+            onBlur={() => {
+              const next = loginDraft || status?.config?.loginPlugin?.loginTemplate || "";
+              if (next && !next.includes("{password}")) {
+                toast("error", t("ops.templateNeedsPassword"));
+                return;
+              }
+              void patch({ loginTemplate: next });
+            }}
+            aria-invalid={Boolean(loginDraft) && !loginDraft.includes("{password}")}
             placeholder="/l {password}"
             className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
           />
@@ -267,30 +296,78 @@ export function LoginPluginCard({ botId }: { botId: string }) {
           <input
             value={registerDraft || status?.config?.loginPlugin?.registerTemplate || ""}
             onChange={(e) => setRegisterDraft(e.target.value)}
-            onBlur={() => void patch({ registerTemplate: registerDraft || status?.config?.loginPlugin?.registerTemplate || "" })}
+            onBlur={() => {
+              const next = registerDraft || status?.config?.loginPlugin?.registerTemplate || "";
+              if (next && !next.includes("{password}")) {
+                toast("error", t("ops.templateNeedsPassword"));
+                return;
+              }
+              void patch({ registerTemplate: next });
+            }}
+            aria-invalid={Boolean(registerDraft) && !registerDraft.includes("{password}")}
             placeholder="/register {password}"
             className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
           />
         </label>
       )}
       <p className="text-xs text-zinc-500">{t("ops.loginTemplateHint")}</p>
-      <p className="text-xs text-zinc-500">{status?.hasPassword ? t("ops.passwordSaved") : t("ops.password")}</p>
-      <div className="flex flex-wrap items-center gap-2">
+      <p className="text-xs text-zinc-500" id={`login-pw-state-${botId}`}>{status?.hasPassword ? t("ops.passwordSaved") : t("ops.passwordMissing")}</p>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!password || savingPassword) return;
+          setSavingPassword(true);
+          void api
+            .put(`/api/bots/${botId}/login-plugin`, { password })
+            .then(() => {
+              setPassword("");
+              toast("success", t("ops.passwordSaved"));
+              return load();
+            })
+            .catch((err) => toast("error", errorText(err)))
+            .finally(() => setSavingPassword(false));
+        }}
+      >
+        {/* Write-only: the saved password is never loaded back into this field. */}
         <input
           type="password"
           value={password}
-          placeholder={t("ops.password")}
+          maxLength={64}
+          autoComplete="new-password"
+          spellCheck={false}
+          aria-label={t("ops.password")}
+          aria-describedby={`login-pw-state-${botId}`}
+          placeholder={status?.hasPassword ? t("ops.passwordReplace") : t("ops.password")}
           onChange={(e) => setPassword(e.target.value)}
           className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
         />
         <button
-          type="button"
-          className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-800"
-          onClick={() => void api.put(`/api/bots/${botId}/login-plugin`, { password }).then(() => { setPassword(""); toast("success", t("ops.passwordSaved")); return load(); }).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
+          type="submit"
+          disabled={!password || savingPassword}
+          className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {t("ops.savePassword")}
+          {savingPassword ? t("common.loading") : t("ops.savePassword")}
         </button>
-      </div>
+        {status?.hasPassword && (
+          <button
+            type="button"
+            className={pressable}
+            onClick={() => {
+              if (!window.confirm(t("ops.removePasswordConfirm"))) return;
+              void api
+                .put(`/api/bots/${botId}/login-plugin`, { password: "" })
+                .then(() => {
+                  toast("success", t("ops.passwordRemoved"));
+                  return load();
+                })
+                .catch((err) => toast("error", errorText(err)));
+            }}
+          >
+            {t("ops.removePassword")}
+          </button>
+        )}
+      </form>
     </div>
   );
 }
@@ -298,7 +375,9 @@ export function LoginPluginCard({ botId }: { botId: string }) {
 export function ViewerCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
+  const online = useAppStore((s) => s.bots[botId]?.status === "online");
   const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [scene, setScene] = useState("");
   const [full, setFull] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -309,29 +388,62 @@ export function ViewerCard({ botId }: { botId: string }) {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
+  // Leaving the tab only stops the heartbeat: another tab may share this view,
+  // and the server closes it ~20 s after the last heartbeat from any tab.
   useEffect(() => {
     if (!url) return;
-    const timer = setInterval(() => void api.post(`/api/bots/${botId}/view/heartbeat`).catch(() => undefined), 5000);
-    return () => {
-      clearInterval(timer);
-      void api.post(`/api/bots/${botId}/view/stop`).catch(() => undefined);
-    };
+    const beat = () =>
+      void api
+        .post<{ running: boolean }>(`/api/bots/${botId}/view/heartbeat`)
+        .then((row) => {
+          if (!row.running) {
+            setUrl(null);
+            toast("info", t("ops.viewClosed"));
+          }
+        })
+        .catch(() => undefined);
+    const timer = setInterval(beat, 5000);
+    return () => clearInterval(timer);
   }, [url, botId]);
+
+  // The view belongs to one connection; drop the frame when the bot goes offline.
+  useEffect(() => {
+    if (!online) setUrl(null);
+  }, [online]);
+
+  const start = () => {
+    if (busy) return;
+    setBusy(true);
+    void api
+      .post<{ url: string }>(`/api/bots/${botId}/view/start`)
+      .then((row) => setUrl(row.url))
+      .catch((err) => toast("error", errorText(err)))
+      .finally(() => setBusy(false));
+  };
+
+  const stop = () => {
+    setUrl(null);
+    void api.post(`/api/bots/${botId}/view/stop`).catch(() => undefined);
+  };
 
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm leading-relaxed text-zinc-400">{t("ops.viewerHelp")}</p>
+      {!online && <p className="text-xs text-amber-300/90">{t("ops.viewNeedsOnline")}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
-          onClick={() => void api.post<{ url: string }>(`/api/bots/${botId}/view/start`).then((row) => setUrl(row.url)).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
+          className={pressable}
+          disabled={!online || busy}
+          aria-busy={busy}
+          onClick={url ? stop : start}
         >
-          {t("ops.viewStart")}
+          {busy ? t("ops.viewStarting") : url ? t("ops.viewStop") : t("ops.viewStart")}
         </button>
         <button
           type="button"
-          className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
+          className={pressable}
+          disabled={!online}
           onClick={() => void api.post(`/api/bots/${botId}/view/describe`).then((row) => setScene(JSON.stringify(row).slice(0, 500))).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}
         >
           {t("ops.viewDescribe")}
@@ -386,8 +498,11 @@ export function DiscordCard() {
   const [userIds, setUserIds] = useState("");
   const [roleIds, setRoleIds] = useState<string[]>([]);
   const [guildId, setGuildId] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
+    setLoadError(null);
     const next = await api.get<NonNullable<typeof state>>("/api/discord");
     setState(next);
     setChannelId(next.bridge?.channelId ?? "");
@@ -395,57 +510,95 @@ export function DiscordCard() {
     setRoleIds(next.allow?.roleIds ?? []);
     setGuildId(next.guildId ?? "");
   };
-  useEffect(() => { void load().catch(() => undefined); }, []);
+  useEffect(() => { void load().catch((err) => setLoadError(errorText(err))); }, []);
+
+  const webhookInvalid = Boolean(webhook.trim()) && !looksLikeDiscordWebhook(webhook);
+  const idList = userIds.split(/[\s,]+/).filter(Boolean);
+  const badIds = [guildId.trim(), channelId.trim(), ...idList].filter((v) => v && !SNOWFLAKE.test(v));
 
   const patch = async (body: unknown): Promise<boolean> => {
+    setSaving(true);
     try {
       const next = await api.patch<NonNullable<typeof state>>("/api/discord", body);
       setState(next);
       setRoleIds(next.allow?.roleIds ?? []);
       return true;
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : String(err));
+      toast("error", errorText(err));
       return false;
+    } finally {
+      setSaving(false);
     }
   };
 
   const saveWebhook = async () => {
-    if (!webhook.trim()) return;
+    if (!webhook.trim() || webhookInvalid) return;
     const ok = await patch({ webhookUrl: webhook.trim() });
     if (!ok) return;
     setWebhook("");
-    toast("success", t("common.save"));
+    toast("success", t("ops.savedOk"));
   };
 
   const saveBot = async () => {
+    if (badIds.length) {
+      toast("error", t("ops.idsInvalid"));
+      return;
+    }
     const body: Record<string, unknown> = {
       guildId: guildId.trim(),
       sayAllowsCommands: Boolean(state?.sayAllowsCommands),
       bridge: { enabled: Boolean(state?.bridge?.enabled), channelId: channelId.trim(), maxPerMinute: 20 },
-      allow: { userIds: userIds.split(/[\s,]+/).filter(Boolean), roleIds }
+      allow: { userIds: idList, roleIds }
     };
     if (token.trim()) body.token = token.trim();
     const ok = await patch(body);
     if (!ok) return;
     setToken("");
-    toast("success", t("common.save"));
+    toast("success", t("ops.savedOk"));
   };
 
   const test = async () => {
+    if (webhookInvalid) {
+      toast("error", t("ops.webhookInvalid"));
+      return;
+    }
     try {
       await api.post("/api/discord/test", webhook.trim() ? { url: webhook.trim() } : {});
       toast("success", t("ops.webhookOk"));
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : String(err));
+      toast("error", errorText(err));
     }
   };
+
+  const removeSecret = async (key: "webhookUrl" | "token") => {
+    if (!window.confirm(t(key === "token" ? "ops.removeTokenConfirm" : "ops.removeWebhookConfirm"))) return;
+    if (await patch({ [key]: null })) toast("success", t("ops.removed"));
+  };
+
+  if (!state) {
+    return (
+      <div className="flex flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 lg:col-span-2" aria-busy={!loadError}>
+        <div className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.discord")}</div>
+        {loadError ? (
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-300">
+            {t("ops.discordLoadFailed")} ({loadError})
+            <button type="button" className={pressable} onClick={() => void load().catch((err) => setLoadError(errorText(err)))}>
+              {t("common.refresh")}
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">{t("common.loading")}</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 lg:col-span-2">
       <div>
         <div className="mb-1 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.discord")}</div>
         <p className="text-xs text-zinc-400">
-          {t("ops.discordState", { gateway: state?.gateway ?? "off", webhook: state?.webhookMasked || (state?.hasWebhook ? t("ops.saved") : t("ops.missing")) })}
+          {t("ops.discordState", { gateway: t(`ops.gateway.${state?.gateway ?? "off"}`), webhook: state?.webhookMasked || (state?.hasWebhook ? t("ops.saved") : t("ops.missing")) })}
           {state?.gatewayError ? ` — ${state.gatewayError}` : ""}
         </p>
       </div>
@@ -454,10 +607,25 @@ export function DiscordCard() {
         <div className="text-sm font-medium text-zinc-100">{t("ops.discordWebhookTitle")}</div>
         <p className="text-xs leading-relaxed text-zinc-400">{t("ops.discordWebhookHelp")}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <input type="password" value={webhook} placeholder={t("ops.webhook")} onChange={(e) => setWebhook(e.target.value)} className={`min-w-64 ${fieldClass}`} />
-          <button type="button" className={pressablePrimary} disabled={!webhook.trim()} onClick={() => void saveWebhook()}>{t("ops.discordSaveWebhook")}</button>
-          <button type="button" className={pressable} onClick={() => void test()}>{t("ops.testWebhook")}</button>
+          <input
+            type="password"
+            value={webhook}
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={512}
+            aria-label={t("ops.webhook")}
+            aria-invalid={webhookInvalid}
+            placeholder={state?.hasWebhook ? t("ops.webhookReplace") : t("ops.webhook")}
+            onChange={(e) => setWebhook(e.target.value)}
+            className={`min-w-0 flex-1 sm:min-w-64 ${fieldClass}`}
+          />
+          <button type="button" className={pressablePrimary} disabled={!webhook.trim() || webhookInvalid || saving} onClick={() => void saveWebhook()}>{t("ops.discordSaveWebhook")}</button>
+          <button type="button" className={pressable} disabled={(!webhook.trim() && !state?.hasWebhook) || webhookInvalid} onClick={() => void test()}>{t("ops.testWebhook")}</button>
+          {state?.hasWebhook && (
+            <button type="button" className={pressable} disabled={saving} onClick={() => void removeSecret("webhookUrl")}>{t("ops.removeWebhook")}</button>
+          )}
         </div>
+        {webhookInvalid && <p role="alert" className="text-xs text-red-300">{t("ops.webhookInvalid")}</p>}
         <div className="text-xs font-medium text-zinc-300">{t("ops.discordEvents")}</div>
         <div className="flex flex-wrap gap-2">
           {DISCORD_EVENTS.map((key) => (
@@ -477,11 +645,12 @@ export function DiscordCard() {
         <div className="text-sm font-medium text-zinc-100">{t("ops.discordBotTitle")}</div>
         <p className="text-xs leading-relaxed text-zinc-400">{t("ops.discordBotHelp")}</p>
         <div className="flex flex-wrap gap-2">
-          <input type="password" value={token} placeholder={state?.hasToken ? t("ops.tokenSaved") : t("ops.token")} onChange={(e) => setToken(e.target.value)} className={fieldClass} />
-          <input value={guildId} placeholder={t("ops.discordGuild")} onChange={(e) => setGuildId(e.target.value)} className={fieldClass} />
-          <input value={userIds} placeholder={t("ops.allowUsers")} onChange={(e) => setUserIds(e.target.value)} className={`min-w-56 ${fieldClass}`} />
-          <input value={channelId} placeholder={t("ops.channel")} onChange={(e) => setChannelId(e.target.value)} className={fieldClass} />
+          <input type="password" value={token} autoComplete="off" spellCheck={false} maxLength={200} aria-label={t("ops.token")} placeholder={state?.hasToken ? t("ops.tokenSaved") : t("ops.token")} onChange={(e) => setToken(e.target.value)} className={fieldClass} />
+          <input value={guildId} inputMode="numeric" aria-label={t("ops.discordGuild")} aria-invalid={Boolean(guildId.trim()) && !SNOWFLAKE.test(guildId.trim())} placeholder={t("ops.discordGuild")} onChange={(e) => setGuildId(e.target.value)} className={fieldClass} />
+          <input value={userIds} aria-label={t("ops.allowUsers")} placeholder={t("ops.allowUsers")} onChange={(e) => setUserIds(e.target.value)} className={`min-w-0 sm:min-w-56 ${fieldClass}`} />
+          <input value={channelId} inputMode="numeric" aria-label={t("ops.channel")} aria-invalid={Boolean(channelId.trim()) && !SNOWFLAKE.test(channelId.trim())} placeholder={t("ops.channel")} onChange={(e) => setChannelId(e.target.value)} className={fieldClass} />
         </div>
+        {badIds.length > 0 && <p role="alert" className="text-xs text-red-300">{t("ops.idsInvalid")}</p>}
         <div className="flex flex-wrap gap-2">
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
             <input type="checkbox" checked={Boolean(state?.bridge?.enabled)} onChange={(e) => void patch({ bridge: { enabled: e.target.checked, channelId: channelId.trim() } })} />
@@ -491,7 +660,10 @@ export function DiscordCard() {
             <input type="checkbox" checked={Boolean(state?.sayAllowsCommands)} onChange={(e) => void patch({ sayAllowsCommands: e.target.checked })} />
             {t("ops.discordSayCommands")}
           </label>
-          <button type="button" className={pressablePrimary} onClick={() => void saveBot()}>{t("ops.discordSaveBot")}</button>
+          <button type="button" className={pressablePrimary} disabled={saving || badIds.length > 0} onClick={() => void saveBot()}>{t("ops.discordSaveBot")}</button>
+          {state?.hasToken && (
+            <button type="button" className={pressable} disabled={saving} onClick={() => void removeSecret("token")}>{t("ops.removeToken")}</button>
+          )}
         </div>
       </section>
     </div>

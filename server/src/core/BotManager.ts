@@ -127,7 +127,11 @@ export class BotManager extends EventEmitter {
   updateServer(id: string, patch: Partial<Omit<ServerProfile, "id">>): ServerProfile {
     const profile = this.servers.find((s) => s.id === id);
     if (!profile) throw new PanelError("Server profile not found.", 404);
-    if (patch.host !== undefined) profile.host = String(patch.host).trim();
+    if (patch.host !== undefined) {
+      const host = String(patch.host).trim();
+      if (!host) throw new PanelError("Server address is required.");
+      profile.host = host;
+    }
     if (patch.port !== undefined) profile.port = clampPort(patch.port);
     if (patch.version !== undefined) profile.version = normalizeVersion(patch.version);
     if (patch.name !== undefined) profile.name = String(patch.name).trim() || profile.name;

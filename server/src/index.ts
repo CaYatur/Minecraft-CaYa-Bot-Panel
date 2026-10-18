@@ -90,6 +90,13 @@ async function main() {
   const io = new SocketServer(httpServer, { allowRequest: socketGuard(guard) });
   setupSocket(io, manager, supportedVersions, agents);
 
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    // Without this the error is swallowed by the uncaughtException guard and
+    // the process lingers without a listening socket.
+    log.error(`Could not listen on ${HOST}:${PORT}`, err.code === "EADDRINUSE" ? "port already in use" : String(err));
+    process.exit(1);
+  });
+
   httpServer.listen(PORT, HOST, () => {
     log.success(`Minecraft CaYa Bot Panel API ready: http://${HOST}:${PORT} (mineflayer versions: ${supportedVersions.length})`);
   });
@@ -102,6 +109,9 @@ async function main() {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // Forked by the desktop app: exit with it instead of staying behind as an
+  // orphan that keeps the port and the bots' sessions open.
+  if (typeof process.send === "function") process.on("disconnect", shutdown);
 }
 
 void main();

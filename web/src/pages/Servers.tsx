@@ -12,18 +12,26 @@ export function Servers() {
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
 
-  const empty = { name: "", host: "", port: 25565, version: "auto" };
+  const empty = { name: "", host: "", port: "25565", version: "auto" };
   const [form, setForm] = useState<typeof empty>(empty);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Host: a name or IP, no scheme, path or spaces. Port: 1-65535.
+  const hostOk = /^[A-Za-z0-9.-]{1,253}$|^\[[0-9A-Fa-f:]+\]$/.test(form.host.trim());
+  const portNum = Number(form.port);
+  const portOk = /^\d{1,5}$/.test(form.port.trim()) && portNum >= 1 && portNum <= 65535;
+  const formOk = hostOk && portOk;
+
   const refresh = async () => applySnapshot(await api.get<StateSnapshot>("/api/state"));
 
   const submit = async () => {
+    if (!formOk || busy) return;
     setBusy(true);
+    const body = { ...form, host: form.host.trim(), name: form.name.trim(), port: portNum };
     try {
-      if (editingId) await api.patch(`/api/servers/${editingId}`, form);
-      else await api.post("/api/servers", form);
+      if (editingId) await api.patch(`/api/servers/${editingId}`, body);
+      else await api.post("/api/servers", body);
       await refresh();
       setForm(empty);
       setEditingId(null);
@@ -66,6 +74,7 @@ export function Servers() {
           <input
             value={form.host}
             onChange={(e) => setForm({ ...form, host: e.target.value })}
+            aria-invalid={Boolean(form.host.trim()) && !hostOk}
             placeholder={t("servers.hostPlaceholder")}
             className="w-52 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
           />
@@ -74,8 +83,12 @@ export function Servers() {
           <span className="text-zinc-400">{t("servers.port")}</span>
           <input
             type="number"
+            min={1}
+            max={65535}
+            inputMode="numeric"
             value={form.port}
-            onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 25565 })}
+            aria-invalid={!portOk}
+            onChange={(e) => setForm({ ...form, port: e.target.value })}
             className="w-24 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
           />
         </label>
@@ -95,8 +108,9 @@ export function Servers() {
           </select>
         </label>
         <button
-          onClick={submit}
-          disabled={busy || !form.host.trim()}
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || !formOk}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         >
           {editingId ? t("servers.update") : t("servers.addShort")}
@@ -114,7 +128,13 @@ export function Servers() {
         )}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-zinc-800">
+      {((form.host.trim() && !hostOk) || !portOk) && (
+        <p role="alert" className="-mt-4 text-xs text-red-300">
+          {!portOk ? t("servers.portInvalid") : t("servers.hostInvalid")}
+        </p>
+      )}
+
+      <div className="overflow-x-auto rounded-xl border border-zinc-800">
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-900 text-xs text-zinc-500 uppercase">
             <tr>
@@ -145,7 +165,7 @@ export function Servers() {
                   <button
                     onClick={() => {
                       setEditingId(s.id);
-                      setForm({ name: s.name, host: s.host, port: s.port, version: s.version });
+                      setForm({ name: s.name, host: s.host, port: String(s.port), version: s.version });
                     }}
                     className="mr-2 text-indigo-400 hover:underline"
                   >

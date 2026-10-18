@@ -19,6 +19,18 @@ export function MicrosoftAuthDialog() {
     return () => clearInterval(id);
   }, [prompt]);
 
+  // Escape closes the dialog the same way as the close button.
+  useEffect(() => {
+    if (!prompt) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (prompt.phase !== "error") void api.post(`/api/accounts/${prompt.accountId}/cancel`).catch(() => undefined);
+      clear();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prompt, clear]);
+
   if (!prompt) return null;
 
   const phase = prompt.phase ?? "code";

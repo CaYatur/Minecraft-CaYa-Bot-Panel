@@ -145,6 +145,28 @@ async function main() {
     assert(`rejects ${bad || "(empty)"}`, !logic.isDiscordWebhookUrl(bad));
   }
 
+  console.log("discord settings input");
+  const hub = await import("../server/src/modules/discord/hub");
+  const clean = hub.sanitizeDiscordPatch({ guildId: "123456789012345678", junk: "x", events: { death: 1, evil: true }, bridge: { enabled: "yes" } });
+  assert("unknown keys are dropped", !("junk" in clean) && !("evil" in (clean.events ?? {})));
+  assert("event flags become booleans", clean.events?.death === true && clean.bridge?.enabled === true);
+  let badId = false;
+  try {
+    hub.sanitizeDiscordPatch({ guildId: "not-an-id" });
+  } catch {
+    badId = true;
+  }
+  assert("non-numeric Discord ID is rejected", badId);
+  let badHook = false;
+  try {
+    hub.updateDiscordSettings({ webhookUrl: "https://evil.test/hook" });
+  } catch {
+    badHook = true;
+  }
+  assert("saving a non-Discord webhook is rejected", badHook);
+  const tested = await hub.testWebhook("http://169.254.169.254/latest/meta-data");
+  assert("test webhook refuses internal URLs", !tested.ok);
+
   console.log("host / origin guard");
   const opts = { bindHost: "127.0.0.1", allowedHosts: [] as string[] };
   assert("panel itself", guard.checkRequest({ host: "127.0.0.1:3001", origin: "http://127.0.0.1:3001" }, opts).ok);

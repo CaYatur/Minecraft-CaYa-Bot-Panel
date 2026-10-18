@@ -41,7 +41,51 @@ export function discordPublicState() {
   return { ...publicDiscordSettings(), gateway, gatewayError };
 }
 
-export function updateDiscordSettings(patch: Partial<DiscordSettings> & { token?: string | null; webhookUrl?: string | null }): ReturnType<typeof discordPublicState> {
+const SNOWFLAKE = /^\d{15,22}$/;
+const EVENT_KEYS = new Set(["death", "disconnect", "reconnect", "mention", "whisper", "taskDone", "taskFailed", "lowHealth"]);
+
+/**
+ * Keeps only known settings with the right types. Unknown keys from the REST
+ * body or MCP are dropped instead of being written to discord.json.
+ */
+export function sanitizeDiscordPatch(raw: unknown): Partial<DiscordSettings> & { token?: string | null; webhookUrl?: string | null } {
+  const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const out: Partial<DiscordSettings> & { token?: string | null; webhookUrl?: string | null } = {};
+  const id = (value: unknown, field: string): string => {
+    const text = String(value ?? "").trim();
+    if (text && !SNOWFLAKE.test(text)) throw new PanelError(`${field} must be a Discord ID (digits only).`);
+    return text;
+  };
+  if ("token" in body) out.token = body.token == null || body.token === "" ? null : String(body.token).trim().slice(0, 200);
+  if ("webhookUrl" in body) out.webhookUrl = body.webhookUrl == null || body.webhookUrl === "" ? null : String(body.webhookUrl).trim();
+  if ("guildId" in body) out.guildId = id(body.guildId, "Server ID");
+  if ("statusChannelId" in body) out.statusChannelId = id(body.statusChannelId, "Status channel ID");
+  if ("sayAllowsCommands" in body) out.sayAllowsCommands = Boolean(body.sayAllowsCommands);
+  if (body.bridge && typeof body.bridge === "object") {
+    const bridge = body.bridge as Record<string, unknown>;
+    const next: Partial<DiscordSettings["bridge"]> = {};
+    if ("enabled" in bridge) next.enabled = Boolean(bridge.enabled);
+    if ("channelId" in bridge) next.channelId = id(bridge.channelId, "Bridge channel ID");
+    if ("maxPerMinute" in bridge) next.maxPerMinute = Number(bridge.maxPerMinute) || 20;
+    out.bridge = next as DiscordSettings["bridge"];
+  }
+  if (body.allow && typeof body.allow === "object") {
+    const allow = body.allow as Record<string, unknown>;
+    const list = (value: unknown, field: string) => (Array.isArray(value) ? value.map((item) => id(item, field)).filter(Boolean) : []);
+    out.allow = { userIds: list(allow.userIds, "User ID"), roleIds: list(allow.roleIds, "Role ID") };
+  }
+  if (body.events && typeof body.events === "object") {
+    const events: Partial<DiscordEvents> = {};
+    for (const [key, value] of Object.entries(body.events as Record<string, unknown>)) {
+      if (EVENT_KEYS.has(key)) events[key as keyof DiscordEvents] = Boolean(value);
+    }
+    out.events = events as DiscordEvents;
+  }
+  return out;
+}
+
+export function updateDiscordSettings(raw: Partial<DiscordSettings> & { token?: string | null; webhookUrl?: string | null }): ReturnType<typeof discordPublicState> {
+  const patch = sanitizeDiscordPatch(raw);
   const { token, webhookUrl, ...rest } = patch;
   if (webhookUrl && !isDiscordWebhookUrl(webhookUrl)) {
     throw new PanelError("Webhook URL must be a https://discord.com/api/webhooks/... link.");
