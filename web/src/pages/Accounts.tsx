@@ -91,6 +91,7 @@ export function Accounts() {
           {accounts.map((account) => {
             const head = headUrl(account);
             const statusKey = `accounts.status.${account.tokenStatus}`;
+            const signedIn = account.tokenStatus === "cached";
             return (
               <div key={account.id} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
                 <div className="flex items-start gap-3">
@@ -158,8 +159,13 @@ export function Accounts() {
                   </button>
                   <button
                     type="button"
-                    className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
-                    onClick={() => void run(() => api.post(`/api/accounts/${account.id}/sign-out`).then(() => undefined))}
+                    disabled={!signedIn}
+                    className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => {
+                      if (!signedIn) return;
+                      if (!confirm(t("accounts.signOutConfirm", { name: account.username || account.label }))) return;
+                      void run(() => api.post(`/api/accounts/${account.id}/sign-out`).then(() => undefined));
+                    }}
                   >
                     {t("accounts.signOut")}
                   </button>

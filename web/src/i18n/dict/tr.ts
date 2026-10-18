@@ -1306,6 +1306,7 @@ export const tr: MessageTree = {
     signInAgain: "Tekrar giriş yap",
     rename: "Yeniden adlandır",
     signOut: "Çıkış yap",
+    signOutConfirm: "{name} hesabından çıkış yapılsın mı? Kayıtlı giriş silinir.",
     remove: "Kaldır",
     removeConfirm: "{name} kaldırılsın ve kayıtlı giriş silinsin mi?",
     linked: "Kullanan botlar: {names}",

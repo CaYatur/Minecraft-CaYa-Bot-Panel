@@ -18,7 +18,7 @@ If the refresh token expires, auto-reconnect stops and asks you to sign in again
 
 Add each account separately. Assign them to different bots. Starting a second bot on an account that is already connecting or online is rejected, because the server would kick one of the sessions.
 
-A signed-in account shows **Sign in again**. Starting that and then pressing **Cancel** keeps the saved login until you press **Sign out**. **Sign out** deletes the token cache and keeps the account row. **Remove** deletes the cache and switches linked bots back to offline auth.
+A signed-in account shows **Sign in again**. Starting that and then pressing **Cancel** keeps the saved login until you press **Sign out**. **Sign out** asks for confirmation, then deletes the token cache and keeps the account row. The button is disabled when the account is not signed in. **Remove** deletes the cache and switches linked bots back to offline auth.
 
 If Microsoft accepts the account but the server rejects the join (for example the same player is already online), the dialog stays open and shows that error. Closing it does not sign the account out.
 

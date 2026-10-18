@@ -1306,6 +1306,7 @@ export const en: MessageTree = {
     signInAgain: "Sign in again",
     rename: "Rename",
     signOut: "Sign out",
+    signOutConfirm: "Sign out of {name}? The saved login will be deleted.",
     remove: "Remove",
     removeConfirm: "Remove {name} and delete its saved login?",
     linked: "Used by {names}",
