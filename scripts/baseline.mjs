@@ -363,10 +363,27 @@ async function main() {
       assert("view description is structured", described && described.look && Array.isArray(described.blocks), JSON.stringify(described).slice(0, 180));
       const shot = await req("POST", `/bots/${id1}/view/snapshot`, { width: 320, height: 180, viewDistance: 2 });
       const shotBytes = Buffer.from(String(shot.base64 || ""), "base64");
+      let spread = 0;
+      if (shotBytes.length > 32 && shotBytes[0] === 0x89) {
+        const { createCanvas, loadImage } = require("canvas");
+        const img = await loadImage(shotBytes);
+        const surface = createCanvas(img.width, img.height);
+        const ctx = surface.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(0, 0, img.width, img.height).data;
+        let min = 255;
+        let max = 0;
+        for (let i = 0; i < data.length; i += 16) {
+          const luma = (data[i] ?? 0) * 0.3 + (data[i + 1] ?? 0) * 0.59 + (data[i + 2] ?? 0) * 0.11;
+          if (luma < min) min = luma;
+          if (luma > max) max = luma;
+        }
+        spread = max - min;
+      }
       assert(
         "headless snapshot is a PNG of the bot view",
-        shot.mimeType === "image/png" && shotBytes.length > 800 && shotBytes[0] === 0x89 && shotBytes[1] === 0x50,
-        `mime=${shot.mimeType} bytes=${shotBytes.length}`
+        shot.mimeType === "image/png" && shotBytes[0] === 0x89 && shotBytes[1] === 0x50 && spread > 8,
+        `mime=${shot.mimeType} bytes=${shotBytes.length} spread=${Math.round(spread)}`
       );
       const first = await getBot(id1);
       assert("vitals are live", first.runtime.health > 0 && first.runtime.position.y !== 0);
