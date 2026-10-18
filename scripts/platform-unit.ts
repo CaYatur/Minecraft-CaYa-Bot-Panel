@@ -5,7 +5,7 @@
 import * as http from "http";
 import { nextBackoffMs, sessionIsStable } from "../server/src/modules/alwaysOn/backoff";
 import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
-import { detectLoginPrompt, loginPluginCommand, normalizeLoginTemplate, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
+import { detectLoginPrompt, loginPluginCommand, looksLikePlayerChat, normalizeLoginTemplate, redactGameCommand, unpromptedLoginKind } from "../server/src/modules/alwaysOn/loginPrompt";
 import { antiAfkAllowed, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
 import { runWithLocalViewerServer } from "../server/src/modules/view/session";
@@ -42,6 +42,9 @@ function unit() {
   assert("register prompt", detectLoginPrompt("Please /register") === "register");
   assert("both commands use login", detectLoginPrompt("Please /register or /login <password>") === "login");
   assert("unregistered account uses register", detectLoginPrompt("You are not registered. Use /register") === "register");
+  assert("a player login line is ignored", looksLikePlayerChat("<Steve> /login secret") && detectLoginPrompt("<Steve> /login secret") === "none" && detectLoginPrompt("<Steve> /giris", "", "/giris {password}", "") === "none");
+  assert("a custom server command is recognized", detectLoginPrompt("Use /giris to continue", "", "/giris {password}", "/kayit {password}") === "login" && detectLoginPrompt("Use /kayit now", "", "/giris {password}", "/kayit {password}") === "register");
+  assert("join send mode picks login or the first register", unpromptedLoginKind("prompt", false) === "none" && unpromptedLoginKind("login", false) === "login" && unpromptedLoginKind("register_first", false) === "register" && unpromptedLoginKind("register_first", true) === "login");
   assert("kick nbt is readable", chatComponentToText({ type: "compound", value: { text: { type: "string", value: "Kicked for idling" } } }) === "Kicked for idling");
   assert("success wins over login", detectLoginPrompt("Successfully logged in") === "success");
   assert("wrong password", detectLoginPrompt("Wrong password") === "wrong_password");

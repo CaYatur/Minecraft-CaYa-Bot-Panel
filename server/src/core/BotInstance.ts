@@ -6,7 +6,7 @@ import { CHAT_LOGS_DIR } from "../config/paths";
 import { antiAfkAllowed, antiAfkMode, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
-import { detectLoginPrompt, loginPluginCommand, passwordRepeat, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
+import { detectLoginPrompt, loginPluginCommand, loginSendMode, passwordRepeat, redactGameCommand, unpromptedLoginKind } from "../modules/alwaysOn/loginPrompt";
 import { hasLoginSecret, readLoginSecret } from "../modules/alwaysOn/secrets";
 import { markSessionEnd, markSessionStart, uptimeFor } from "../modules/alwaysOn/uptime";
 import {
@@ -1134,6 +1134,7 @@ export class BotInstance extends EventEmitter {
       this.spawnedAt = Date.now();
       this.loginSent = false;
       this.loginFailures = 0;
+      this.sendUnpromptedLogin();
       markSessionStart(this.config.id, this.spawnedAt);
       this.startAntiAfk();
       this.authInteraction = false;
@@ -1741,7 +1742,7 @@ export class BotInstance extends EventEmitter {
   private handleLoginLine(plain: string) {
     const cfg = this.config.alwaysOn?.loginPlugin;
     if (!cfg?.enabled) return;
-    const kind = detectLoginPrompt(plain, cfg.extraPattern);
+    const kind = detectLoginPrompt(plain, cfg.extraPattern, cfg.loginTemplate, cfg.registerTemplate);
     if (kind === "success") {
       this.loginFailures = 0;
       this.log.success("Login plugin: the server accepted the login");
@@ -1756,18 +1757,35 @@ export class BotInstance extends EventEmitter {
       }
       return;
     }
-    if ((kind === "login" || kind === "register") && !this.loginSent) {
-      const password = readLoginSecret(this.config.id);
-      if (!password) {
-        this.log.warn("Login plugin asked for a password, but none is saved for this bot");
-        return;
-      }
-      this.loginSent = true;
-      const template = kind === "register" ? cfg.registerTemplate : cfg.loginTemplate;
-      const repeat = kind === "register" ? passwordRepeat(cfg.registerRepeat, 2) : passwordRepeat(cfg.loginRepeat, 1);
-      const command = loginPluginCommand(kind, password, repeat, template || "");
-      setTimeout(() => this.sendHiddenChat(command), Math.max(0, cfg.delayMs || 0));
+    if ((kind === "login" || kind === "register") && !this.loginSent) this.queueLoginCommand(kind);
+  }
+
+  /** Sends /login or the first /register even when the server stays quiet. */
+  private sendUnpromptedLogin() {
+    const cfg = this.config.alwaysOn?.loginPlugin;
+    if (!cfg?.enabled || this.loginSent) return;
+    const kind = unpromptedLoginKind(loginSendMode(cfg.sendMode), Boolean(cfg.registered));
+    if (kind === "none") return;
+    this.queueLoginCommand(kind);
+  }
+
+  private queueLoginCommand(kind: "login" | "register") {
+    const cfg = this.config.alwaysOn?.loginPlugin;
+    if (!cfg || this.loginSent) return;
+    const password = readLoginSecret(this.config.id);
+    if (!password) {
+      this.log.warn("Login plugin asked for a password, but none is saved for this bot");
+      return;
     }
+    this.loginSent = true;
+    if (kind === "register") {
+      cfg.registered = true;
+      this.emit("loginState", { botId: this.config.id });
+    }
+    const template = kind === "register" ? cfg.registerTemplate : cfg.loginTemplate;
+    const repeat = kind === "register" ? passwordRepeat(cfg.registerRepeat, 2) : passwordRepeat(cfg.loginRepeat, 1);
+    const command = loginPluginCommand(kind, password, repeat, template || "");
+    setTimeout(() => this.sendHiddenChat(command), Math.max(0, cfg.delayMs || 0));
   }
 }
 

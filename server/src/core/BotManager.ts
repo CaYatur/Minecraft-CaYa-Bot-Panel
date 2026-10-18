@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
-import { normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
+import { loginSendMode, normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
 import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
 import { stopAllViews, stopView } from "../modules/view/session";
 import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
@@ -211,6 +211,7 @@ export class BotManager extends EventEmitter {
       try {
         if (plugin.loginTemplate !== undefined) plugin.loginTemplate = normalizeLoginTemplate(plugin.loginTemplate);
         if (plugin.registerTemplate !== undefined) plugin.registerTemplate = normalizeLoginTemplate(plugin.registerTemplate);
+        if (plugin.sendMode !== undefined) plugin.sendMode = loginSendMode(plugin.sendMode);
       } catch (err) {
         throw new PanelError(err instanceof Error ? err.message : String(err), 400);
       }
@@ -475,6 +476,7 @@ export class BotManager extends EventEmitter {
         });
       }
     );
+    inst.on("loginState", () => this.persistBots());
     inst.on("spawned", (p: { botId: string }) => {
       this.rules.onBotEvent(p.botId, "spawned");
       if (inst.alwaysOnStatus().reconnect.attempt > 0) notifyDiscord(inst.config.username, "reconnect", "Back online");

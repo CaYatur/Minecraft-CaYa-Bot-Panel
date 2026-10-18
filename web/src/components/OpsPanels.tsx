@@ -79,7 +79,7 @@ export function AlwaysOnCard({ botId }: { botId: string }) {
 export function LoginPluginCard({ botId }: { botId: string }) {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number; loginTemplate?: string; registerTemplate?: string } } } | null>(null);
+  const [status, setStatus] = useState<{ hasPassword?: boolean; config?: { loginPlugin?: { enabled?: boolean; loginRepeat?: number; registerRepeat?: number; loginTemplate?: string; registerTemplate?: string; sendMode?: string } } } | null>(null);
   const [password, setPassword] = useState("");
   const [loginDraft, setLoginDraft] = useState("");
   const [registerDraft, setRegisterDraft] = useState("");
@@ -98,7 +98,7 @@ export function LoginPluginCard({ botId }: { botId: string }) {
     void load();
   }, [botId]);
 
-  const patch = async (loginPlugin: { enabled?: boolean; loginRepeat?: 1 | 2; registerRepeat?: 1 | 2; loginTemplate?: string; registerTemplate?: string }) => {
+  const patch = async (loginPlugin: { enabled?: boolean; loginRepeat?: 1 | 2; registerRepeat?: 1 | 2; loginTemplate?: string; registerTemplate?: string; sendMode?: "prompt" | "login" | "register_first" }) => {
     try {
       await api.patch(`/api/bots/${botId}`, { alwaysOn: { loginPlugin } });
       await load();
@@ -113,6 +113,18 @@ export function LoginPluginCard({ botId }: { botId: string }) {
       <label className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
         <input type="checkbox" checked={Boolean(status?.config?.loginPlugin?.enabled)} onChange={(e) => void patch({ enabled: e.target.checked })} />
         {t("ops.loginPlugin")}
+      </label>
+      <label className="flex w-fit flex-col gap-1 text-xs text-zinc-400">
+        {t("ops.loginSendMode")}
+        <select
+          value={status?.config?.loginPlugin?.sendMode || "prompt"}
+          onChange={(e) => void patch({ sendMode: e.target.value === "login" || e.target.value === "register_first" ? e.target.value : "prompt" })}
+          className="cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400"
+        >
+          <option value="prompt">{t("ops.loginSendPrompt")}</option>
+          <option value="login">{t("ops.loginSendEach")}</option>
+          <option value="register_first">{t("ops.loginSendFirst")}</option>
+        </select>
       </label>
       <div className="flex flex-wrap gap-3">
         <label className="flex flex-col gap-1 text-xs text-zinc-400">

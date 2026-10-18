@@ -1,4 +1,5 @@
 import type { AgentToolContext, AgentToolDef } from "./tools";
+import { loginSendMode } from "../alwaysOn/loginPrompt";
 import { writeLoginSecret } from "../alwaysOn/secrets";
 import { discordPublicState, notifyCustom, recentBridgeLines, updateDiscordSettings } from "../discord/hub";
 import { validateTemplate, templateFromRules } from "../templates/schema";
@@ -70,7 +71,8 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
         loginRepeat: { type: "number", description: "1 sends /login password. 2 sends /login password password." },
         registerRepeat: { type: "number", description: "1 sends /register password. 2 sends /register password password." },
         loginTemplate: { type: "string", description: "Custom command. Use {password}. Empty uses loginRepeat." },
-        registerTemplate: { type: "string", description: "Custom command. Use {password}. Empty uses registerRepeat." }
+        registerTemplate: { type: "string", description: "Custom command. Use {password}. Empty uses registerRepeat." },
+        sendMode: { type: "string", description: "prompt, login, or register_first. prompt waits for the server." }
       }
     },
     async execute(ctx, args) {
@@ -89,7 +91,8 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
               loginRepeat: args.loginRepeat === undefined ? current.loginPlugin.loginRepeat : Number(args.loginRepeat) === 2 ? 2 : 1,
               registerRepeat: args.registerRepeat === undefined ? current.loginPlugin.registerRepeat : Number(args.registerRepeat) === 2 ? 2 : 1,
               loginTemplate: args.loginTemplate === undefined ? current.loginPlugin.loginTemplate : String(args.loginTemplate),
-              registerTemplate: args.registerTemplate === undefined ? current.loginPlugin.registerTemplate : String(args.registerTemplate)
+              registerTemplate: args.registerTemplate === undefined ? current.loginPlugin.registerTemplate : String(args.registerTemplate),
+              sendMode: args.sendMode === undefined ? current.loginPlugin.sendMode : loginSendMode(args.sendMode)
             }
           }
         });

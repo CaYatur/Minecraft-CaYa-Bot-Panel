@@ -184,6 +184,10 @@ export interface AlwaysOnConfig {
     registerRepeat: 1 | 2;
     loginTemplate: string;
     registerTemplate: string;
+    /** prompt waits for the server. login sends on every join. register_first registers once, then logs in. */
+    sendMode: "prompt" | "login" | "register_first";
+    /** True after the first unprompted /register was sent. */
+    registered: boolean;
   };
 }
 
@@ -193,7 +197,7 @@ export function defaultAlwaysOn(): AlwaysOnConfig {
     preset: "custom",
     backoff: { baseMs: 5_000, maxMs: 120_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
     antiAfk: { enabled: false, intervalMs: 45_000, mode: "mixed" },
-    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "" }
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "", sendMode: "prompt", registered: false }
   };
 }
 
