@@ -920,7 +920,7 @@ getRuntime(): CombatRuntime {
     if (hp <= (h.fleeAtHealth ?? 5)) {
       this.hunterFleeing = true;
       this.cancelTasksOfType("attack");
-      this.instance.tasks.enqueue({ type: "hunter-flee", label: "hunter kaçışı", priority: PRIORITY.SURVIVAL, params: { from: name }, requeueOnPreempt: false }, () => async (token) => {
+      this.instance.tasks.enqueue({ type: "hunter-flee", label: "Hunter flee", priority: PRIORITY.SURVIVAL, params: { from: name }, requeueOnPreempt: false }, () => async (token) => {
         this.setMode("fleeing", name);
         await this.fleeFrom(target!.position, h.fleeDistance ?? 18, token);
         if (!token.cancelled) this.setMode("hunter", null);
