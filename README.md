@@ -788,7 +788,9 @@ Minecraft-CaYa-Bot-Panel/
 | `npm run test:combat` | Run combat-focused checks |
 | `npm run test:full` | Run the broader behavior suite |
 | `npm run test:grok` | Run the extended smoke suite included in the repository |
-| `npm run test:all` | Run the complete scripted test chain |
+| `npm run test:baseline` | Current-behavior contract. Needs the API and `npm run testserver` |
+| `npm run test:all` | Auth checks plus the baseline contract |
+| `npm run test:full` / `test:grok` / `smoke` | Older scenario scripts. Not part of `test:all` |
 
 ---
 
