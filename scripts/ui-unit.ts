@@ -4,7 +4,7 @@
  */
 import { maskSecret } from "../web/src/lib/secrets";
 import { looksLikeDiscordWebhook, templateValid } from "../web/src/lib/validate";
-import { isTopmost, nextTrapIndex } from "../web/src/lib/dialog";
+import { isTopmost, nextTrapIndex, pickReturnTarget } from "../web/src/lib/dialog";
 import { isBrowserNavigation } from "../server/src/modules/agent/mcpHttp";
 
 let failures = 0;
@@ -32,6 +32,13 @@ assert("Tab wraps to the first element", nextTrapIndex(3, 2, false) === 0);
 assert("Shift+Tab wraps to the last element", nextTrapIndex(3, 0, true) === 2);
 assert("focus outside the trap enters at the start", nextTrapIndex(3, -1, false) === 0);
 assert("only the topmost dialog handles keys", isTopmost([1, 2], 2) && !isTopmost([1, 2], 1) && !isTopmost([], 1));
+
+const el = (name: string, isConnected = true, disabled = false) => ({ name, isConnected, disabled });
+assert("focus returns to an enabled opener", pickReturnTarget([el("opener"), el("label")])?.name === "opener");
+assert("disabled opener falls back to the given field", pickReturnTarget([el("opener", true, true), el("label")])?.name === "label");
+assert("removed opener falls back to the given field", pickReturnTarget([el("opener", false), el("label")])?.name === "label");
+assert("missing fallback uses the nearest focusable", pickReturnTarget([el("opener", true, true), null, el("nearest")])?.name === "nearest");
+assert("nothing usable returns null", pickReturnTarget([null, el("x", false)]) === null);
 
 const nav = (headers: Record<string, string>) => isBrowserNavigation({ headers });
 assert("browser reload of /mcp is a navigation", nav({ accept: "text/html,application/xhtml+xml,*/*;q=0.8" }));

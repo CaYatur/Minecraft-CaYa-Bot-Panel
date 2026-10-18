@@ -29,7 +29,9 @@ export function MicrosoftAuthDialog() {
       if (prompt.phase !== "error") void api.post(`/api/accounts/${prompt.accountId}/cancel`).catch(() => undefined);
       clear();
     },
-    Boolean(prompt)
+    Boolean(prompt),
+    // The add button is disabled once the label is cleared; return to the label field.
+    { returnFallback: () => document.getElementById("ms-account-label") }
   );
 
   if (!prompt) return null;

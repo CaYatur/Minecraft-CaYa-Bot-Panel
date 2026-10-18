@@ -67,6 +67,7 @@ export function Accounts() {
         <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-400">{t("accounts.label")}</span>
           <input
+            id="ms-account-label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             maxLength={32}
