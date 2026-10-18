@@ -1,8 +1,15 @@
 import { EventEmitter } from "events";
+import { accounts } from "../modules/auth/accounts";
+import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
+import { antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec } from "../modules/alwaysOn/antiAfk";
+import { loginSendMode, normalizeLoginTemplate } from "../modules/alwaysOn/loginPrompt";
+import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
+import { stopAllViews, stopView } from "../modules/view/session";
+import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
 import { RuleEngine } from "../modules/automation/RuleEngine";
 import { WorldMemory } from "../modules/world/memory";
 import { loadJson, saveJson } from "../persistence/store";
-import type { BotConfig, ServerProfile, StateSnapshot, Waypoint } from "../types";
+import type { BotAuthType, BotConfig, ServerProfile, StateSnapshot, Waypoint } from "../types";
 import { USERNAME_RE, defaultBotConfig, mergeConfig, newId } from "../types";
 import { createLogger } from "../utils/logger";
 import { BotInstance } from "./BotInstance";
@@ -20,6 +27,8 @@ export interface CreateBotInput {
   username: string;
   serverId: string;
   autostart?: boolean;
+  auth?: BotAuthType;
+  accountId?: string | null;
 }
 
 /**
@@ -38,11 +47,54 @@ export class BotManager extends EventEmitter {
     this.waypoints.load();
     this.worldMemory.load();
     this.rules.load();
+    accounts.load();
+    accounts.on("updated", () => this.emit("changed"));
+    accounts.on("profile", (info: { accountId: string; username: string }) => {
+      this.applyPremiumUsername(info.accountId, info.username);
+    });
+    accounts.on("removed", (info: { accountId: string }) => {
+      for (const inst of this.bots.values()) {
+        if (inst.config.accountId !== info.accountId) continue;
+        inst.config.accountId = null;
+        inst.config.auth = "offline";
+      }
+      this.persistBots();
+    });
+    accounts.on("cancelled", (info: { accountId: string; botId?: string }) => {
+      const inst = info.botId ? this.bots.get(info.botId) : undefined;
+      if (inst && inst.config.accountId === info.accountId && inst.status === "connecting") inst.stop();
+    });
     this.servers = loadJson<ServerProfile[]>(SERVERS_FILE, []);
     const configs = loadJson<BotConfig[]>(BOTS_FILE, []);
+    const needsAuthMigration = configs.some((cfg) => cfg.auth == null || !("accountId" in cfg));
     for (const cfg of configs) this.instantiate(cfg);
+    if (needsAuthMigration) this.persistBots();
     this.log.info(`${this.servers.length} server profiles, ${configs.length} bot configs loaded`);
 
+    setDiscordControl({
+      list: () => [...this.bots.values()].map((bot) => ({ id: bot.config.id, username: bot.config.username, status: bot.status })),
+      start: (username) => {
+        const inst = this.botByUsername(username);
+        this.startBot(inst.config.id);
+        return `Starting ${inst.config.username}.`;
+      },
+      stop: (username) => {
+        const inst = this.botByUsername(username);
+        this.stopBot(inst.config.id);
+        return `Stopping ${inst.config.username}.`;
+      },
+      say: (username, text) => {
+        const inst = this.botByUsername(username);
+        inst.sendChat(text);
+        return `Sent.`;
+      },
+      status: (username) => {
+        const inst = this.botByUsername(username);
+        const up = inst.alwaysOnStatus();
+        return `${inst.config.username} is ${inst.status}. Uptime ${Math.round(up.uptime.currentMs / 1000)}s. Always-on ${inst.config.alwaysOn?.enabled ? "on" : "off"}.`;
+      }
+    });
+    void connectDiscord();
     const autostart = [...this.bots.values()].filter((b) => b.config.autostart);
     if (autostart.length > 0) {
       this.log.info(`${autostart.length} bot(s) marked autostart — starting gradually (I4)`);
@@ -105,6 +157,7 @@ export class BotManager extends EventEmitter {
     this.assertValidNewBot(username, input.serverId);
     const cfg = defaultBotConfig(username, input.serverId);
     cfg.autostart = Boolean(input.autostart);
+    this.applyAuth(cfg, input.auth, input.accountId, username);
     const instance = this.instantiate(cfg);
     this.persistBots();
     this.log.success(`Bot created: ${username}`);
@@ -147,6 +200,23 @@ export class BotManager extends EventEmitter {
     const inst = this.mustGet(id);
     // id/serverId/username değişimi ayrı ele alınır; patch'ten ayıkla
     const { id: _ignore, username, serverId, ...rest } = patch;
+    const unsafe = rest as Partial<BotConfig> & { password?: unknown; token?: unknown; webhookUrl?: unknown };
+    delete unsafe.password;
+    delete unsafe.token;
+    delete unsafe.webhookUrl;
+    if (unsafe.alwaysOn?.loginPlugin && "password" in unsafe.alwaysOn.loginPlugin) {
+      delete (unsafe.alwaysOn.loginPlugin as { password?: unknown }).password;
+    }
+    if (unsafe.alwaysOn?.loginPlugin) {
+      const plugin = unsafe.alwaysOn.loginPlugin;
+      try {
+        if (plugin.loginTemplate !== undefined) plugin.loginTemplate = normalizeLoginTemplate(plugin.loginTemplate);
+        if (plugin.registerTemplate !== undefined) plugin.registerTemplate = normalizeLoginTemplate(plugin.registerTemplate);
+        if (plugin.sendMode !== undefined) plugin.sendMode = loginSendMode(plugin.sendMode);
+      } catch (err) {
+        throw new PanelError(err instanceof Error ? err.message : String(err), 400);
+      }
+    }
     if (username !== undefined && username !== inst.config.username) {
       const name = String(username).trim();
       this.assertValidNewBot(name, serverId ?? inst.config.serverId, id);
@@ -158,7 +228,23 @@ export class BotManager extends EventEmitter {
       inst.config.serverId = serverId;
       if (inst.status !== "stopped") this.log.warn("Server changed — restart the bot for it to take effect");
     }
+    const antiAfkWasOn = Boolean(inst.config.alwaysOn?.antiAfk.enabled);
     inst.config = mergeConfig(inst.config, rest as Partial<BotConfig>);
+    if (inst.config.autostartDelaySec !== undefined) {
+      inst.config.autostartDelaySec = clampAutostartDelaySec(inst.config.autostartDelaySec);
+    }
+    const afk = inst.config.alwaysOn?.antiAfk;
+    if (afk) {
+      afk.enabled = Boolean(afk.enabled);
+      afk.intervalMs = clampAntiAfkInterval(afk.intervalMs);
+      afk.holdMs = clampAntiAfkHold(afk.holdMs);
+      afk.mode = antiAfkMode(afk.mode);
+    }
+    if (patch.alwaysOn) inst.syncAntiAfk();
+    if (!antiAfkWasOn && afk?.enabled) inst.resetAllWork("Anti-AFK locked other actions");
+    if (patch.auth !== undefined || patch.accountId !== undefined) {
+      this.applyAuth(inst.config, inst.config.auth, inst.config.accountId, inst.config.username, id);
+    }
     this.persistBots();
     this.emit("changed");
     return inst;
@@ -167,14 +253,18 @@ export class BotManager extends EventEmitter {
   removeBot(id: string) {
     const inst = this.mustGet(id);
     inst.dispose();
+    deleteLoginSecret(id);
+    void stopView(id);
     this.bots.delete(id);
     this.persistBots();
     this.log.info(`Bot deleted: ${inst.config.username}`);
     this.emit("botRemoved", id);
   }
 
-  startBot(id: string) {
-    this.mustGet(id).start();
+  startBot(id: string, socketId?: string) {
+    const inst = this.mustGet(id);
+    this.assertAccountFree(inst);
+    inst.start(socketId);
   }
 
   stopBot(id: string) {
@@ -197,10 +287,17 @@ export class BotManager extends EventEmitter {
     const targets = (ids ?? [...this.bots.keys()]).map((id) => this.bots.get(id)).filter(isDefined);
     targets.forEach((inst, i) => {
       setTimeout(() => {
-        // bot bu arada silinmiş olabilir
-        if (this.bots.has(inst.config.id) && inst.status === "stopped") inst.start();
-        else if (this.bots.has(inst.config.id)) inst.start();
-      }, i * BULK_START_STAGGER_MS);
+        if (!this.bots.has(inst.config.id)) return;
+        try {
+          this.assertAccountFree(inst);
+          inst.start();
+        } catch (err) {
+          inst.runtime.lastError = err instanceof Error ? err.message : String(err);
+          inst.runtime.errorCode = "auth.failed";
+          this.log.warn(`Could not start ${inst.config.username}`, inst.runtime.lastError);
+          this.emit("changed");
+        }
+      }, i * BULK_START_STAGGER_MS + clampAutostartDelaySec(inst.config.autostartDelaySec) * 1000);
     });
     return targets.length;
   }
@@ -239,7 +336,14 @@ export class BotManager extends EventEmitter {
       worldMemory: {
         chests: this.servers.flatMap((s) => this.worldMemory.chestsFor(s.id)),
         ores: this.servers.flatMap((s) => this.worldMemory.oresFor(s.id))
-      }
+      },
+      accounts: accounts.publicView(
+        [...this.bots.values()].map((bot) => ({
+          id: bot.config.id,
+          username: bot.config.username,
+          accountId: bot.config.accountId
+        }))
+      )
     };
   }
 
@@ -281,6 +385,8 @@ export class BotManager extends EventEmitter {
   }
 
   shutdown() {
+    void disconnectDiscord();
+    void stopAllViews();
     for (const bot of this.bots.values()) {
       try {
         bot.stop();
@@ -301,7 +407,29 @@ export class BotManager extends EventEmitter {
     const inst = new BotInstance(
       merged,
       (sid) => this.getServer(sid),
-      (sid) => this.worldMemory.chestsFor(sid)
+      (sid) => this.worldMemory.chestsFor(sid),
+      {
+        prepare: (accountId) => {
+          accounts.prepareCache(accountId);
+          return {
+            cacheKey: accounts.cacheKey(accountId),
+            profilesFolder: accounts.cacheDir(accountId),
+            hasCache: accounts.hasCache(accountId)
+          };
+        },
+        publishCode: (accountId, code, socketId, botId) => {
+          accounts.publishBotCode(accountId, code, socketId, botId);
+        },
+        rememberProfile: (accountId, profile) => {
+          accounts.rememberProfile(accountId, { id: profile.uuid, name: profile.name });
+        },
+        noteError: (accountId, code) => {
+          if (code in AUTH_ERRORS) accounts.noteError(accountId, code as AuthErrorCode);
+        },
+        seal: (accountId) => accounts.seal(accountId),
+        markJoining: (accountId) => accounts.markJoining(accountId),
+        finishPrompt: (accountId, result) => accounts.finishPrompt(accountId, result)
+      }
     );
     // Faz 6: ölüm konumu → sunucu bazlı "death-<bot>" waypoint (loot for)
     inst.on(
@@ -338,6 +466,7 @@ export class BotManager extends EventEmitter {
           this.log.warn("Could not write death waypoint", err instanceof Error ? err.message : String(err));
         }
         if (info.botId) this.rules.onBotEvent(info.botId, "died");
+        notifyDiscord(info.username, "death", `Died at ${info.x}, ${info.y}, ${info.z}`);
       }
     );
     inst.on(
@@ -350,10 +479,30 @@ export class BotManager extends EventEmitter {
         if (entry.kind === "player" || entry.kind === "whisper") {
           this.rules.onChat(entry.botId, entry.username, entry.text);
         }
+        bridgeFromMinecraft({
+          botId: entry.botId,
+          botName: inst.config.username,
+          username: entry.username,
+          text: entry.text,
+          self: entry.self,
+          kind: entry.kind
+        });
       }
     );
-    inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
-    inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
+    inst.on("loginState", () => this.persistBots());
+    inst.on("spawned", (p: { botId: string }) => {
+      this.rules.onBotEvent(p.botId, "spawned");
+      if (inst.alwaysOnStatus().reconnect.attempt > 0) notifyDiscord(inst.config.username, "reconnect", "Back online");
+    });
+    inst.on("status", (p: { status: string; kickReason?: string }) => {
+      if (p.status === "kicked" || p.status === "error") {
+        notifyDiscord(inst.config.username, "disconnect", p.kickReason || p.status);
+      }
+    });
+    inst.on("vitals", (p: { botId: string; health: number; food: number }) => {
+      this.rules.onVitals(p.botId, p.health, p.food);
+      noteHealth(p.botId, inst.config.username, p.health);
+    });
     inst.on("attacked", (p: { botId: string; attacker?: string; source: "mob" | "player" }) => {
       this.rules.onAttacked(p.botId, p.attacker, p.source);
     });
@@ -377,6 +526,7 @@ export class BotManager extends EventEmitter {
         error?: string;
         progress?: { done: number; total: number; label?: string };
       }) => {
+        notifyDiscord(inst.config.username, p.kind === "done" ? "taskDone" : "taskFailed", `${p.label}${p.error ? `: ${p.error}` : ""}`);
         this.rules.onTaskEvent(p.botId, p.kind, p.taskType, p.label, {
           taskId: p.taskId,
           state: p.state,
@@ -405,6 +555,79 @@ export class BotManager extends EventEmitter {
 
   private persistBots() {
     void saveJson(BOTS_FILE, [...this.bots.values()].map((b) => b.config));
+  }
+
+  private botByUsername(username: string): BotInstance {
+    const q = username.trim().toLowerCase();
+    const inst = [...this.bots.values()].find((bot) => bot.config.username.toLowerCase() === q);
+    if (!inst) throw new PanelError(`Bot not found: ${username}`, 404);
+    return inst;
+  }
+
+  private applyPremiumUsername(accountId: string, username: string) {
+    if (!USERNAME_RE.test(username)) return;
+    for (const inst of this.bots.values()) {
+      if (inst.config.accountId !== accountId) continue;
+      if (inst.config.username.toLowerCase() === username.toLowerCase()) continue;
+      try {
+        this.assertValidNewBot(username, inst.config.serverId, inst.config.id);
+        inst.config.username = username;
+        this.log.success(`Bot renamed to premium username ${username}`);
+      } catch (err) {
+        this.log.warn(
+          `Could not rename bot to ${username}`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+    this.persistBots();
+    this.emit("changed");
+  }
+
+  private applyAuth(
+    cfg: BotConfig,
+    auth: BotAuthType | undefined,
+    accountId: string | null | undefined,
+    username: string,
+    ignoreBotId?: string
+  ) {
+    const mode: BotAuthType = auth === "microsoft" ? "microsoft" : "offline";
+    if (mode === "offline") {
+      cfg.auth = "offline";
+      cfg.accountId = null;
+      return;
+    }
+    if (!accountId) throw new PanelError("Choose a Microsoft account for this bot.");
+    const account = accounts.get(accountId);
+    if (!account) throw new PanelError("Microsoft account not found.", 404);
+    if (account.username && account.username.toLowerCase() !== username.toLowerCase()) {
+      this.assertValidNewBot(account.username, cfg.serverId, ignoreBotId ?? cfg.id);
+      cfg.username = account.username;
+    }
+    cfg.auth = "microsoft";
+    cfg.accountId = accountId;
+  }
+
+  private assertAccountFree(inst: BotInstance) {
+    if (inst.config.auth !== "microsoft") return;
+    const accountId = inst.config.accountId;
+    if (!accountId || !accounts.get(accountId)) {
+      throw new PanelError("Assign a Microsoft account before starting this bot.");
+    }
+    const other = [...this.bots.values()].find(
+      (bot) =>
+        bot.config.id !== inst.config.id &&
+        bot.config.accountId === accountId &&
+        bot.status !== "stopped" &&
+        bot.status !== "error" &&
+        bot.status !== "kicked"
+    );
+    if (other) {
+      throw new PanelError(
+        `Microsoft account is already used by "${other.config.username}". Stop that bot first — a server would kick one of them.`,
+        409
+      );
+    }
   }
 
   private assertValidNewBot(username: string, serverId: string, ignoreBotId?: string) {

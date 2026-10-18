@@ -6,7 +6,7 @@ import {
   type AppLocale,
   type LocalePreference
 } from "../i18n";
-import type { BotSnapshot, ChatEntry, ChestMemory, LogEntry, McpStatusPayload, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
+import type { AuthAccount, BotSnapshot, ChatEntry, ChestMemory, DeviceCodePrompt, LogEntry, McpStatusPayload, ServerProfile, StateSnapshot, Waypoint } from "../lib/types";
 
 const CHAT_CAP = 500;
 const LOG_CAP = 1000;
@@ -35,6 +35,8 @@ interface AppState {
   toasts: Toast[];
   /** Faz 18 — MCP / agent durumu (socket mcp:status ile canlı) */
   mcpStatus: McpStatusPayload | null;
+  accounts: AuthAccount[];
+  msaPrompt: DeviceCodePrompt | null;
   /** auto | en | tr */
   localePreference: LocalePreference;
   /** resolved en | tr */
@@ -42,6 +44,9 @@ interface AppState {
 
   setConnected(v: boolean): void;
   setMcpStatus(p: McpStatusPayload): void;
+  setMsaPrompt(p: DeviceCodePrompt): void;
+  setMsaPhase(phase: "joining" | "error", errorCode?: string, accountId?: string): void;
+  clearMsaPrompt(): void;
   applySnapshot(s: StateSnapshot): void;
   patchBot(botId: string, patch: Partial<BotSnapshot>): void;
   patchRuntime(botId: string, patch: Partial<BotSnapshot["runtime"]>): void;
@@ -69,12 +74,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   logs: [],
   toasts: [],
   mcpStatus: null,
+  accounts: [],
+  msaPrompt: null,
   localePreference: initialLocalePref,
   locale: initialLocale,
 
   setConnected: (v) => set({ connected: v }),
 
   setMcpStatus: (p) => set({ mcpStatus: p }),
+  setMsaPrompt: (p) => set({ msaPrompt: { ...p, phase: p.phase ?? "code" } }),
+  setMsaPhase: (phase, errorCode, accountId) =>
+    set((st) => {
+      if (!st.msaPrompt && phase === "error" && errorCode) {
+        return {
+          msaPrompt: {
+            accountId: accountId || "",
+            userCode: "",
+            verificationUri: "",
+            expiresAt: 0,
+            message: "",
+            phase: "error",
+            errorCode
+          }
+        };
+      }
+      if (!st.msaPrompt) return {};
+      return { msaPrompt: { ...st.msaPrompt, phase, errorCode: errorCode ?? st.msaPrompt.errorCode } };
+    }),
+  clearMsaPrompt: () => set({ msaPrompt: null }),
 
   applySnapshot: (s) =>
     set((st) => {
@@ -92,6 +119,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           chests: s.worldMemory?.chests ?? [],
           ores: s.worldMemory?.ores ?? []
         },
+        accounts: s.accounts ?? [],
         snapshotLoaded: true
       };
     }),

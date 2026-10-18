@@ -12,7 +12,7 @@ const MODE_KEYS: Record<CombatRuntime["mode"], string> = {
   defending: "combat.modes.defending",
   fleeing: "combat.modes.fleeing",
   protecting: "combat.modes.protecting",
-  hunter: "Hunter"
+  hunter: "combat.modes.hunter"
 };
 
 /**
@@ -174,37 +174,50 @@ export function CombatPanel({ botId }: { botId: string }) {
       <section className="rounded-lg border border-red-900/50 bg-red-950/20 p-3">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-red-200">Hunter / Kenetlenme Modu</div>
-            <div className="text-xs text-zinc-500">Açıldığında diğer görevler kapanır; LLM yalnızca sohbet eder.</div>
+            <div className="text-sm font-semibold text-red-200">{t("combat.hunter.title")}</div>
+            <div className="text-xs text-zinc-500">{t("combat.hunter.hint")}</div>
           </div>
           <button type="button" onClick={() => void patchHunter({ enabled: !hunter.enabled })} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${hunter.enabled ? "bg-red-600 text-white" : "bg-zinc-800 text-zinc-300"}`}>
-            {hunter.enabled ? "Açık" : "Kapalı"}
+            {hunter.enabled ? t("common.enabled") : t("common.disabled")}
           </button>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-xs text-zinc-400">Hedef politikası
+          <label className="text-xs text-zinc-400">{t("combat.hunter.policy")}
             <select value={hunter.targetMode} onChange={(e) => void patchHunter({ targetMode: e.target.value })} className={`mt-1 w-full ${inputCls}`}>
-              <option value="all">Görünen herkese saldır</option><option value="blacklist">Yalnız kara liste</option><option value="exclude_whitelist">Beyaz liste hariç herkes</option><option value="single">Tek oyuncuya kilitlen</option>
+              <option value="all">{t("combat.hunter.all")}</option>
+              <option value="blacklist">{t("combat.hunter.blacklist")}</option>
+              <option value="exclude_whitelist">{t("combat.hunter.excludeWhitelist")}</option>
+              <option value="single">{t("combat.hunter.single")}</option>
             </select>
           </label>
-          <label className="text-xs text-zinc-400">Tek hedef
-            <input value={hunter.singleTarget} onChange={(e) => void patchHunter({ singleTarget: e.target.value })} className={`mt-1 w-full ${inputCls}`} placeholder="Oyuncu adı" />
+          <label className="text-xs text-zinc-400">{t("combat.hunter.singleTarget")}
+            <input value={hunter.singleTarget} onChange={(e) => void patchHunter({ singleTarget: e.target.value })} className={`mt-1 w-full ${inputCls}`} placeholder={t("common.playerNamePlaceholder")} />
           </label>
-          <label className="text-xs text-zinc-400">Kara liste
-            <input defaultValue={hunter.blacklist.join(", ")} onBlur={(e) => void patchHunter({ blacklist: e.target.value.split(/[,;\s]+/).filter(Boolean) })} className={`mt-1 w-full ${inputCls}`} placeholder="isim1, isim2" />
+          <label className="text-xs text-zinc-400">{t("combat.hunter.blacklistLabel")}
+            <input defaultValue={hunter.blacklist.join(", ")} onBlur={(e) => void patchHunter({ blacklist: e.target.value.split(/[,;\s]+/).filter(Boolean) })} className={`mt-1 w-full ${inputCls}`} placeholder={t("combat.hunter.blacklistPlaceholder")} />
           </label>
-          <label className="text-xs text-zinc-400">Beyaz liste
-            <input defaultValue={hunter.whitelist.join(", ")} onBlur={(e) => void patchHunter({ whitelist: e.target.value.split(/[,;\s]+/).filter(Boolean) })} className={`mt-1 w-full ${inputCls}`} placeholder="dokunulmayacak oyuncular" />
+          <label className="text-xs text-zinc-400">{t("combat.hunter.whitelistLabel")}
+            <input defaultValue={hunter.whitelist.join(", ")} onBlur={(e) => void patchHunter({ whitelist: e.target.value.split(/[,;\s]+/).filter(Boolean) })} className={`mt-1 w-full ${inputCls}`} placeholder={t("combat.hunter.whitelistPlaceholder")} />
           </label>
-          {[['scanRange','Tarama menzili'],['chaseDistance','Kovalama menzili'],['fleeAtHealth','Kaçış canı'],['resumeAtHealth','Dönüş canı'],['fleeDistance','Kaçış mesafesi'],['searchRadius','Arama yarıçapı'],['predictionSeconds','Yön tahmini (sn)'],['sectorCount','Sektör sayısı'],['spiralStep','Spiral adımı']].map(([key,label]) => (
-            <label key={key} className="text-xs text-zinc-400">{label}<input type="number" min="1" max="512" value={Number(hunter[key as keyof typeof hunter])} onChange={(e) => void patchHunter({ [key]: Number(e.target.value) })} className={`mt-1 w-full ${inputCls}`} /></label>
+          {([
+            ["scanRange", "combat.hunter.scanRange"],
+            ["chaseDistance", "combat.hunter.chaseDistance"],
+            ["fleeAtHealth", "combat.hunter.fleeAtHealth"],
+            ["resumeAtHealth", "combat.hunter.resumeAtHealth"],
+            ["fleeDistance", "combat.hunter.fleeDistance"],
+            ["searchRadius", "combat.hunter.searchRadius"],
+            ["predictionSeconds", "combat.hunter.predictionSeconds"],
+            ["sectorCount", "combat.hunter.sectorCount"],
+            ["spiralStep", "combat.hunter.spiralStep"]
+          ] as const).map(([key, label]) => (
+            <label key={key} className="text-xs text-zinc-400">{t(label)}<input type="number" min="1" max="512" value={Number(hunter[key])} onChange={(e) => void patchHunter({ [key]: Number(e.target.value) })} className={`mt-1 w-full ${inputCls}`} /></label>
           ))}
-          <label className="text-xs text-zinc-400">Arama süresi (sn)<input type="number" min="5" max="600" value={Math.round(hunter.searchDurationMs / 1000)} onChange={(e) => void patchHunter({ searchDurationMs: Number(e.target.value) * 1000 })} className={`mt-1 w-full ${inputCls}`} /></label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.stickyTarget} onChange={(e) => void patchHunter({ stickyTarget: e.target.checked })} /> Hedefe sadık kal</label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.highGroundSearch} onChange={(e) => void patchHunter({ highGroundSearch: e.target.checked })} /> Yüksek noktadan görüş ara</label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.traceEvents} onChange={(e) => void patchHunter({ traceEvents: e.target.checked })} /> Ses/blok olay izlerini kullan</label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.allowBlockBreak} onChange={(e) => void patchHunter({ allowBlockBreak: e.target.checked })} /> Gerektiğinde blok kır</label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.allowBlockPlace} onChange={(e) => void patchHunter({ allowBlockPlace: e.target.checked })} /> Gerektiğinde blok yerleştir</label>
+          <label className="text-xs text-zinc-400">{t("combat.hunter.searchDuration")}<input type="number" min="5" max="600" value={Math.round(hunter.searchDurationMs / 1000)} onChange={(e) => void patchHunter({ searchDurationMs: Number(e.target.value) * 1000 })} className={`mt-1 w-full ${inputCls}`} /></label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.stickyTarget} onChange={(e) => void patchHunter({ stickyTarget: e.target.checked })} /> {t("combat.hunter.sticky")}</label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.highGroundSearch} onChange={(e) => void patchHunter({ highGroundSearch: e.target.checked })} /> {t("combat.hunter.highGround")}</label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.traceEvents} onChange={(e) => void patchHunter({ traceEvents: e.target.checked })} /> {t("combat.hunter.traces")}</label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.allowBlockBreak} onChange={(e) => void patchHunter({ allowBlockBreak: e.target.checked })} /> {t("combat.hunter.breakBlocks")}</label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={hunter.allowBlockPlace} onChange={(e) => void patchHunter({ allowBlockPlace: e.target.checked })} /> {t("combat.hunter.placeBlocks")}</label>
         </div>
       </section>
 

@@ -1,4 +1,5 @@
 import type { AutomationRule } from "./RuleEngine";
+import { bundledBlueprints } from "../templates/bundled";
 
 /** Kullanıcı blueprint’i (ileride kalıcı özel şablon for iskelet) */
 export interface RuleBlueprint {
@@ -9,11 +10,8 @@ export interface RuleBlueprint {
   rule: Partial<AutomationRule>;
 }
 
-/**
- * Hazır stok şablonlar KALDIRILDI — kullanıcı paneldan kural oluşturur / düzenler.
- * Geriye uyum: boş dizi (API kırılmasın).
- */
-export const RULE_BLUEPRINTS: RuleBlueprint[] = [];
+/** Bundled examples from issue #30. The old Turkish stock names stay absent. */
+export const RULE_BLUEPRINTS = bundledBlueprints() as RuleBlueprint[];
 
 export function blueprintNames(): string[] {
   return RULE_BLUEPRINTS.map((b) => b.name);

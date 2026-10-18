@@ -11,11 +11,42 @@ export interface ServerProfile {
 
 export type BotStatus = "stopped" | "connecting" | "online" | "reconnecting" | "kicked" | "error";
 
+export type BotAuthType = "offline" | "microsoft";
+
+export interface AuthAccount {
+  id: string;
+  type: "microsoft";
+  label: string;
+  username: string | null;
+  uuid: string | null;
+  skinUrl: string | null;
+  tokenStatus: "none" | "cached" | "pending" | "error";
+  lastError: string | null;
+  errorCode: string | null;
+  createdAt: number;
+  linkedBots: Array<{ id: string; username: string }>;
+}
+
+export interface DeviceCodePrompt {
+  accountId: string;
+  botId?: string | null;
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
+  message: string;
+  phase?: "code" | "joining" | "error";
+  errorCode?: string | null;
+}
+
 export interface BotConfig {
   id: string;
   username: string;
   serverId: string;
   autostart: boolean;
+  autostartDelaySec?: number;
+  alwaysOn?: { antiAfk?: { enabled?: boolean } };
+  auth?: BotAuthType;
+  accountId?: string | null;
   authorizedPlayers: string[];
   inventory: { autoBestGear: boolean; bannedItems: string[]; keepItems: string[] };
   combat: {
@@ -164,6 +195,7 @@ export interface BotRuntimeState {
   ping: number;
   kickReason?: string;
   lastError?: string;
+  errorCode?: string;
 }
 
 export type ChatKind = "player" | "whisper" | "server";
@@ -322,6 +354,7 @@ export interface StateSnapshot {
   supportedVersions: string[];
   rules?: unknown[];
   worldMemory?: { chests: ChestMemory[]; ores: unknown[] };
+  accounts?: AuthAccount[];
 }
 
 // ---- Faz 18 — MCP / AI agent (server modules/agent aynası) --------------------

@@ -6,14 +6,17 @@ import {
   Backpack,
   Construction,
   Drumstick,
+  Eye,
   Heart,
+  KeyRound,
   ListChecks,
   MapPin,
   MessageSquare,
   RotateCcw,
   ScrollText,
   Star,
-  Swords
+  Swords,
+  Timer
 } from "lucide-react";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
@@ -23,6 +26,7 @@ import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { BuildPanel } from "../components/BuildPanel";
+import { AlwaysOnCard, LoginPluginCard, ViewerCard } from "../components/OpsPanels";
 import { NearbyPlayers } from "../components/NearbyPlayers";
 import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
@@ -32,13 +36,14 @@ import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work" | "build";
+type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work" | "build" | "login" | "always" | "view";
 
 export function BotDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const bot = useAppStore((s) => s.bots[id]);
   const servers = useAppStore((s) => s.servers);
+  const accounts = useAppStore((s) => s.accounts);
   const applySnapshot = useAppStore((s) => s.applySnapshot);
   const toast = useAppStore((s) => s.toast);
   const { t, locale } = useI18n();
@@ -46,6 +51,8 @@ export function BotDetail() {
   /** yetkili oyuncular — virgülle ayrılmış metin */
   const [authText, setAuthText] = useState("");
   const [authSaving, setAuthSaving] = useState(false);
+  const [loginMode, setLoginMode] = useState<"offline" | "microsoft">("offline");
+  const [accountId, setAccountId] = useState("");
 
   const TABS: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
     { id: "chat", label: t("botDetail.tabs.chat"), icon: MessageSquare },
@@ -57,12 +64,19 @@ export function BotDetail() {
     { id: "work", label: t("botDetail.tabs.work"), icon: Axe },
     { id: "build", label: t("botDetail.tabs.build"), icon: Construction }
   ];
+  const OPS: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
+    { id: "login", label: t("accounts.authMode"), icon: KeyRound },
+    { id: "always", label: t("ops.alwaysOn"), icon: Timer },
+    { id: "view", label: t("ops.viewer"), icon: Eye }
+  ];
 
   // bot değişince yetkili listesini senkronla
   useEffect(() => {
     if (!bot) return;
     setAuthText((bot.config.authorizedPlayers ?? []).join(", "));
-  }, [id, bot?.config.authorizedPlayers?.join(",")]);
+    setLoginMode(bot.config.auth === "microsoft" ? "microsoft" : "offline");
+    setAccountId(bot.config.accountId ?? "");
+  }, [id, bot?.config.authorizedPlayers?.join(","), bot?.config.auth, bot?.config.accountId]);
 
   if (!bot) {
     return (
@@ -136,7 +150,24 @@ export function BotDetail() {
     }
   };
 
-  const problem = bot.runtime.kickReason || bot.runtime.lastError;
+  const problem = bot.runtime.errorCode
+    ? t(bot.runtime.errorCode)
+    : bot.runtime.kickReason || bot.runtime.lastError;
+  const linked = accounts.find((row) => row.id === bot.config.accountId);
+  const head = linked?.uuid ? `https://mc-heads.net/avatar/${linked.uuid}/32` : null;
+
+  const saveLogin = async () => {
+    try {
+      await api.patch(`/api/bots/${id}`, {
+        auth: loginMode,
+        accountId: loginMode === "microsoft" ? accountId : null
+      });
+      await refresh();
+      toast("success", t("common.save"));
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div className="flex min-h-full flex-col gap-3 p-4">
@@ -144,7 +175,11 @@ export function BotDetail() {
         <Link to="/" className="text-zinc-500 hover:text-zinc-300">
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        <h1 className="text-xl font-bold text-zinc-100">{bot.config.username}</h1>
+        {head && <img src={head} alt="" width={28} height={28} className="h-7 w-7 rounded bg-zinc-800" />}
+        <h1 className="text-xl font-bold text-zinc-100">{linked?.username || bot.config.username}</h1>
+        {bot.config.auth === "microsoft" && (
+          <span className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] text-indigo-300">{t("accounts.premium")}</span>
+        )}
         <StatusBadge status={bot.status} />
         <span className="text-xs text-zinc-500">
           {server
@@ -153,7 +188,7 @@ export function BotDetail() {
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-zinc-400">
-            <input type="checkbox" checked={bot.config.autostart} onChange={toggleAutostart} />
+            <input type="checkbox" checked={bot.config.autostart} onChange={() => void toggleAutostart()} />
             {t("botDetail.autostart")}
           </label>
           <button
@@ -183,6 +218,9 @@ export function BotDetail() {
 
       {problem && bot.status !== "online" && (
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{problem}</div>
+      )}
+      {bot.config.alwaysOn?.antiAfk?.enabled && (
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">{t("ops.antiAfkHelp")}</div>
       )}
 
       <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
@@ -259,7 +297,7 @@ export function BotDetail() {
 
       <NearbyPlayers botId={id} />
 
-      <div className="flex shrink-0 gap-1 border-b border-zinc-800">
+      <div className="flex shrink-0 flex-wrap items-end gap-1 border-b border-zinc-800">
         {TABS.map((item) => (
           <button
             key={item.id}
@@ -273,6 +311,23 @@ export function BotDetail() {
             <item.icon className="h-3.5 w-3.5" /> {item.label}
           </button>
         ))}
+        <div className="ml-auto flex gap-1">
+          {OPS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              title={item.id === "login" ? t("ops.loginTabHint") : item.id === "always" ? t("ops.alwaysTabHint") : t("ops.viewTabHint")}
+              onClick={() => setTab(item.id)}
+              className={`mb-1 flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                tab === item.id
+                  ? "border-indigo-400 bg-indigo-600 text-white"
+                  : "border-zinc-600 bg-zinc-800 text-zinc-100 hover:border-indigo-400 hover:bg-zinc-700 active:bg-indigo-800"
+              }`}
+            >
+              <item.icon className="h-3.5 w-3.5" /> {item.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
@@ -290,6 +345,50 @@ export function BotDetail() {
               {tab === "survival" && <SurvivalPanel botId={id} />}
               {tab === "work" && <GatherCraftPanel botId={id} />}
               {tab === "build" && <BuildPanel botId={id} />}
+              {tab === "login" && (
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm leading-relaxed text-zinc-400">{t("ops.loginHelp")}</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col gap-1 text-xs text-zinc-400">
+                    {t("accounts.authMode")}
+                    <select
+                      value={loginMode}
+                      onChange={(e) => setLoginMode(e.target.value === "microsoft" ? "microsoft" : "offline")}
+                      className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+                    >
+                      <option value="offline">{t("accounts.offline")}</option>
+                      <option value="microsoft">{t("accounts.microsoft")}</option>
+                    </select>
+                  </label>
+                  {loginMode === "microsoft" && (
+                    <label className="flex min-w-[12rem] flex-col gap-1 text-xs text-zinc-400">
+                      {t("accounts.pickAccount")}
+                      <select
+                        value={accountId}
+                        onChange={(e) => setAccountId(e.target.value)}
+                        className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+                      >
+                        <option value="">{t("accounts.pickAccount")}</option>
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.username || account.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button type="button" onClick={() => void saveLogin()} className="cursor-pointer rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-800">
+                    {t("common.save")}
+                  </button>
+                  <Link to="/accounts" className="rounded-lg px-2 py-1.5 text-sm text-indigo-300 hover:bg-indigo-950 hover:text-white">
+                    {t("accounts.title")}
+                  </Link>
+                  </div>
+                  <LoginPluginCard botId={id} />
+                </div>
+              )}
+              {tab === "always" && <AlwaysOnCard botId={id} />}
+              {tab === "view" && <ViewerCard botId={id} />}
             </>
           )}
         </div>

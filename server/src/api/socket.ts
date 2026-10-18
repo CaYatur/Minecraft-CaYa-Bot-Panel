@@ -1,5 +1,6 @@
 import type { Server } from "socket.io";
 import { EV } from "../constants/events";
+import { accounts } from "../modules/auth/accounts";
 import type { BotInstance } from "../core/BotInstance";
 import type { BotManager } from "../core/BotManager";
 import type { AgentService } from "../modules/agent";
@@ -42,6 +43,28 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     agents.on("activity", (p) => io.emit(EV.MCP_ACTIVITY, p));
     agents.on("chat", (p) => io.emit(EV.MCP_CHAT, p));
   }
+
+  const emitAuth = (socketId: string | undefined, event: string, payload: unknown) => {
+    if (socketId && io.sockets.sockets.get(socketId)) {
+      io.to(socketId).emit(event, payload);
+      return;
+    }
+    const sockets = [...io.sockets.sockets.values()];
+    if (sockets.length === 1) sockets[0]!.emit(event, payload);
+  };
+  accounts.on("code", (payload: { socketId?: string; accountId: string; botId?: string; userCode: string; verificationUri: string; expiresAt: number; message: string }) => {
+    emitAuth(payload.socketId, EV.AUTH_CODE, {
+      accountId: payload.accountId,
+      botId: payload.botId ?? null,
+      userCode: payload.userCode,
+      verificationUri: payload.verificationUri,
+      expiresAt: payload.expiresAt,
+      message: payload.message
+    });
+  });
+  accounts.on("done", (payload: { socketId?: string; accountId: string; ok: boolean; errorCode?: string }) => {
+    emitAuth(payload.socketId, EV.AUTH_DONE, payload);
+  });
 
   io.on("connection", (socket) => {
     log.debug(`Panel connected (${socket.id})`);

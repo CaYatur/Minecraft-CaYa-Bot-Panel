@@ -1,4 +1,5 @@
 import { io } from "socket.io-client";
+import { setApiSocketId } from "./api";
 import { useAppStore } from "../stores/useAppStore";
 import { EV } from "./events";
 import type {
@@ -18,16 +19,19 @@ export const socket = io({ transports: ["websocket", "polling"] });
 
 const store = () => useAppStore.getState();
 
-socket.on("connect", () => store().setConnected(true));
+socket.on("connect", () => {
+  if (socket.id) setApiSocketId(socket.id);
+  store().setConnected(true);
+});
 socket.on("disconnect", () => store().setConnected(false));
 
 socket.on(EV.STATE_SNAPSHOT, (s: StateSnapshot) => store().applySnapshot(s));
 
 socket.on(
   EV.BOT_STATUS,
-  (p: { botId: string; status: BotSnapshot["status"]; kickReason?: string; lastError?: string }) => {
+  (p: { botId: string; status: BotSnapshot["status"]; kickReason?: string; lastError?: string; errorCode?: string }) => {
     store().patchBot(p.botId, { status: p.status });
-    store().patchRuntime(p.botId, { kickReason: p.kickReason, lastError: p.lastError });
+    store().patchRuntime(p.botId, { kickReason: p.kickReason, lastError: p.lastError, errorCode: p.errorCode });
   }
 );
 
@@ -63,6 +67,20 @@ socket.on(EV.PANEL_NOTIFY, (p: { level?: "info" | "success" | "error"; message: 
 );
 // Faz 18 — MCP durum (transcript/aktivite akışını Mcp sayfası kendi dinler)
 socket.on(EV.MCP_STATUS, (p: McpStatusPayload) => store().setMcpStatus(p));
+socket.on(EV.AUTH_CODE, (p: { accountId: string; botId?: string | null; userCode: string; verificationUri: string; expiresAt: number; message: string }) => {
+  store().setMsaPrompt(p);
+});
+socket.on(EV.AUTH_DONE, (p: { ok?: boolean; phase?: string; errorCode?: string; accountId?: string }) => {
+  if (p?.phase === "joining") {
+    store().setMsaPhase("joining");
+    return;
+  }
+  if (p?.phase === "error" && p.errorCode) {
+    store().setMsaPhase("error", p.errorCode, p.accountId);
+    return;
+  }
+  if (p?.ok) store().clearMsaPrompt();
+});
 
 export function sendChat(botId: string, text: string) {
   socket.emit(EV.SEND_CHAT, { botId, text });

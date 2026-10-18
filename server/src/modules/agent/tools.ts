@@ -1,4 +1,7 @@
 import { Vec3 } from "vec3";
+import { accounts } from "../auth/accounts";
+import { redactGameCommand } from "../alwaysOn/loginPrompt";
+import { PLATFORM_TOOLS } from "./platformTools";
 import type { BotInstance } from "../../core/BotInstance";
 import type { BotManager } from "../../core/BotManager";
 import { PRIORITY } from "../../core/TaskQueue";
@@ -52,7 +55,7 @@ export interface AgentToolDef {
    * utility ("izinli sunucu") mode: default OFF, only enabled from the panel.
    */
   gate?: (settings: McpSettings) => boolean;
-  execute(ctx: AgentToolContext, args: Record<string, unknown>): Promise<string>;
+  execute(ctx: AgentToolContext, args: Record<string, unknown>): Promise<string | { text: string; image?: { data: string; mimeType: string } }>;
 }
 
 // ---- schema helpers -----------------------------------------------------------
@@ -125,7 +128,8 @@ const listBots: AgentToolDef = {
     const lines = [...ctx.manager.bots.values()].map((b) => {
       const srv = ctx.manager.getServer(b.config.serverId);
       const agent = ctx.settings.bots[b.config.id]?.agentEnabled ? "agent:ON" : "agent:off";
-      return `- ${b.config.username} [${b.status}] server=${srv?.name ?? "?"} ${agent} (id ${b.config.id.slice(0, 8)})`;
+      const auth = b.config.auth === "microsoft" ? `auth=microsoft:${accounts.get(b.config.accountId ?? "")?.username ?? b.config.username}` : "auth=offline";
+      return `- ${b.config.username} [${b.status}] server=${srv?.name ?? "?"} ${auth} ${agent} (id ${b.config.id.slice(0, 8)})`;
     });
     return lines.length ? lines.join("\n") : "No bots defined yet.";
   }
@@ -141,7 +145,11 @@ const getStatus: AgentToolDef = {
     const r = i.runtime;
     const bot = i.bot;
     const lines: string[] = [];
-    lines.push(`Bot ${i.config.username} — status: ${i.status}`);
+    const authName = i.config.auth === "microsoft" ? accounts.get(i.config.accountId ?? "")?.username ?? i.config.username : null;
+    const always = i.alwaysOnStatus();
+    lines.push(`Bot ${i.config.username} — status: ${i.status} — auth: ${i.config.auth === "microsoft" ? "microsoft" : "offline"}${authName ? ` (${authName})` : ""} — always-on: ${i.config.alwaysOn?.enabled ? "on" : "off"}`);
+    if (r.kickReason) lines.push(`Last kick: ${r.kickReason}`);
+    lines.push(`Uptime now ${Math.round(always.uptime.currentMs / 1000)}s · total ${Math.round(always.uptime.totalMs / 1000)}s · sessions ${always.uptime.sessions} · disconnects ${always.uptime.disconnects}`);
     lines.push(`Health ${r.health}/20 · Food ${r.food}/20 (sat ${r.foodSaturation}) · XP level ${r.xpLevel}`);
     lines.push(`Position x=${Math.round(r.position.x)} y=${Math.round(r.position.y)} z=${Math.round(r.position.z)} · dimension=${r.dimension}`);
     if (bot && i.status === "online") {
@@ -298,8 +306,8 @@ const getRecentChat: AgentToolDef = {
     return list
       .map((e) => {
         const t = new Date(e.ts).toISOString().slice(11, 16);
-        if (e.kind === "server") return `[${t}] [server] ${e.text}`;
-        return `[${t}] ${e.kind === "whisper" ? "(whisper) " : ""}${e.username}${e.self ? " (me)" : ""}: ${e.text}`;
+        if (e.kind === "server") return `[${t}] [server] ${redactGameCommand(e.text)}`;
+        return `[${t}] ${e.kind === "whisper" ? "(whisper) " : ""}${e.username}${e.self ? " (me)" : ""}: ${redactGameCommand(e.text)}`;
       })
       .join("\n");
   }
@@ -1305,12 +1313,121 @@ const saveWaypointHere: AgentToolDef = {
   }
 };
 
+const accountList: AgentToolDef = {
+  name: "account_list",
+  description: "List Microsoft accounts (id, label, premium username, uuid, linked bots, token status). Never returns tokens.",
+  category: "info",
+  needsBot: false,
+  inputSchema: S.obj({}),
+  async execute(ctx) {
+    const links = [...ctx.manager.bots.values()].map((bot) => ({
+      id: bot.config.id,
+      username: bot.config.username,
+      accountId: bot.config.accountId
+    }));
+    return JSON.stringify({ accounts: accounts.publicView(links) });
+  }
+};
+
+const accountLoginStart: AgentToolDef = {
+  name: "account_login_start",
+  description: "Start a Microsoft device-code login. Returns the user code, verification URL and expiry. Does not return tokens.",
+  category: "info",
+  needsBot: false,
+  inputSchema: S.obj({ label: S.str("account label, 1-32 characters") }, ["label"]),
+  async execute(_ctx, args) {
+    const view = await accounts.startLogin(aStr(args, "label"));
+    return JSON.stringify({ status: "pending", ...view });
+  }
+};
+
+const accountLoginStatus: AgentToolDef = {
+  name: "account_login_status",
+  description: "Microsoft login status for an account: pending, success, error, or none. No tokens.",
+  category: "info",
+  needsBot: false,
+  inputSchema: S.obj({ account_id: S.str("account id") }, ["account_id"]),
+  async execute(_ctx, args) {
+    return JSON.stringify(accounts.loginStatus(aStr(args, "account_id")));
+  }
+};
+
+const accountRemove: AgentToolDef = {
+  name: "account_remove",
+  description: "Remove a Microsoft account and delete its token cache. Linked bots switch back to offline auth.",
+  category: "info",
+  needsBot: false,
+  inputSchema: S.obj({ account_id: S.str("account id") }, ["account_id"]),
+  async execute(ctx, args) {
+    const id = aStr(args, "account_id");
+    for (const bot of ctx.manager.bots.values()) {
+      if (bot.config.accountId === id && bot.status !== "stopped") bot.stop();
+    }
+    accounts.remove(id);
+    return JSON.stringify({ ok: true, accountId: id });
+  }
+};
+
+const botSetAccount: AgentToolDef = {
+  name: "bot_set_account",
+  description: "Assign auth type and a Microsoft account to a bot. auth is offline or microsoft.",
+  category: "info",
+  inputSchema: S.obj(
+    {
+      auth: S.str("offline or microsoft", ["offline", "microsoft"]),
+      account_id: S.str("Microsoft account id (required when auth is microsoft)")
+    },
+    ["auth"]
+  ),
+  async execute(ctx, args) {
+    const auth = aStr(args, "auth");
+    if (auth !== "offline" && auth !== "microsoft") throw new Error("auth must be offline or microsoft");
+    const accountId = args.account_id ? aStr(args, "account_id") : null;
+    ctx.manager.updateBotConfig(ctx.inst.config.id, {
+      auth,
+      accountId: auth === "microsoft" ? accountId : null
+    });
+    return JSON.stringify({
+      ok: true,
+      bot: ctx.inst.config.username,
+      auth: ctx.inst.config.auth ?? "offline",
+      accountId: ctx.inst.config.accountId ?? null
+    });
+  }
+};
+
+const botAuthStatus: AgentToolDef = {
+  name: "bot_auth_status",
+  description: "Current auth type, premium username and last auth error for this bot. No tokens.",
+  category: "info",
+  inputSchema: S.obj({}),
+  async execute(ctx) {
+    const account = ctx.inst.config.accountId ? accounts.get(ctx.inst.config.accountId) : undefined;
+    return JSON.stringify({
+      bot: ctx.inst.config.username,
+      auth: ctx.inst.config.auth ?? "offline",
+      accountId: ctx.inst.config.accountId ?? null,
+      username: account?.username ?? null,
+      uuid: account?.uuid ?? null,
+      tokenStatus: account ? (account.hasCache ? "cached" : "none") : null,
+      lastError: account?.lastError ?? ctx.inst.runtime.lastError ?? null,
+      errorCode: account?.errorCode ?? ctx.inst.runtime.errorCode ?? null
+    });
+  }
+};
+
 // ---- registry ---------------------------------------------------------------------------------
 
 export const AGENT_TOOLS: AgentToolDef[] = [
   // info / perception (always available while system is on)
   listBots,
   getStatus,
+  accountList,
+  accountLoginStart,
+  accountLoginStatus,
+  accountRemove,
+  botSetAccount,
+  botAuthStatus,
   getInventory,
   lookAround,
   findBlocks,
@@ -1376,7 +1493,8 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   recallMemoriesTool,
   forgetMemoryTool,
   // waypoints
-  saveWaypointHere
+  saveWaypointHere,
+  ...PLATFORM_TOOLS
 ];
 
 export function toolByName(name: string): AgentToolDef | undefined {
@@ -1403,7 +1521,7 @@ export async function executeTool(
   ctx: AgentToolContext,
   name: string,
   args: Record<string, unknown>
-): Promise<{ text: string; isError: boolean }> {
+): Promise<{ text: string; isError: boolean; image?: { data: string; mimeType: string } }> {
   const tool = toolByName(name);
   if (!tool) return { text: `Unknown tool: ${name}`, isError: true };
   if (!isToolEnabled(tool, ctx.settings)) {
@@ -1411,8 +1529,9 @@ export async function executeTool(
     return { text: `Tool "${name}" is unavailable: ${why}.`, isError: true };
   }
   try {
-    const text = await tool.execute(ctx, args ?? {});
-    return { text: text || "OK", isError: false };
+    const raw = await tool.execute(ctx, args ?? {});
+    if (typeof raw === "string") return { text: raw || "OK", isError: false };
+    return { text: raw.text || "OK", image: raw.image, isError: false };
   } catch (err) {
     return { text: `ERROR: ${err instanceof Error ? err.message : String(err)}`, isError: true };
   }

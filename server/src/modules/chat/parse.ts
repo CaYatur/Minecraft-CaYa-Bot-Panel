@@ -1,4 +1,5 @@
 import type { ChatKind } from "../../types";
+import { looksLikePlayerChat } from "../alwaysOn/loginPrompt";
 
 export interface ParsedChat {
   kind: ChatKind;
@@ -28,6 +29,7 @@ const MC_NAME = "[A-Za-z0-9_]{1,16}";
 export function isLikelySystemMessage(plainText: string): boolean {
   const p = stripColorCodes(plainText);
   if (!p) return true;
+  if (looksLikePlayerChat(p)) return false;
 
   // AuthMe / login plugins
   if (

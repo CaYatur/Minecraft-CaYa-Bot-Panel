@@ -168,13 +168,61 @@ export interface MovementConfig {
   preferParkourOverBridge?: boolean;
 }
 
+export type BotAuthType = "offline" | "microsoft";
+
+export interface AlwaysOnConfig {
+  enabled: boolean;
+  preset: "custom" | "sleeping_server";
+  backoff: { baseMs: number; maxMs: number; maxAttempts: number; jitter: number; stableMs: number };
+  antiAfk: {
+    enabled: boolean;
+    /** Milliseconds between moves. */
+    intervalMs: number;
+    /** Milliseconds sneak, jump, and step stay held. */
+    holdMs: number;
+    mode: "mixed" | "look" | "sneak" | "jump" | "swing" | "step";
+  };
+  loginPlugin: {
+    enabled: boolean;
+    delayMs: number;
+    maxFailures: number;
+    extraPattern: string;
+    loginRepeat: 1 | 2;
+    registerRepeat: 1 | 2;
+    loginTemplate: string;
+    registerTemplate: string;
+    /** prompt waits for the server. login sends on every join. register_first registers once, then logs in. */
+    sendMode: "prompt" | "login" | "register_first";
+    /** True after the first unprompted /register was sent. */
+    registered: boolean;
+  };
+}
+
+export function defaultAlwaysOn(): AlwaysOnConfig {
+  return {
+    enabled: false,
+    preset: "custom",
+    backoff: { baseMs: 5_000, maxMs: 120_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
+    antiAfk: { enabled: false, intervalMs: 45_000, holdMs: 400, mode: "mixed" },
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "", loginRepeat: 1, registerRepeat: 2, loginTemplate: "", registerTemplate: "", sendMode: "prompt", registered: false }
+  };
+}
+
 export interface BotConfig {
   id: string;
   username: string;
   serverId: string;
   autostart: boolean;
+  /** Extra seconds to wait after the panel opens before this bot joins. */
+  autostartDelaySec?: number;
+  /** offline (default) or Microsoft device-code auth */
+  auth?: BotAuthType;
+  /** id in data/auth/accounts.json — tokens are never stored here */
+  accountId?: string | null;
   /** players allowed to trigger chat-command automations (İ3) */
   authorizedPlayers: string[];
+  /** 24/7 reconnect, anti-AFK, and login-plugin. The password is not stored here. */
+  alwaysOn?: AlwaysOnConfig;
   inventory: {
     autoBestGear: boolean;
     bannedItems: string[];
@@ -239,6 +287,8 @@ export interface BotRuntimeState {
   ping: number;
   kickReason?: string;
   lastError?: string;
+  /** stable i18n key when lastError is an auth failure */
+  errorCode?: string;
 }
 
 export type ChatKind = "player" | "whisper" | "server";
@@ -397,6 +447,7 @@ export interface StateSnapshot {
   supportedVersions: string[];
   rules?: unknown[];
   worldMemory?: { chests: unknown[]; ores: unknown[] };
+  accounts?: unknown[];
 }
 
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;
@@ -423,7 +474,11 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     username,
     serverId,
     autostart: false,
+    autostartDelaySec: 0,
+    auth: "offline",
+    accountId: null,
     authorizedPlayers: [],
+    alwaysOn: defaultAlwaysOn(),
     inventory: { autoBestGear: true, bannedItems: [], keepItems: [] },
     combat: {
       // varsayılan: mob — boşta zombie gelince savunsun (panelden kapatılabilir)

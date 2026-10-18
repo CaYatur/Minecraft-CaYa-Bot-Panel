@@ -268,10 +268,11 @@ async function main() {
   const templates = ["Gel komutu", "Beni koru", "Oduncu", "Yemek nöbetçisi", "Hoş geldin"];
   for (const t of templates) {
     try {
-      const r = await req("POST", `/rules/templates/${encodeURIComponent(t)}`, { botIds: [botId] });
-      ok(`şablon: ${r.name}`);
+      await req("POST", `/rules/templates/${encodeURIComponent(t)}`, { botIds: [botId] });
+      fail(`şablon hâlâ var: ${t}`);
     } catch (e) {
-      fail(`şablon ${t}`, e.message);
+      if (e.status === 404) ok(`şablon yok (beklenen): ${t}`);
+      else fail(`şablon ${t}`, e.message);
     }
   }
 

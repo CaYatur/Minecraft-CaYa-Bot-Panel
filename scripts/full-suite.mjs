@@ -122,9 +122,14 @@ async function main() {
   await req("POST", `/rules/${rule.id}/test`, { botId: id });
   ok("rule dry-test");
 
-  // unauthorized would not fire — just ensure engine loaded
-  const tpl = await req("POST", `/rules/templates/${encodeURIComponent("Yemek nöbetçisi")}`, { botIds: [id] });
-  ok(`template: ${tpl.name}`);
+  // Stock rule templates were removed. The endpoint must stay and answer 404.
+  try {
+    await req("POST", `/rules/templates/${encodeURIComponent("Yemek nöbetçisi")}`, { botIds: [id] });
+    fail("stock template should be gone");
+  } catch (e) {
+    if (e.status === 404) ok("stock templates removed → 404");
+    else fail("template", e.message);
+  }
 
   // task pause/resume endpoints
   await req("POST", `/bots/${id}/tasks/pause`);

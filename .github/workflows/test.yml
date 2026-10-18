@@ -1,0 +1,59 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Native viewer libraries
+        run: sudo apt-get update && sudo apt-get install -y libxi-dev libxext-dev libgl1-mesa-dev libgl1-mesa-dri libglu1-mesa-dev pkg-config xvfb
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: node scripts/build-smoke.mjs
+      - name: Panel contract on the local test server
+        run: |
+          set -euo pipefail
+          Xvfb :99 -screen 0 1280x1024x24 -ac +extension GLX +render >/tmp/xvfb.log 2>&1 &
+          sleep 1
+          export DISPLAY=:99
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export CAYA_DATA_DIR="${RUNNER_TEMP}/caya-data"
+          mkdir -p "$CAYA_DATA_DIR"
+          npm run testserver > /tmp/caya-testserver.log 2>&1 &
+          npm run start -w server > /tmp/caya-api.log 2>&1 &
+          ready=0
+          for i in $(seq 1 60); do
+            if (echo >/dev/tcp/127.0.0.1/3001) >/dev/null 2>&1 && (echo >/dev/tcp/127.0.0.1/25566) >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != 1 ]; then
+            echo "API or test server did not open"
+            echo "----- api -----"
+            cat /tmp/caya-api.log || true
+            echo "----- test server -----"
+            cat /tmp/caya-testserver.log || true
+            exit 1
+          fi
+          set +e
+          npm run test:all
+          status=$?
+          set -e
+          kill $(jobs -p) >/dev/null 2>&1 || true
+          exit "$status"

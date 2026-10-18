@@ -162,7 +162,9 @@ async function handleRequest(msg: JsonRpcMsg, ctx: HandlerCtx): Promise<unknown>
           source: "panel"
         });
       }
-      return { content: [{ type: "text", text: result.text }], isError: result.isError };
+      const content: Array<Record<string, string>> = [{ type: "text", text: result.text }];
+      if (result.image) content.push({ type: "image", data: result.image.data, mimeType: result.image.mimeType });
+      return { content, isError: result.isError };
     }
     default:
       throw { code: -32601, message: `Method not found: ${msg.method}` };

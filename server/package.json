@@ -1,6 +1,6 @@
 {
   "name": "@caya/server",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -9,14 +9,20 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "canvas": "3.2.3",
+    "discord.js": "^14.27.0",
     "express": "^4.21.0",
+    "gl": "8.1.6",
     "minecraft-data": "^3.111.0",
+    "node-canvas-webgl": "file:vendor/node-canvas-webgl",
     "mineflayer": "^4.39.0",
     "mineflayer-armor-manager": "^2.0.1",
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-tool": "^1.2.0",
+    "prismarine-auth": "^3.1.1",
     "prismarine-nbt": "^2.8.0",
     "prismarine-schematic": "^1.3.0",
+    "prismarine-viewer": "^1.33.0",
     "socket.io": "^4.7.5",
     "vec3": "^0.1.10"
   },

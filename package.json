@@ -1,6 +1,6 @@
 {
   "name": "caya-bot-panel",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "license": "MIT",
   "author": "ÇAĞAN TURGUT (CaYatur)",
@@ -21,7 +21,13 @@
     "test:combat": "node scripts/combat-test.mjs",
     "test:full": "node scripts/full-suite.mjs",
     "test:grok": "node scripts/grok-smoke-all.mjs",
-    "test:all": "node scripts/combat-test.mjs && node scripts/full-suite.mjs && node scripts/smoke.mjs && node scripts/movement-test.mjs && node scripts/inventory-test.mjs && node scripts/grok-smoke-all.mjs",
+    "test:auth": "tsx scripts/auth-unit.ts",
+    "test:platform": "tsx scripts/platform-unit.ts",
+    "test:movement": "tsx scripts/movement-unit.ts",
+    "test:build-rules": "tsx scripts/build-unit.ts",
+    "test:build": "node scripts/build-smoke.mjs",
+    "test:baseline": "tsx scripts/baseline.mjs",
+    "test:all": "npm run test:auth && npm run test:platform && npm run test:movement && npm run test:build-rules && npm run test:baseline",
     "electron:dev": "electron .",
     "dist:win": "npm run build && electron-builder --win nsis portable"
   },
@@ -84,5 +90,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "allowScripts": {
+    "canvas@3.2.3": true,
+    "gl@8.1.6": true
   }
 }

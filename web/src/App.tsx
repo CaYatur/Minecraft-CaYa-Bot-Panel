@@ -7,6 +7,7 @@ import { Automations } from "./pages/Automations";
 import { Mcp } from "./pages/Mcp";
 import { Schematics } from "./pages/Schematics";
 import { Settings } from "./pages/Settings";
+import { Accounts } from "./pages/Accounts";
 import { Servers } from "./pages/Servers";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/schematics" element={<Schematics />} />
           <Route path="/mcp" element={<Mcp />} />
           <Route path="/servers" element={<Servers />} />
+          <Route path="/accounts" element={<Accounts />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </ErrorBoundary>

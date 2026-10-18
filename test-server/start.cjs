@@ -23,7 +23,10 @@ mc.createMCServer({
   worldFolder: path.join(__dirname, WORLD),
   generation: { name: "superflat", options: {} },
   kickTimeout: 30000,
-  plugins: {},
+  plugins: {
+    [path.join(__dirname, "parkour-course.cjs")]: {},
+    [path.join(__dirname, "mlg-physics.cjs")]: {}
+  },
   modpe: false,
   "view-distance": 6,
   "player-list-text": { header: "CaYa Test", footer: "flying-squid" },

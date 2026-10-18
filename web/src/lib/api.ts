@@ -1,7 +1,17 @@
+let socketId = "";
+
+/** Panel socket id so Microsoft device codes are delivered only to this client. */
+export function setApiSocketId(id: string) {
+  socketId = id;
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (socketId) headers["x-caya-socket"] = socketId;
   const res = await fetch(url, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
   const data = await res.json().catch(() => ({}));
@@ -17,5 +27,6 @@ export const api = {
   get: <T>(url: string) => request<T>("GET", url),
   post: <T>(url: string, body?: unknown) => request<T>("POST", url, body),
   patch: <T>(url: string, body?: unknown) => request<T>("PATCH", url, body),
+  put: <T>(url: string, body?: unknown) => request<T>("PUT", url, body),
   del: <T>(url: string) => request<T>("DELETE", url)
 };

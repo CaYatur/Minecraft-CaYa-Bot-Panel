@@ -6,9 +6,6 @@ import { fmtPos } from "../lib/format";
 import type { TaskSummary, Waypoint } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-const CMD_HELP =
-  "goto · follow · yanina · wp · say · attack · mobtemizle · kac · loot · ye · av · odun [n] · topla blok [n] · maden ore n · uret item · stop";
-
 // zustand kuralı: seçici içinde yeni dizi/obje ÜRETME (sonsuz render döngüsü yapar).
 // Boş varsayılanlar modül sabiti olarak dışarıda tutulur.
 const EMPTY_WAYPOINTS: Waypoint[] = [];
@@ -98,7 +95,7 @@ export function TasksPanel({ botId }: { botId: string }) {
       } else if (verb === "stop" || verb === "dur") {
         await act({ type: "stop" }, t("tasks.stopped"));
       } else {
-        throw new Error(t("tasks.unmatchedCommand", { help: CMD_HELP }));
+        throw new Error(t("tasks.unmatchedCommand", { help: t("tasks.commandList") }));
       }
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
@@ -158,7 +155,7 @@ export function TasksPanel({ botId }: { botId: string }) {
             <RotateCcw className="h-3.5 w-3.5" /> {t("tasks.reset")}
           </button>
         </div>
-        <p className="mono mt-1 text-[10px] text-zinc-600">{CMD_HELP}</p>
+        <p className="mono mt-1 text-[10px] text-zinc-600">{t("tasks.commandList")}</p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
