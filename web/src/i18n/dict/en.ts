@@ -9,7 +9,7 @@ export const en: MessageTree = {
   },
   secrets: {
     title: "Secrets are not encrypted.",
-    body: "Microsoft sign-ins, the Discord token and login passwords are stored as plain files in the data folder. Use the desktop app on an account with a working OS keychain to encrypt them."
+    body: "Microsoft sign-ins, the Discord token, the MCP token and login passwords are stored as plain files in the data folder. Use the desktop app on an account with a working OS keychain to encrypt them."
   },
   errorBoundary: {
     title: "An error occurred in the panel",

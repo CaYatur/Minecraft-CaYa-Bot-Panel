@@ -167,6 +167,20 @@ async function main() {
   const tested = await hub.testWebhook("http://169.254.169.254/latest/meta-data");
   assert("test webhook refuses internal URLs", !tested.ok);
 
+  console.log("MCP bearer token");
+  const mcp = await import("../server/src/modules/agent/settings");
+  const mcpFile = path.join(tmpRoot, "mcp.json");
+  fs.writeFileSync(mcpFile, JSON.stringify({ enabled: true, mcpServer: { enabled: true, requireToken: true, token: "LEGACY-MCP-TOKEN-abc" } }));
+  const loadedMcp = mcp.loadMcpSettings();
+  assert("legacy token is kept for existing clients", loadedMcp.mcpServer.token === "LEGACY-MCP-TOKEN-abc");
+  assert("token is removed from mcp.json", !fs.readFileSync(mcpFile, "utf8").includes("LEGACY-MCP-TOKEN") && JSON.parse(fs.readFileSync(mcpFile, "utf8")).mcpServer.requireToken === true);
+  assert("token is sealed on disk", fs.existsSync(path.join(tmpRoot, "mcp-token.json" + box.SEALED_SUFFIX)) && plaintextOnDisk(tmpRoot, "LEGACY-MCP-TOKEN") === null);
+  assert("reload reads the sealed token", mcp.loadMcpSettings().mcpServer.token === "LEGACY-MCP-TOKEN-abc");
+  loadedMcp.mcpServer.token = "ROTATED-MCP-TOKEN-xyz";
+  await mcp.saveMcpSettings(loadedMcp);
+  assert("save keeps the token out of mcp.json", !fs.readFileSync(mcpFile, "utf8").includes("ROTATED") && plaintextOnDisk(tmpRoot, "ROTATED-MCP-TOKEN") === null);
+  assert("rotated token survives a reload", mcp.loadMcpSettings().mcpServer.token === "ROTATED-MCP-TOKEN-xyz");
+
   console.log("host / origin guard");
   const opts = { bindHost: "127.0.0.1", allowedHosts: [] as string[] };
   assert("panel itself", guard.checkRequest({ host: "127.0.0.1:3001", origin: "http://127.0.0.1:3001" }, opts).ok);

@@ -1,8 +1,23 @@
 import * as crypto from "crypto";
 import { loadJson, saveJson } from "../../persistence/store";
+import * as fs from "fs";
+import * as path from "path";
+import { DATA_DIR } from "../../config/paths";
+import { readSecretJson, shredFile, writeSecretJson } from "../../security/secretBox";
 import { mergeConfig } from "../../types";
 
 const MCP_FILE = "mcp.json";
+/** The bearer token lives here (sealed when a key is available), never in mcp.json. */
+const MCP_TOKEN_FILE = "mcp-token.json";
+
+function tokenPath(): string {
+  return path.join(DATA_DIR, MCP_TOKEN_FILE);
+}
+
+function withoutToken(settings: McpSettings): unknown {
+  const { token: _token, ...server } = settings.mcpServer;
+  return { ...settings, mcpServer: server };
+}
 
 /** Tool category toggles — each agent tool belongs to exactly one category. */
 export interface McpToolPermissions {
@@ -167,12 +182,29 @@ export function loadMcpSettings(): McpSettings {
   for (const [id, b] of Object.entries(merged.bots ?? {})) {
     merged.bots[id] = mergeConfig(defaultMcpBotSettings(), b ?? {});
   }
-  if (!merged.mcpServer.token) merged.mcpServer.token = crypto.randomBytes(24).toString("hex");
+  const legacyToken = typeof loaded.mcpServer?.token === "string" ? loaded.mcpServer.token : "";
+  const stored = readSecretJson<{ token?: string }>(tokenPath(), {});
+  // Sealed copy wins; an older mcp.json token is migrated so existing clients keep working.
+  merged.mcpServer.token = stored.token || legacyToken || crypto.randomBytes(24).toString("hex");
+  if (merged.mcpServer.token !== stored.token) writeSecretJson(tokenPath(), { token: merged.mcpServer.token });
+  if (legacyToken) stripLegacyToken(merged);
   return merged;
 }
 
+/** Rewrites mcp.json without the token after wiping the old file's bytes. */
+function stripLegacyToken(settings: McpSettings): void {
+  const file = path.join(DATA_DIR, MCP_FILE);
+  const body = JSON.stringify(withoutToken(settings), null, 2);
+  shredFile(file);
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, body, "utf8");
+  fs.renameSync(tmp, file);
+}
+
 export function saveMcpSettings(settings: McpSettings): Promise<void> {
-  return saveJson(MCP_FILE, settings);
+  const stored = readSecretJson<{ token?: string }>(tokenPath(), {});
+  if (stored.token !== settings.mcpServer.token) writeSecretJson(tokenPath(), { token: settings.mcpServer.token });
+  return saveJson(MCP_FILE, withoutToken(settings));
 }
 
 /** clamp user-patched numeric fields into safe ranges */

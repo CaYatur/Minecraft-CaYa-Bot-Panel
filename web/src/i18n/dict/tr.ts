@@ -9,7 +9,7 @@ export const tr: MessageTree = {
   },
   secrets: {
     title: "Gizli bilgiler şifrelenmiyor.",
-    body: "Microsoft oturumları, Discord token'ı ve giriş şifreleri veri klasöründe düz dosya olarak saklanıyor. Şifrelemek için masaüstü uygulamasını, işletim sistemi anahtar deposu çalışan bir hesapta kullanın."
+    body: "Microsoft oturumları, Discord token'ı, MCP token'ı ve giriş şifreleri veri klasöründe düz dosya olarak saklanıyor. Şifrelemek için masaüstü uygulamasını, işletim sistemi anahtar deposu çalışan bir hesapta kullanın."
   },
   errorBoundary: {
     title: "Panelde bir hata oluştu",

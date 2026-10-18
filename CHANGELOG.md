@@ -17,6 +17,7 @@ Stabilization and bug-fix release.
 - Microsoft sign-in uses an in-memory token cache that persists only the sealed form, so token JSON is no longer written to disk in clear text.
 - Existing plaintext files (`*_live-cache.json`, `*_mca-cache.json`, `*_xbl-cache.json`, `discord-secrets.json`, `login-secrets.json`) are encrypted on first start and the plaintext copies are overwritten and deleted.
 - When encryption is not available (plain `npm run dev`, or no OS keychain), the panel shows a warning banner instead of failing silently.
+- The MCP bearer token is sealed the same way in `mcp-token.json.sealed` and no longer stored in `mcp.json`. An existing token is moved on first start (the old `mcp.json` is wiped and rewritten without it), so connected MCP clients keep working.
 - The whole data folder is restricted to the current user on Windows (`icacls`, recursive). It no longer skips this when `USERNAME` is empty.
 - The REST API, Socket.IO and `/mcp` check the `Host` and `Origin` headers. Requests from other web pages (CSRF) and DNS-rebinding hosts are refused with 403. MCP clients and scripts that send no `Origin` keep working. Extra host names can be allowed with `CAYA_ALLOWED_HOSTS`.
 - Discord webhook calls, including **Test webhook**, only go to `https://discord.com/api/webhooks/…` (or `discordapp.com`). Other URLs are rejected before any request and redirects are not followed.

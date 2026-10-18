@@ -899,6 +899,7 @@ data/logs/              application logs
 data/auth/              Microsoft token cache (*.sealed, encrypted)
 data/login-secrets.json.sealed   server login passwords (encrypted)
 data/discord-secrets.json.sealed Discord webhook and bot token (encrypted)
+data/mcp-token.json.sealed       MCP bearer token (encrypted)
 data/uptime.json        session uptime and recent disconnects
 ```
 
@@ -913,7 +914,7 @@ Do not commit real server addresses, private player lists, token caches, or the 
 - The API binds to `127.0.0.1` by default.
 - There is currently no multi-user login or role-based web authentication.
 - The API, Socket.IO and `/mcp` accept only loopback `Host` names and refuse requests from other web pages (`Origin` check), which blocks DNS rebinding and cross-site requests. To reach the panel by another name on your own network, bind it with `CAYA_HOST` and list the name in `CAYA_ALLOWED_HOSTS` (comma separated).
-- Tokens, webhook URLs and login passwords are encrypted at rest (see Data and backups).
+- Tokens (including the MCP bearer token), webhook URLs and login passwords are encrypted at rest (see Data and backups).
 - Do not expose port `3001` directly to the public internet.
 - Restrict chat-command automations to authorized player names.
 - Review automation rules before enabling them on a production server.
