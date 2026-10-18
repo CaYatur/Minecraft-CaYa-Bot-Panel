@@ -154,7 +154,7 @@ The project is designed around three principles:
 | **Recursive crafting** | Recipe dependency planning, raw-material acquisition, crafting-table use, furnace chains and storage withdrawal |
 | **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes — deposits are verified (chest-full is reported honestly) and a specific chest can be targeted by coordinates |
 | **Schematic building** | `.schem`, `.schematic`, `.litematic` and `.caya.json`, rotation, mirroring, material planning, partial building and scaffold cleanup |
-| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 50+ tools, trust system, persistent memory, autopilot |
+| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 87 tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
 | **Localization** | English, Turkish and automatic locale detection |
 | **Microsoft accounts** | Device-code sign-in for online-mode servers, a local token cache, and per-bot offline or Microsoft login |
@@ -169,13 +169,13 @@ The project is designed around three principles:
 
 ## MCP / AI agent system
 
-The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (50+ tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
+The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (87 tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
 
 ```text
 ┌─────────────────────┐      tools       ┌──────────────────┐
 │ Ollama (local LLM)  │ ───────────────► │                  │
 │ in-game agent       │                  │  Agent tool      │      TaskQueue /
-└─────────────────────┘                  │  registry (50+)  │ ───► RealismLayer ───► Minecraft
+└─────────────────────┘                  │  registry (87)  │ ───► RealismLayer ───► Minecraft
 ┌─────────────────────┐   /mcp endpoint  │                  │
 │ Claude Code, Cursor │ ───────────────► │                  │
 │ VS Code, any client │  (JSON-RPC/HTTP) └──────────────────┘
@@ -273,7 +273,20 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 | Memory | `remember`, `recall_memories`, `forget_memory` |
 | Waypoints | `save_waypoint_here` |
 | Utility mode *(off by default)* | `server_command`, `fly_to`, plus `mine_ore { utility: true }` |
-| Platform | Always-on, login plugin, uptime, Discord, templates, and bot view. Passwords and tokens are write-only or masked |
+| Platform | 24/7, Discord, templates, and bot view. The names are in the next section |
+
+### Platform tools
+
+These are registered with the other agent tools and stay in the info category, so they remain available while MCP is on. Passwords, tokens, and webhook URLs are write-only or masked.
+
+| Area | Tools |
+|---|---|
+| 24/7 | `always_on_get`, `always_on_set`, `login_plugin_set`, `uptime_stats`, `reconnect_status`, `reconnect_cancel` |
+| Discord | `discord_status`, `discord_notify`, `discord_events_set`, `discord_bridge_get`, `discord_bridge_set`, `discord_allowlist_get`, `discord_allowlist_set`, `discord_recent_messages` |
+| Templates | `template_list`, `template_get`, `template_export`, `template_import`, `template_delete` |
+| Bot view | `bot_view_describe`, `bot_view_screenshot`, `bot_view_start`, `bot_view_stop`, `bot_view_status` |
+
+`login_plugin_set` can store a password and never returns it. `discord_notify` posts through the saved webhook. `bot_view_screenshot` returns a still first-person PNG and does not move the bot. `bot_view_start` only starts the local panel page. `template_run` and `template_stop` are not registered. Field notes: [docs/always-on.md](docs/always-on.md), [docs/discord.md](docs/discord.md), [docs/templates.md](docs/templates.md), [docs/viewer.md](docs/viewer.md).
 
 ### Creative building without schematics
 
