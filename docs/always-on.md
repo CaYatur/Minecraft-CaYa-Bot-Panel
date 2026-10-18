@@ -9,3 +9,7 @@ Autostart is off until you turn it on in the 24/7 tab. It joins the server when 
 - Uptime, session count, and the last 20 disconnect reasons are in `data/uptime.json` and survive a panel restart.
 
 The two-hour idle-kick check is not part of `npm run test:all`. The automated check covers the backoff, the kick classes, and the "do nothing while a task is running" rule.
+
+## MCP tools
+
+`always_on_get`, `always_on_set`, `login_plugin_set`, `uptime_stats`, `reconnect_status`, and `reconnect_cancel` are registered with the other agent tools. `login_plugin_set` can write a password and never returns it. The sleeping-server preset tool is not registered.

@@ -9,3 +9,7 @@ Discord is optional. The panel starts without a token.
 5. The chat bridge posts Minecraft lines to one channel as `[MC]` and writes Discord lines back as `[Discord]`. The bot's own lines and those prefixes are not echoed. Mentions such as `@everyone` are escaped, and Discord receives `allowed_mentions: none`. The bridge keeps at most 50 messages a minute and drops lines while Discord is down.
 
 Tokens and webhook URLs are not written to the panel log.
+
+## MCP tools
+
+`discord_status`, `discord_notify`, `discord_events_set`, `discord_bridge_get`, `discord_bridge_set`, `discord_allowlist_get`, `discord_allowlist_set`, and `discord_recent_messages` are registered with the other agent tools. Status results mask the token and the webhook URL.
