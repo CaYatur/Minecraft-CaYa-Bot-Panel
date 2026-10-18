@@ -3,6 +3,7 @@ import { BotLogo } from "../components/BotLogo";
 import { useI18n } from "../i18n/useI18n";
 import type { LocalePreference } from "../i18n";
 import { useAppStore } from "../stores/useAppStore";
+import { DiscordCard } from "../components/OpsPanels";
 
 /** Faz 12 — Ayarlar (+ dil seçimi) */
 export function Settings() {
@@ -70,6 +71,8 @@ export function Settings() {
             </li>
           </ul>
         </div>
+
+        <DiscordCard />
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
           <div className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("settings.system")}</div>

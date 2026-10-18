@@ -777,6 +777,43 @@ export function Automations() {
           {t("automations.rulesCount", { n: rules.length })}
         </span>
         <button
+          type="button"
+          onClick={async () => {
+            const template = await api.get("/api/rules/export");
+            const blob = new Blob([JSON.stringify(template, null, 2)], { type: "application/json" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "caya-rules.json";
+            link.click();
+          }}
+          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+        >
+          {t("ops.exportRules")}
+        </button>
+        <label className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700">
+          {t("ops.importRules")}
+          <input
+            type="file"
+            accept="application/json"
+            className="hidden"
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              if (file.size > 256_000) {
+                useAppStore.getState().toast("error", t("ops.templateTooBig"));
+                return;
+              }
+              const template = JSON.parse(await file.text());
+              const preview = await api.post<{ warnings?: string[] }>("/api/rules/import", { template, apply: false });
+              const warning = preview.warnings?.length ? `\n${preview.warnings.join("\n")}` : "";
+              if (!confirm(`${t("ops.importConfirm")}${warning}`)) return;
+              await api.post("/api/rules/import", { template, apply: true });
+              await load();
+            }}
+          />
+        </label>
+        <button
           onClick={() => void load()}
           className="ml-auto rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
         >

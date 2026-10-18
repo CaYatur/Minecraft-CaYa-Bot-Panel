@@ -23,6 +23,7 @@ import { LogPanel } from "../components/LogPanel";
 import { InventoryPanel } from "../components/InventoryPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { BuildPanel } from "../components/BuildPanel";
+import { AlwaysOnCard, ViewerCard } from "../components/OpsPanels";
 import { NearbyPlayers } from "../components/NearbyPlayers";
 import { SurvivalPanel } from "../components/SurvivalPanel";
 import { TasksPanel } from "../components/TasksPanel";
@@ -247,6 +248,9 @@ export function BotDetail() {
           {t("accounts.title")}
         </Link>
       </div>
+
+      <AlwaysOnCard botId={id} />
+      <ViewerCard botId={id} />
 
       <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
         <StatBar

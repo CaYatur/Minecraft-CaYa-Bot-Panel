@@ -1,5 +1,7 @@
 import { Vec3 } from "vec3";
 import { accounts } from "../auth/accounts";
+import { redactGameCommand } from "../alwaysOn/loginPrompt";
+import { PLATFORM_TOOLS } from "./platformTools";
 import type { BotInstance } from "../../core/BotInstance";
 import type { BotManager } from "../../core/BotManager";
 import { PRIORITY } from "../../core/TaskQueue";
@@ -53,7 +55,7 @@ export interface AgentToolDef {
    * utility ("izinli sunucu") mode: default OFF, only enabled from the panel.
    */
   gate?: (settings: McpSettings) => boolean;
-  execute(ctx: AgentToolContext, args: Record<string, unknown>): Promise<string>;
+  execute(ctx: AgentToolContext, args: Record<string, unknown>): Promise<string | { text: string; image?: { data: string; mimeType: string } }>;
 }
 
 // ---- schema helpers -----------------------------------------------------------
@@ -144,7 +146,10 @@ const getStatus: AgentToolDef = {
     const bot = i.bot;
     const lines: string[] = [];
     const authName = i.config.auth === "microsoft" ? accounts.get(i.config.accountId ?? "")?.username ?? i.config.username : null;
-    lines.push(`Bot ${i.config.username} — status: ${i.status} — auth: ${i.config.auth === "microsoft" ? "microsoft" : "offline"}${authName ? ` (${authName})` : ""}`);
+    const always = i.alwaysOnStatus();
+    lines.push(`Bot ${i.config.username} — status: ${i.status} — auth: ${i.config.auth === "microsoft" ? "microsoft" : "offline"}${authName ? ` (${authName})` : ""} — always-on: ${i.config.alwaysOn?.enabled ? "on" : "off"}`);
+    if (r.kickReason) lines.push(`Last kick: ${r.kickReason}`);
+    lines.push(`Uptime now ${Math.round(always.uptime.currentMs / 1000)}s · total ${Math.round(always.uptime.totalMs / 1000)}s · sessions ${always.uptime.sessions} · disconnects ${always.uptime.disconnects}`);
     lines.push(`Health ${r.health}/20 · Food ${r.food}/20 (sat ${r.foodSaturation}) · XP level ${r.xpLevel}`);
     lines.push(`Position x=${Math.round(r.position.x)} y=${Math.round(r.position.y)} z=${Math.round(r.position.z)} · dimension=${r.dimension}`);
     if (bot && i.status === "online") {
@@ -301,8 +306,8 @@ const getRecentChat: AgentToolDef = {
     return list
       .map((e) => {
         const t = new Date(e.ts).toISOString().slice(11, 16);
-        if (e.kind === "server") return `[${t}] [server] ${e.text}`;
-        return `[${t}] ${e.kind === "whisper" ? "(whisper) " : ""}${e.username}${e.self ? " (me)" : ""}: ${e.text}`;
+        if (e.kind === "server") return `[${t}] [server] ${redactGameCommand(e.text)}`;
+        return `[${t}] ${e.kind === "whisper" ? "(whisper) " : ""}${e.username}${e.self ? " (me)" : ""}: ${redactGameCommand(e.text)}`;
       })
       .join("\n");
   }
@@ -1488,7 +1493,8 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   recallMemoriesTool,
   forgetMemoryTool,
   // waypoints
-  saveWaypointHere
+  saveWaypointHere,
+  ...PLATFORM_TOOLS
 ];
 
 export function toolByName(name: string): AgentToolDef | undefined {
@@ -1515,7 +1521,7 @@ export async function executeTool(
   ctx: AgentToolContext,
   name: string,
   args: Record<string, unknown>
-): Promise<{ text: string; isError: boolean }> {
+): Promise<{ text: string; isError: boolean; image?: { data: string; mimeType: string } }> {
   const tool = toolByName(name);
   if (!tool) return { text: `Unknown tool: ${name}`, isError: true };
   if (!isToolEnabled(tool, ctx.settings)) {
@@ -1523,8 +1529,9 @@ export async function executeTool(
     return { text: `Tool "${name}" is unavailable: ${why}.`, isError: true };
   }
   try {
-    const text = await tool.execute(ctx, args ?? {});
-    return { text: text || "OK", isError: false };
+    const raw = await tool.execute(ctx, args ?? {});
+    if (typeof raw === "string") return { text: raw || "OK", isError: false };
+    return { text: raw.text || "OK", image: raw.image, isError: false };
   } catch (err) {
     return { text: `ERROR: ${err instanceof Error ? err.message : String(err)}`, isError: true };
   }

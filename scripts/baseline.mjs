@@ -169,9 +169,15 @@ async function main() {
     Array.isArray(versions.npmAdds));
 
   const meta = await req("GET", "/rules/meta");
-  assert("stock templates and blueprints are empty",
-    Array.isArray(meta.templates) && meta.templates.length === 0 &&
-    Array.isArray(meta.blueprints) && meta.blueprints.length === 0);
+  assert("bundled templates are listed",
+    Array.isArray(meta.templates) && meta.templates.includes("Auto farm") && meta.templates.includes("AFK fisher") &&
+    meta.templates.includes("Mob grinder guard") && meta.templates.includes("Auto eat and sleep") &&
+    Array.isArray(meta.blueprints) && meta.blueprints.length === 4);
+  const badImport = await req("POST", "/rules/import", { template: { schema: "nope", version: 1, name: "x", description: "", rules: [{ actions: [{ type: "eval" }] }] } }).then(() => null).catch((err) => err);
+  assert("invalid template is rejected", badImport && badImport.status === 400, badImport && badImport.message);
+  const imported = await req("POST", "/rules/import", { apply: true, template: await req("GET", "/rules/templates/auto-farm") });
+  assert("bundled template imports", Array.isArray(imported.created) && imported.created.length === 1);
+  for (const rule of imported.created) track("rules", rule.id);
   assert("rule flow version is 2", meta.flow?.version === 2 && Array.isArray(meta.triggers) && Array.isArray(meta.actions));
   await expectStatus("unknown rule template is 404", "POST", "/rules/templates/Yemek%20n%C3%B6bet%C3%A7isi", 404, { botIds: [] });
 
@@ -340,6 +346,12 @@ async function main() {
       track("bots", botId);
       await req("PATCH", `/bots/${botId}`, { inventory: { autoBestGear: false } });
     }
+    await req("PATCH", `/bots/${id1}`, { alwaysOn: { enabled: true, antiAfk: { enabled: false } } });
+    await req("PUT", `/bots/${id1}/login-plugin`, { password: "baseline-secret" });
+    const always = await req("GET", `/bots/${id1}/always-on`);
+    assert("always-on status hides the password", always.hasPassword === true && always.config.enabled === true && !JSON.stringify(always).includes("baseline-secret"));
+    const discord = await req("GET", "/discord");
+    assert("discord status has no token", discord && discord.hasToken === false && !JSON.stringify(discord).includes("Bot "));
     await req("POST", "/bots/start-all", { ids: [id1, id2, id3] });
     try {
       await waitFor("three bots online", async () => {
@@ -347,6 +359,19 @@ async function main() {
         return rows.every((row) => row?.status === "online") ? rows : null;
       }, 70_000);
       ok("three bots online together");
+      const described = await req("POST", `/bots/${id1}/view/describe`, { fov: 90, radius: 6 });
+      assert("view description is structured", described && described.look && Array.isArray(described.blocks), JSON.stringify(described).slice(0, 180));
+      let shotOk = false;
+      let shotDetail = "";
+      try {
+        const shot = await req("POST", `/bots/${id1}/view/snapshot`, { width: 320, height: 180 });
+        shotOk = Boolean(shot.base64 && shot.mimeType);
+        shotDetail = shot.mimeType || "";
+      } catch (err) {
+        shotOk = err.status === 409 && /webgl|viewer/i.test(String(err.message));
+        shotDetail = err.message;
+      }
+      assert("headless snapshot is an image or an explicit WebGL error", shotOk, shotDetail);
       const first = await getBot(id1);
       assert("vitals are live", first.runtime.health > 0 && first.runtime.position.y !== 0);
 

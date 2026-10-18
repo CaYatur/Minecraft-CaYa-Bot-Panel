@@ -170,6 +170,34 @@ export interface MovementConfig {
 
 export type BotAuthType = "offline" | "microsoft";
 
+export interface AlwaysOnConfig {
+  enabled: boolean;
+  preset: "custom" | "sleeping_server";
+  backoff: { baseMs: number; maxMs: number; maxAttempts: number; jitter: number; stableMs: number };
+  antiAfk: { enabled: boolean; intervalMs: number };
+  loginPlugin: { enabled: boolean; delayMs: number; maxFailures: number; extraPattern: string };
+}
+
+export function defaultAlwaysOn(): AlwaysOnConfig {
+  return {
+    enabled: false,
+    preset: "custom",
+    backoff: { baseMs: 5_000, maxMs: 120_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
+    antiAfk: { enabled: false, intervalMs: 45_000 },
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "" }
+  };
+}
+
+export function sleepingServerAlwaysOn(): AlwaysOnConfig {
+  return {
+    enabled: true,
+    preset: "sleeping_server",
+    backoff: { baseMs: 15_000, maxMs: 180_000, maxAttempts: 0, jitter: 0.2, stableMs: 120_000 },
+    antiAfk: { enabled: true, intervalMs: 40_000 },
+    loginPlugin: { enabled: false, delayMs: 1_500, maxFailures: 3, extraPattern: "" }
+  };
+}
+
 export interface BotConfig {
   id: string;
   username: string;
@@ -181,6 +209,8 @@ export interface BotConfig {
   accountId?: string | null;
   /** players allowed to trigger chat-command automations (İ3) */
   authorizedPlayers: string[];
+  /** 24/7 reconnect, anti-AFK, and login-plugin. The password is not stored here. */
+  alwaysOn?: AlwaysOnConfig;
   inventory: {
     autoBestGear: boolean;
     bannedItems: string[];
@@ -435,6 +465,7 @@ export function defaultBotConfig(username: string, serverId: string): BotConfig 
     auth: "offline",
     accountId: null,
     authorizedPlayers: [],
+    alwaysOn: defaultAlwaysOn(),
     inventory: { autoBestGear: true, bannedItems: [], keepItems: [] },
     combat: {
       // varsayılan: mob — boşta zombie gelince savunsun (panelden kapatılabilir)

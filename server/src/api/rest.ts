@@ -7,6 +7,7 @@ import {
   CONTEXT_VARS_BY_TRIGGER,
   CONTEXT_VARS_COMMON,
   findBlueprint,
+  RULE_BLUEPRINTS,
   RULE_TEMPLATES,
   TRIGGER_META
 } from "../modules/automation/RuleEngine";
@@ -25,6 +26,12 @@ import {
   openExternalUrl
 } from "../modules/auth/accounts";
 import { getVersionSyncStatus, installPublishedMineflayer } from "../modules/versions/sync";
+import { writeLoginSecret } from "../modules/alwaysOn/secrets";
+import { sleepingServerAlwaysOn } from "../types";
+import { discordPublicState, testWebhook, updateDiscordSettings } from "../modules/discord/hub";
+import { validateTemplate, templateFromRules } from "../modules/templates/schema";
+import { deleteUserTemplate, getTemplate, listTemplates, saveUserTemplate } from "../modules/templates/store";
+import { describeBot, renderSnapshot, startView, stopView, touchView, viewStatus } from "../modules/view/session";
 import type { AgentService } from "../modules/agent";
 import { runInventoryOp } from "../modules/inventory";
 import { logHub } from "../utils/logger";
@@ -206,6 +213,93 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     "/bots/:id/stop",
     h((req, res) => {
       manager.stopBot(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+
+  r.get(
+    "/bots/:id/always-on",
+    h((req, res) => {
+      res.json(manager.mustGet(req.params.id!).alwaysOnStatus());
+    })
+  );
+  r.post(
+    "/bots/:id/always-on/preset",
+    h((req, res) => {
+      if (req.body?.preset !== "sleeping_server") throw new PanelError("Unknown preset");
+      const inst = manager.updateBotConfig(req.params.id!, { alwaysOn: sleepingServerAlwaysOn() });
+      res.json(inst.alwaysOnStatus());
+    })
+  );
+  r.put(
+    "/bots/:id/login-plugin",
+    h((req, res) => {
+      const password = String(req.body?.password ?? "");
+      if (password.length > 64) throw new PanelError("Password is too long");
+      writeLoginSecret(req.params.id!, password);
+      const status = manager.mustGet(req.params.id!).alwaysOnStatus();
+      res.json({ ok: true, hasPassword: status.hasPassword });
+    })
+  );
+  r.post(
+    "/bots/:id/view/start",
+    h(async (req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      if (!inst.bot || inst.status !== "online") throw new PanelError("Bot is not online");
+      const version = manager.getServer(inst.config.serverId)?.version ?? inst.bot.version;
+      const started = await startView(inst.config.id, inst.bot, version);
+      if (!started.ok) throw new PanelError(started.message, 409);
+      res.json(started);
+    })
+  );
+  r.post(
+    "/bots/:id/view/stop",
+    h(async (req, res) => {
+      await stopView(req.params.id!);
+      res.json({ ok: true });
+    })
+  );
+  r.post(
+    "/bots/:id/view/heartbeat",
+    h((req, res) => {
+      touchView(req.params.id!);
+      res.json(viewStatus(req.params.id!));
+    })
+  );
+  r.post(
+    "/bots/:id/view/describe",
+    h((req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      if (!inst.bot || inst.status !== "online") throw new PanelError("Bot is not online");
+      res.json(describeBot(inst.bot, req.body ?? {}));
+    })
+  );
+  r.post(
+    "/bots/:id/view/snapshot",
+    h(async (req, res) => {
+      const shot = await renderSnapshot(req.body ?? {});
+      if (!shot.ok) throw new PanelError(shot.message, 409);
+      res.json(shot);
+    })
+  );
+
+  r.get(
+    "/discord",
+    h((_req, res) => {
+      res.json(discordPublicState());
+    })
+  );
+  r.patch(
+    "/discord",
+    h((req, res) => {
+      res.json(updateDiscordSettings(req.body ?? {}));
+    })
+  );
+  r.post(
+    "/discord/test",
+    h(async (req, res) => {
+      const result = await testWebhook(typeof req.body?.url === "string" ? req.body.url : undefined);
+      if (!result.ok) throw new PanelError(result.error || "Webhook test failed", 400);
       res.json({ ok: true });
     })
   );
@@ -437,6 +531,49 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
       res.json({ ok: true });
     })
   );
+  r.get(
+    "/rules/templates",
+    h((_req, res) => {
+      res.json({ templates: listTemplates() });
+    })
+  );
+  r.get(
+    "/rules/export",
+    h((req, res) => {
+      const botId = String(req.query.botId ?? "");
+      const rules = manager.rules.list().filter((rule) => !botId || rule.botIds === "all" || (Array.isArray(rule.botIds) && rule.botIds.includes(botId)));
+      res.json(templateFromRules(botId ? `Bot ${botId}` : "Panel rules", "Exported automation rules", rules));
+    })
+  );
+  r.post(
+    "/rules/import",
+    h((req, res) => {
+      const allowed = new Set(ACTION_META.map((row) => row.type));
+      const checked = validateTemplate(req.body?.template ?? req.body, allowed);
+      if (!checked.ok || !checked.template) throw new PanelError(checked.errors.join(" "), 400);
+      const apply = req.body?.apply === true;
+      const created = apply
+        ? checked.template.rules.map((rule) => manager.rules.create({ ...rule, botIds: req.body?.botIds ?? rule.botIds ?? "all" } as never))
+        : [];
+      if (req.body?.save === true) saveUserTemplate(checked.template);
+      res.json({ ok: true, preview: checked.template, warnings: checked.warnings, created });
+    })
+  );
+  r.delete(
+    "/rules/user-templates/:id",
+    h((req, res) => {
+      if (!deleteUserTemplate(req.params.id!)) throw new PanelError("Template not found", 404);
+      res.json({ ok: true });
+    })
+  );
+  r.get(
+    "/rules/templates/:name",
+    h((req, res) => {
+      const found = getTemplate(decodeURIComponent(String(req.params.name ?? "")));
+      if (!found) throw new PanelError("Template not found", 404);
+      res.json(found);
+    })
+  );
   r.post(
     "/rules/templates/:name",
     h((req, res) => {
@@ -498,9 +635,8 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         triggers: TRIGGER_META,
         actions: ACTION_META,
         conditions: CONDITION_META,
-        // stok blueprint/şablon yok — kullanıcı kural oluşturur ve düzenler
-        templates: [] as string[],
-        blueprints: [] as Array<{ id: string; name: string; category: string; description: string }>,
+        templates: RULE_BLUEPRINTS.map((row) => row.name),
+        blueprints: RULE_BLUEPRINTS.map((row) => ({ id: row.id, name: row.name, category: row.category, description: row.description })),
         vars: CONTEXT_VARS_ALL,
         varsByTrigger: CONTEXT_VARS_BY_TRIGGER,
         varsCommon: CONTEXT_VARS_COMMON,

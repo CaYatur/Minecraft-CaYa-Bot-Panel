@@ -3,6 +3,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
+import { antiAfkAllowed, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
+import { nextBackoffMs, sessionIsStable } from "../modules/alwaysOn/backoff";
+import { classifyDisconnect } from "../modules/alwaysOn/classify";
+import { detectLoginPrompt, redactGameCommand } from "../modules/alwaysOn/loginPrompt";
+import { hasLoginSecret, readLoginSecret } from "../modules/alwaysOn/secrets";
+import { markSessionEnd, markSessionStart, uptimeFor } from "../modules/alwaysOn/uptime";
 import {
   applyLearnedPrefix,
   extractNameDecor,
@@ -72,6 +78,11 @@ export class BotInstance extends EventEmitter {
   private learnedChatUsers = new Set<string>();
   private wantsRunning = false;
   private reconnectAttempt = 0;
+  private nextRetryAt = 0;
+  private spawnedAt: number | null = null;
+  private antiAfkTimer: NodeJS.Timeout | null = null;
+  private loginSent = false;
+  private loginFailures = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private posTimer: NodeJS.Timeout | null = null;
   private lastPosKey = "";
@@ -128,12 +139,12 @@ export class BotInstance extends EventEmitter {
       this.invalidateControl(String(reason ?? "queue cleared"));
     });
     this.limiter = new ChatRateLimiter(
-      (text) => {
+      (text, hidden) => {
         if (this.bot && this.status === "online") {
           this.bot.chat(text);
-          this.log.debug(`Sent to chat: ${text}`);
+          this.log.debug(hidden ? "Sent a hidden chat command" : `Sent to chat: ${text}`);
         } else {
-          this.log.warn("Bot offline — chat message could not be sent", text);
+          this.log.warn(hidden ? "Bot offline — hidden chat command was not sent" : "Bot offline — chat message could not be sent", hidden ? undefined : text);
         }
       },
       () => this.config.chat.minMessageIntervalMs,
@@ -261,6 +272,7 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopAntiAfk();
     this.tasks.cancelAll("bot durduruldu");
     this.limiter.clear();
     const bot = this.bot;
@@ -284,6 +296,25 @@ export class BotInstance extends EventEmitter {
 
   sendChat(text: string) {
     this.limiter.enqueue(text);
+  }
+
+  /** Login-plugin commands. The limiter still applies, but the text is not logged. */
+  sendHiddenChat(text: string) {
+    this.limiter.enqueue(text, true);
+  }
+
+  alwaysOnStatus() {
+    return {
+      config: this.config.alwaysOn ?? null,
+      hasPassword: hasLoginSecret(this.config.id),
+      reconnect: {
+        status: this.status,
+        attempt: this.reconnectAttempt,
+        nextRetryAt: this.nextRetryAt || null,
+        running: this.wantsRunning
+      },
+      uptime: uptimeFor(this.config.id)
+    };
   }
 
   get chatQueueLength(): number {
@@ -1084,7 +1115,11 @@ export class BotInstance extends EventEmitter {
 
     let invHooked = false; // spawn fires on every respawn — hooks once per bot
     bot.on("spawn", () => {
-      this.reconnectAttempt = 0;
+      this.spawnedAt = Date.now();
+      this.loginSent = false;
+      this.loginFailures = 0;
+      markSessionStart(this.config.id, this.spawnedAt);
+      this.startAntiAfk();
       this.authInteraction = false;
       this.runtime.kickReason = undefined;
       this.runtime.lastError = undefined;
@@ -1150,9 +1185,11 @@ export class BotInstance extends EventEmitter {
       if (classified.code) this.runtime.errorCode = classified.code;
       this.log.error("Kicked from server", classified.message);
       this.setStatus("kicked");
-      if (classified.stop) {
+      const disconnect = classifyDisconnect(text);
+      if (classified.stop || !disconnect.retry) {
         this.wantsRunning = false;
         this.authInteraction = true;
+        if (!disconnect.retry && disconnect.kind !== "auth") this.log.warn(`Reconnect stopped (${disconnect.kind})`);
       }
       if (this.devicePromptOpen) {
         this.closeDevicePrompt({ ok: false, errorCode: classified.code ?? "auth.failed" });
@@ -1185,6 +1222,14 @@ export class BotInstance extends EventEmitter {
         this.log.warn("Active tasks cancelled due to lost connection (task persistence: Phase 10)");
       }
       this.tasks.cancelAll("connection lost");
+      const onlineMs = this.spawnedAt ? Date.now() - this.spawnedAt : 0;
+      const kind = classifyDisconnect(reason || this.runtime.kickReason || "closed").kind;
+      markSessionEnd(this.config.id, { kind, text: redactGameCommand(reason || this.runtime.kickReason || "closed") });
+      if (this.config.alwaysOn?.enabled && sessionIsStable(onlineMs, this.config.alwaysOn.backoff.stableMs)) {
+        this.reconnectAttempt = 0;
+      }
+      this.spawnedAt = null;
+      this.stopAntiAfk();
       this.teardownBot();
       if (this.devicePromptOpen) this.closeDevicePrompt({ ok: false, errorCode: this.runtime.errorCode ?? "auth.failed" });
       if (this.wantsRunning) {
@@ -1333,14 +1378,16 @@ export class BotInstance extends EventEmitter {
   }
 
   private ingestServerChat(plain: string, ansi?: string) {
-    const key = `s:${stripColorCodes(plain)}`;
+    this.handleLoginLine(plain);
+    const safe = redactGameCommand(plain);
+    const key = `s:${stripColorCodes(safe)}`;
     if (!this.noteChatKey(key)) return;
     const entry: ChatEntry = {
       ts: Date.now(),
       botId: this.config.id,
       kind: "server",
-      text: plain,
-      ansi
+      text: safe,
+      ansi: ansi ? redactGameCommand(ansi) : ansi
     };
     this.pushChat(entry);
     this.emit("chatParsed", entry);
@@ -1494,8 +1541,23 @@ export class BotInstance extends EventEmitter {
 
   private scheduleReconnect() {
     if (!this.wantsRunning || this.authInteraction || this.reconnectTimer) return;
-    const delay = RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
+    const always = this.config.alwaysOn;
+    if (always?.enabled && always.backoff.maxAttempts > 0 && this.reconnectAttempt >= always.backoff.maxAttempts) {
+      this.wantsRunning = false;
+      this.log.warn("Reconnect stopped: attempt limit reached");
+      this.setStatus("error");
+      return;
+    }
+    const delay = always?.enabled
+      ? nextBackoffMs({
+          attempt: this.reconnectAttempt,
+          baseMs: always.backoff.baseMs,
+          maxMs: always.backoff.maxMs,
+          jitter: always.backoff.jitter
+        })
+      : RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
     this.reconnectAttempt++;
+    this.nextRetryAt = Date.now() + delay;
     this.setStatus("reconnecting");
     this.log.info(`Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})`);
     this.reconnectTimer = setTimeout(() => {
@@ -1617,6 +1679,9 @@ export class BotInstance extends EventEmitter {
   }
 
   private pushChat(entry: ChatEntry) {
+    entry.text = redactGameCommand(entry.text);
+    if (entry.fullText) entry.fullText = redactGameCommand(entry.fullText);
+    if (entry.ansi) entry.ansi = redactGameCommand(entry.ansi);
     this.chatHistory.push(entry);
     if (this.chatHistory.length > CHAT_RING_CAP) this.chatHistory.splice(0, this.chatHistory.length - CHAT_RING_CAP);
     this.emit("chat", entry);
@@ -1624,6 +1689,78 @@ export class BotInstance extends EventEmitter {
     const day = new Date(entry.ts).toISOString().slice(0, 10);
     const file = path.join(CHAT_LOGS_DIR, `chat-${sanitizeFile(this.config.username)}-${day}.jsonl`);
     fs.appendFile(file, JSON.stringify(entry) + "\n", () => {});
+  }
+
+  private startAntiAfk() {
+    this.stopAntiAfk();
+    const cfg = this.config.alwaysOn?.antiAfk;
+    if (!cfg?.enabled) return;
+    const interval = Math.max(15_000, cfg.intervalMs || 45_000);
+    this.antiAfkTimer = setInterval(() => this.tickAntiAfk(), interval);
+  }
+
+  private stopAntiAfk() {
+    if (!this.antiAfkTimer) return;
+    clearInterval(this.antiAfkTimer);
+    this.antiAfkTimer = null;
+  }
+
+  private tickAntiAfk() {
+    const bot = this.bot;
+    const enabled = Boolean(this.config.alwaysOn?.antiAfk.enabled);
+    if (!bot || this.status !== "online") return;
+    const onGround = bot.entity?.onGround !== false;
+    if (!antiAfkAllowed({ enabled, taskRunning: Boolean(this.tasks.currentSummary), onGround })) return;
+    const action = pickAntiAfkAction();
+    try {
+      if (action === "look") void bot.look(bot.entity.yaw + (Math.random() - 0.5) * 0.8, 0, true);
+      else if (action === "sneak") this.pulseControl(bot, "sneak", 400);
+      else if (action === "jump") this.pulseControl(bot, "jump", 250);
+      else if (action === "swing") bot.swingArm("right");
+      else this.pulseControl(bot, "forward", 180);
+    } catch {
+      /* bot may already be closing */
+    }
+  }
+
+  private pulseControl(bot: Bot, control: "sneak" | "jump" | "forward", ms: number) {
+    bot.setControlState(control, true);
+    setTimeout(() => {
+      try {
+        bot.setControlState(control, false);
+      } catch {
+        /* disconnected */
+      }
+    }, ms);
+  }
+
+  private handleLoginLine(plain: string) {
+    const cfg = this.config.alwaysOn?.loginPlugin;
+    if (!cfg?.enabled) return;
+    const kind = detectLoginPrompt(plain, cfg.extraPattern);
+    if (kind === "success") {
+      this.loginFailures = 0;
+      return;
+    }
+    if (kind === "wrong_password") {
+      this.loginFailures += 1;
+      this.log.warn("Login plugin rejected the password");
+      if (this.loginFailures >= Math.max(1, cfg.maxFailures)) {
+        this.wantsRunning = false;
+        this.log.error("Login plugin stopped after too many failures");
+      }
+      return;
+    }
+    if ((kind === "login" || kind === "register") && !this.loginSent) {
+      const password = readLoginSecret(this.config.id);
+      if (!password) {
+        this.log.warn("Login plugin asked for a password, but none is saved for this bot");
+        return;
+      }
+      this.loginSent = true;
+      const command = kind === "register" ? `/register ${password} ${password}` : `/login ${password}`;
+      setTimeout(() => this.sendHiddenChat(command), Math.max(0, cfg.delayMs || 0));
+    }
   }
 }
 

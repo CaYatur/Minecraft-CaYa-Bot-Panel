@@ -1,5 +1,8 @@
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
+import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
+import { deleteLoginSecret } from "../modules/alwaysOn/secrets";
+import { stopAllViews, stopView } from "../modules/view/session";
 import { AUTH_ERRORS, type AuthErrorCode } from "../modules/auth/messages";
 import { RuleEngine } from "../modules/automation/RuleEngine";
 import { WorldMemory } from "../modules/world/memory";
@@ -66,6 +69,30 @@ export class BotManager extends EventEmitter {
     if (needsAuthMigration) this.persistBots();
     this.log.info(`${this.servers.length} server profiles, ${configs.length} bot configs loaded`);
 
+    setDiscordControl({
+      list: () => [...this.bots.values()].map((bot) => ({ id: bot.config.id, username: bot.config.username, status: bot.status })),
+      start: (username) => {
+        const inst = this.botByUsername(username);
+        this.startBot(inst.config.id);
+        return `Starting ${inst.config.username}.`;
+      },
+      stop: (username) => {
+        const inst = this.botByUsername(username);
+        this.stopBot(inst.config.id);
+        return `Stopping ${inst.config.username}.`;
+      },
+      say: (username, text) => {
+        const inst = this.botByUsername(username);
+        inst.sendChat(text);
+        return `Sent.`;
+      },
+      status: (username) => {
+        const inst = this.botByUsername(username);
+        const up = inst.alwaysOnStatus();
+        return `${inst.config.username} is ${inst.status}. Uptime ${Math.round(up.uptime.currentMs / 1000)}s. Always-on ${inst.config.alwaysOn?.enabled ? "on" : "off"}.`;
+      }
+    });
+    void connectDiscord();
     const autostart = [...this.bots.values()].filter((b) => b.config.autostart);
     if (autostart.length > 0) {
       this.log.info(`${autostart.length} bot(s) marked autostart — starting gradually (I4)`);
@@ -171,6 +198,13 @@ export class BotManager extends EventEmitter {
     const inst = this.mustGet(id);
     // id/serverId/username değişimi ayrı ele alınır; patch'ten ayıkla
     const { id: _ignore, username, serverId, ...rest } = patch;
+    const unsafe = rest as Partial<BotConfig> & { password?: unknown; token?: unknown; webhookUrl?: unknown };
+    delete unsafe.password;
+    delete unsafe.token;
+    delete unsafe.webhookUrl;
+    if (unsafe.alwaysOn?.loginPlugin && "password" in unsafe.alwaysOn.loginPlugin) {
+      delete (unsafe.alwaysOn.loginPlugin as { password?: unknown }).password;
+    }
     if (username !== undefined && username !== inst.config.username) {
       const name = String(username).trim();
       this.assertValidNewBot(name, serverId ?? inst.config.serverId, id);
@@ -194,6 +228,8 @@ export class BotManager extends EventEmitter {
   removeBot(id: string) {
     const inst = this.mustGet(id);
     inst.dispose();
+    deleteLoginSecret(id);
+    void stopView(id);
     this.bots.delete(id);
     this.persistBots();
     this.log.info(`Bot deleted: ${inst.config.username}`);
@@ -324,6 +360,8 @@ export class BotManager extends EventEmitter {
   }
 
   shutdown() {
+    void disconnectDiscord();
+    void stopAllViews();
     for (const bot of this.bots.values()) {
       try {
         bot.stop();
@@ -403,6 +441,7 @@ export class BotManager extends EventEmitter {
           this.log.warn("Could not write death waypoint", err instanceof Error ? err.message : String(err));
         }
         if (info.botId) this.rules.onBotEvent(info.botId, "died");
+        notifyDiscord(info.username, "death", `Died at ${info.x}, ${info.y}, ${info.z}`);
       }
     );
     inst.on(
@@ -415,10 +454,29 @@ export class BotManager extends EventEmitter {
         if (entry.kind === "player" || entry.kind === "whisper") {
           this.rules.onChat(entry.botId, entry.username, entry.text);
         }
+        bridgeFromMinecraft({
+          botId: entry.botId,
+          botName: inst.config.username,
+          username: entry.username,
+          text: entry.text,
+          self: entry.self,
+          kind: entry.kind
+        });
       }
     );
-    inst.on("spawned", (p: { botId: string }) => this.rules.onBotEvent(p.botId, "spawned"));
-    inst.on("vitals", (p: { botId: string; health: number; food: number }) => this.rules.onVitals(p.botId, p.health, p.food));
+    inst.on("spawned", (p: { botId: string }) => {
+      this.rules.onBotEvent(p.botId, "spawned");
+      if (inst.alwaysOnStatus().reconnect.attempt > 0) notifyDiscord(inst.config.username, "reconnect", "Back online");
+    });
+    inst.on("status", (p: { status: string; kickReason?: string }) => {
+      if (p.status === "kicked" || p.status === "error") {
+        notifyDiscord(inst.config.username, "disconnect", p.kickReason || p.status);
+      }
+    });
+    inst.on("vitals", (p: { botId: string; health: number; food: number }) => {
+      this.rules.onVitals(p.botId, p.health, p.food);
+      noteHealth(p.botId, inst.config.username, p.health);
+    });
     inst.on("attacked", (p: { botId: string; attacker?: string; source: "mob" | "player" }) => {
       this.rules.onAttacked(p.botId, p.attacker, p.source);
     });
@@ -442,6 +500,7 @@ export class BotManager extends EventEmitter {
         error?: string;
         progress?: { done: number; total: number; label?: string };
       }) => {
+        notifyDiscord(inst.config.username, p.kind === "done" ? "taskDone" : "taskFailed", `${p.label}${p.error ? `: ${p.error}` : ""}`);
         this.rules.onTaskEvent(p.botId, p.kind, p.taskType, p.label, {
           taskId: p.taskId,
           state: p.state,
@@ -470,6 +529,13 @@ export class BotManager extends EventEmitter {
 
   private persistBots() {
     void saveJson(BOTS_FILE, [...this.bots.values()].map((b) => b.config));
+  }
+
+  private botByUsername(username: string): BotInstance {
+    const q = username.trim().toLowerCase();
+    const inst = [...this.bots.values()].find((bot) => bot.config.username.toLowerCase() === q);
+    if (!inst) throw new PanelError(`Bot not found: ${username}`, 404);
+    return inst;
   }
 
   private applyPremiumUsername(accountId: string, username: string) {

@@ -3,6 +3,8 @@ import type { BotManager } from "../../core/BotManager";
 import { createLogger } from "../../utils/logger";
 import { newId, type TaskSummary } from "../../types";
 import { findBlueprint, RULE_BLUEPRINTS, type RuleBlueprint } from "./blueprints";
+import { enqueueFish, enqueueSleep } from "./extraActions";
+import { notifyCustom } from "../discord/hub";
 import {
   defaultConditionGroup,
   newFlowNodeId,
@@ -1301,6 +1303,18 @@ export class RuleEngine {
       inst.sendChat(interpolate(String(action.text ?? ""), ctx));
       return;
     }
+    if (type === "discord_notify") {
+      notifyCustom(inst.config.username, interpolate(String(action.message ?? action.text ?? ""), ctx));
+      return;
+    }
+    if (type === "fish") {
+      enqueueFish(inst);
+      return;
+    }
+    if (type === "sleep") {
+      enqueueSleep(inst);
+      return;
+    }
     // Tek aksiyonda bot durumu özeti (sohbet veya panel)
     if (type === "report_status" || type === "bot_status" || type === "durum-raporu") {
       const live = this.liveBotContext(botId);
@@ -2036,6 +2050,9 @@ export const CONDITION_META: Array<{
 export const ACTION_META: Array<{ type: string; label: string; fields: string[]; hint?: string; category?: string }> = [
   { type: "send_chat", label: "Write to chat", fields: ["text"], category: "Chat" },
   { type: "panel_notify", label: "Panel notification", fields: ["message", "level"], category: "Chat" },
+  { type: "discord_notify", label: "Discord notification", fields: ["message"], category: "Chat" },
+  { type: "fish", label: "Fish once", fields: [], category: "Survival" },
+  { type: "sleep", label: "Sleep in a nearby bed", fields: [], category: "Survival" },
   {
     type: "report_status",
     label: "Bot status report (panel/chat)",
