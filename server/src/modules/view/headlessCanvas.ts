@@ -11,7 +11,11 @@ const { Canvas, Image } = nodeRequire("canvas") as {
   Canvas: new (width: number, height: number) => HeadlessSurface;
   Image: new () => unknown;
 };
-const createGLContext = nodeRequire("gl") as (width: number, height: number, options?: Record<string, unknown>) => WebGLContext;
+const createGLContext = nodeRequire("gl") as (
+  width: number,
+  height: number,
+  options?: Record<string, unknown>
+) => WebGLContext | null;
 
 interface WebGLContext {
   canvas: unknown;
@@ -83,6 +87,7 @@ class HeadlessCanvas extends (Canvas as new (width: number, height: number) => H
     if (type === "webgl" || type === "webgl2") {
       this[ctxKey] = super.getContext("2d") as HeadlessCanvas[typeof ctxKey];
       const gl = createGLContext(this.width, this.height, { preserveDrawingBuffer: true, ...options });
+      if (!gl) return null;
       const originalUniform = gl.getUniformLocation.bind(gl);
       gl.getUniformLocation = (program: { _uniforms?: { name: string }[] }, name: string) => {
         if (program?._uniforms && !/\[\d+\]$/.test(name)) {

@@ -138,7 +138,13 @@ async function viewerBind() {
 }
 
 function glProbe() {
-  const png = renderProbePng();
+  let png: Buffer;
+  try {
+    png = renderProbePng();
+  } catch (err) {
+    assert("headless probe is a PNG", false, err instanceof Error ? err.message : String(err));
+    return Promise.resolve();
+  }
   const { createCanvas, loadImage } = require("canvas") as {
     createCanvas(w: number, h: number): { getContext(kind: "2d"): { drawImage(img: unknown, x: number, y: number): void; getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } } };
     loadImage(src: Buffer): Promise<{ width: number; height: number }>;

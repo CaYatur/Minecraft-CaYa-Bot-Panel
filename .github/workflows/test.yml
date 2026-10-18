@@ -19,7 +19,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Native viewer libraries
-        run: sudo apt-get update && sudo apt-get install -y libxi-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libxi-dev libxext-dev libgl1-mesa-dev libgl1-mesa-dri libglu1-mesa-dev pkg-config xvfb
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
@@ -27,6 +27,10 @@ jobs:
       - name: Panel contract on the local test server
         run: |
           set -euo pipefail
+          Xvfb :99 -screen 0 1280x1024x24 -ac +extension GLX +render >/tmp/xvfb.log 2>&1 &
+          sleep 1
+          export DISPLAY=:99
+          export LIBGL_ALWAYS_SOFTWARE=1
           export CAYA_DATA_DIR="${RUNNER_TEMP}/caya-data"
           mkdir -p "$CAYA_DATA_DIR"
           npm run testserver > /tmp/caya-testserver.log 2>&1 &
