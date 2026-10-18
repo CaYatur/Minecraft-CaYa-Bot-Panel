@@ -12,7 +12,11 @@
  * It does not call Microsoft and it does not install mineflayer.
  */
 import net from "net";
+import { createRequire } from "module";
 import { pickBestWeaponName } from "../server/src/modules/combat/weapons.ts";
+
+const require = createRequire(import.meta.url);
+const { COURSE } = require("../test-server/parkour-course.cjs");
 
 const API = process.env.CAYA_API || "http://127.0.0.1:3001/api";
 const MC_PORT = Number(process.env.CAYA_TEST_MC_PORT || 25566);
@@ -254,7 +258,8 @@ async function main() {
     ["chat", { text: "baseline-ping" }],
     ["deposit", {}],
     ["withdraw", { item: "dirt", count: 1 }],
-    ["fetch", { item: "dirt", count: 1, player: "Someone" }]
+    ["fetch", { item: "dirt", count: 1, player: "Someone" }],
+    ["parkour-goto", { x: 1, y: 64, z: 1, range: 2 }]
   ];
   for (const [type, extra] of enqueueOk) {
     try {
@@ -365,8 +370,13 @@ async function main() {
       const chatAll = await req("GET", `/bots/${id1}/chat-history?limit=200`);
       assert("system logs are not written into game chat", !chatAll.some((entry) => /\[(manager|bot|server|socket)\]/.test(entry.text || "")));
 
-      const startPos = first.runtime.position;
-      const target = { x: Math.round(startPos.x) + 12, y: Math.round(startPos.y), z: Math.round(startPos.z) + 12 };
+      await req("POST", `/bots/${id1}/chat`, { text: "/tp 8 5 8" });
+      const startPos = await waitFor("bot stands on the flat test grass", async () => {
+        const row = await getBot(id1);
+        const pos = row?.runtime?.position;
+        return row?.status === "online" && pos && Math.abs(pos.x - 8) < 3 && Math.abs(pos.z - 8) < 3 && pos.y > 4.8 && pos.y < 5.3 ? pos : null;
+      }, 20_000);
+      const target = { x: Math.round(startPos.x) + 12, y: Math.floor(startPos.y), z: Math.round(startPos.z) + 12 };
       const gotoRes = await req("POST", `/bots/${id1}/action`, { type: "goto", ...target, range: 2 });
       assert("goto is queued", gotoRes.task?.state === "running" || gotoRes.task?.state === "queued", JSON.stringify(gotoRes.task));
       await sleep(1200);
@@ -402,6 +412,50 @@ async function main() {
         return row?.status === "online" && !row.tasks?.current && dist2d(row.runtime.position, cancelTarget) > 3;
       }, 8_000);
       ok("stop cancels an in-progress goto");
+
+      try {
+        await req("POST", `/bots/${id1}/tasks/cancel-all`).catch(() => {});
+        await req("PATCH", `/bots/${id1}`, { movement: { canDig: false, allowPlace: false, allowParkour: true } });
+        await req("POST", `/bots/${id1}/chat`, { text: `/tp ${COURSE.start.x} ${COURSE.start.y} ${COURSE.start.z}` });
+        await waitFor("bot stands on the parkour start", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          return row?.status === "online" && pos && Math.abs(pos.x - COURSE.start.x) < 3 && Math.abs(pos.z - COURSE.start.z) < 3 && pos.y > 13 && pos.y < 17;
+        }, 20_000);
+        ok("parkour start pad is solid");
+        await req("POST", `/bots/${id1}/action`, {
+          type: "parkour-goto",
+          x: COURSE.afterStairs.x,
+          y: COURSE.afterStairs.y,
+          z: COURSE.afterStairs.z,
+          range: 2
+        });
+        await waitFor("bot crosses the gap and takes the stairs down", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          if (!pos || row.status !== "online" || row.tasks?.current) return false;
+          return dist2d(pos, COURSE.afterStairs) <= 3 && pos.y > 6.5 && pos.y < 10 && (row.runtime.health ?? 0) >= 10;
+        }, 90_000);
+        ok("crossed the 3-block gap and used the stair descent");
+        await req("POST", `/bots/${id1}/action`, {
+          type: "parkour-goto",
+          x: COURSE.afterDrop.x,
+          y: COURSE.afterDrop.y,
+          z: COURSE.afterDrop.z,
+          range: 2
+        });
+        await waitFor("bot lands the downward sprint", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          if (!pos || row.status !== "online" || row.tasks?.current) return false;
+          return dist2d(pos, COURSE.afterDrop) <= 3 && pos.y > 4 && pos.y < 7 && (row.runtime.health ?? 0) >= 10;
+        }, 70_000);
+        ok("landed the downward 3-block sprint");
+      } catch (err) {
+        fail("parkour course", err.message);
+      }
+      await req("PATCH", `/bots/${id1}`, { movement: { canDig: true, allowPlace: true } }).catch(() => {});
+      await req("POST", `/bots/${id1}/tasks/cancel-all`).catch(() => {});
 
       await req("POST", `/bots/${id2}/action`, { type: "follow", player: "BaseS_1", distance: 2 });
       await sleep(2500);

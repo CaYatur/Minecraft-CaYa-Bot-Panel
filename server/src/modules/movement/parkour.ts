@@ -466,7 +466,11 @@ function scanGapAlongStep(
     const fromHere = Math.hypot(goal.x - origin.x, goal.z - origin.z);
     if (fromHere - toGoal < 1.2) continue;
     const cand: GapLanding = { x: cx, y: sy, z: cz, gap: airBlocks, score: toGoal + airBlocks * 0.08 };
-    if (!best || cand.score < best.score) best = cand;
+    // A farther cell on the same pad can look closer to the goal while exceeding
+    // the configured gap. Keep a jump we are willing to take.
+    const candOver = cand.gap > maxGap;
+    const bestOver = best != null && best.gap > maxGap;
+    if (!best || (bestOver && !candOver) || (bestOver === candOver && cand.score < best.score)) best = cand;
     if (toGoal < 1.5) break;
   }
   return best;
