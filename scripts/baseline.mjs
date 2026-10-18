@@ -451,6 +451,82 @@ async function main() {
           return dist2d(pos, COURSE.afterDrop) <= 3 && pos.y > 4 && pos.y < 7 && (row.runtime.health ?? 0) >= 10;
         }, 70_000);
         ok("landed the downward 3-block sprint");
+        // Pathfinder will not step onto the ladder from the deck. The climb
+        // runs once the bot is already standing in the column.
+        await req("POST", `/bots/${id1}/chat`, { text: "/tp 102 6 64" });
+        await waitFor("bot stands in the ladder column", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          return row?.status === "online" && pos && Math.abs(pos.x - 102.5) < 1.2 && Math.abs(pos.z - 64.5) < 1.2 && pos.y > 4.8 && pos.y < 5.4;
+        }, 20_000);
+        await req("POST", `/bots/${id1}/action`, {
+          type: "parkour-goto",
+          x: COURSE.afterLadder.x,
+          y: COURSE.afterLadder.y,
+          z: COURSE.afterLadder.z,
+          range: 2
+        });
+        await waitFor("bot climbs the ladder", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          if (!pos || row.status !== "online" || row.tasks?.current) return false;
+          return dist2d(pos, COURSE.afterLadder) <= 3 && pos.y > 13 && pos.y < 17 && (row.runtime.health ?? 0) >= 10;
+        }, 90_000);
+        ok("climbed the ladder onto the high deck");
+
+        await req("POST", `/bots/${id1}/action`, {
+          type: "parkour-goto",
+          x: COURSE.gap4Far.x,
+          y: COURSE.gap4Far.y,
+          z: COURSE.gap4Far.z,
+          range: 2
+        });
+        await waitFor("4-block gap attempt finishes", async () => {
+          const row = await getBot(id1);
+          return row?.status === "online" && !row.tasks?.current;
+        }, 35_000);
+        const refused = await getBot(id1);
+        const pos4 = refused.runtime?.position;
+        const stayed =
+          pos4 &&
+          pos4.x >= 103 &&
+          pos4.x <= 112.8 &&
+          pos4.y > 13 &&
+          pos4.y < 17 &&
+          Math.abs(pos4.z - COURSE.gap4Near.z) < 4 &&
+          (refused.runtime.health ?? 0) >= 8;
+        assert(
+          "same-level 4-block gap is refused",
+          stayed,
+          `pos=${pos4 ? `${pos4.x.toFixed(1)},${pos4.y.toFixed(1)},${pos4.z.toFixed(1)}` : "?"} health=${refused.runtime?.health}`
+        );
+
+        await req("PATCH", `/bots/${id1}`, { survival: { fallGuard: { autoReclaim: false } } });
+        await req("POST", `/bots/${id1}/chat`, { text: "/give BaseS_1 water_bucket 1" });
+        const withBucket = await waitFor("water bucket arrives", async () => {
+          const row = await getBot(id1);
+          return findItem(row.inventory, "water_bucket") ? row : null;
+        }, 20_000);
+        const bucket = findItem(withBucket.inventory, "water_bucket");
+        const quick = bucket.slot - 36;
+        if (quick >= 0 && quick <= 8) {
+          await req("POST", `/bots/${id1}/inventory`, { op: "setHotbar", quickBar: quick });
+          await waitFor("water bucket selected", async () => (await getBot(id1)).inventory?.heldQuickBar === quick, 8_000);
+        }
+        await sleep(1600);
+        const healthBeforeFall = (await getBot(id1)).runtime?.health ?? 0;
+        await req("POST", `/bots/${id1}/chat`, { text: `/tp ${COURSE.mlgDrop.x} ${COURSE.mlgDrop.y} ${COURSE.mlgDrop.z}` });
+        await waitFor("MLG water saves the fall", async () => {
+          const row = await getBot(id1);
+          const pos = row?.runtime?.position;
+          if (!pos || row.status !== "online" || pos.y > 6) return false;
+          const health = row.runtime.health ?? 0;
+          const emptied = findItem(row.inventory, "bucket") && !findItem(row.inventory, "water_bucket");
+          // A dry landing from this pit is about 13 damage. The ladder may already
+          // have cost a few hearts, so compare with health just before the drop.
+          return health >= healthBeforeFall - 1 && emptied && dist2d(pos, COURSE.mlgLand) <= 4;
+        }, 20_000);
+        ok("MLG water saved the fall");
       } catch (err) {
         fail("parkour course", err.message);
       }
