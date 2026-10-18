@@ -119,6 +119,15 @@ export function BotDetail() {
     }
   };
 
+  const toggleAutostart = async () => {
+    try {
+      await api.patch(`/api/bots/${id}`, { autostart: !bot.config.autostart });
+      await refresh();
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const remove = async () => {
     if (!confirm(t("botDetail.deleteConfirm", { name: bot.config.username }))) return;
     try {
@@ -178,6 +187,10 @@ export function BotDetail() {
             : t("settings.serverProfiles")}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+            <input type="checkbox" checked={bot.config.autostart} onChange={() => void toggleAutostart()} />
+            {t("botDetail.autostart")}
+          </label>
           <button
             type="button"
             onClick={() => void resetWork()}

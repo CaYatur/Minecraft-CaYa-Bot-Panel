@@ -1,6 +1,6 @@
 # 24/7 mode
 
-Autostart is off until you turn it on in the 24/7 tab. It joins the server when the panel opens.
+Autostart is off until you turn it on. The checkbox in the bot header and the one on the 24/7 tab are the same setting. It joins the server when the panel opens.
 
 - A bot that is already started retries after a drop or kick: 5 seconds, then 10, 30, and 60. There is no second reconnect switch.
 - Ban, whitelist, duplicate login, and Microsoft auth kicks stop the loop. Restart and timeout kicks retry.
