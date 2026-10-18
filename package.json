@@ -29,7 +29,7 @@
     "test:baseline": "tsx scripts/baseline.mjs",
     "test:all": "npm run test:auth && npm run test:platform && npm run test:movement && npm run test:build-rules && npm run test:baseline",
     "electron:dev": "electron .",
-    "dist:win": "npm run build && npx --no-install electron-rebuild -f -w canvas && electron-builder --win nsis portable && npm rebuild canvas"
+    "dist:win": "npm run build && npx --no-install electron-rebuild -f --only canvas && electron-builder --win nsis portable && npm rebuild canvas && npm rebuild gl"
   },
   "dependencies": {
     "canvas": "3.2.3",
