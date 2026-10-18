@@ -8,6 +8,7 @@ import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
 import { detectLoginPrompt, redactGameCommand } from "../server/src/modules/alwaysOn/loginPrompt";
 import { antiAfkAllowed } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
+import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
 import { ACTION_META } from "../server/src/modules/automation/RuleEngine";
 import { BUNDLED_TEMPLATES } from "../server/src/modules/templates/bundled";
 import { validateTemplate } from "../server/src/modules/templates/schema";
@@ -104,8 +105,32 @@ function webhook(): Promise<void> {
   });
 }
 
+function glProbe() {
+  const png = renderProbePng();
+  const { createCanvas, loadImage } = require("canvas") as {
+    createCanvas(w: number, h: number): { getContext(kind: "2d"): { drawImage(img: unknown, x: number, y: number): void; getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } } };
+    loadImage(src: Buffer): Promise<{ width: number; height: number }>;
+  };
+  return loadImage(png).then((img) => {
+    const surface = createCanvas(img.width, img.height);
+    const ctx = surface.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, img.width, img.height).data;
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < data.length; i += 16) {
+      const luma = (data[i] ?? 0) * 0.3 + (data[i + 1] ?? 0) * 0.59 + (data[i + 2] ?? 0) * 0.11;
+      if (luma < min) min = luma;
+      if (luma > max) max = luma;
+    }
+    assert("headless probe is a PNG", png.length > 100 && png[0] === 0x89 && png[1] === 0x50 && png[2] === 0x4e && png[3] === 0x47, `bytes=${png.length}`);
+    assert("headless probe is not a blank frame", max - min > 20, `spread=${Math.round(max - min)}`);
+  });
+}
+
 void (async () => {
   unit();
+  await glProbe();
   await webhook();
   if (failures) {
     console.log(`platform failed (${failures})`);

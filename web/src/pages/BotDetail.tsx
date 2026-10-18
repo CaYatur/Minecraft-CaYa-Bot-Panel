@@ -6,14 +6,17 @@ import {
   Backpack,
   Construction,
   Drumstick,
+  Eye,
   Heart,
+  KeyRound,
   ListChecks,
   MapPin,
   MessageSquare,
   RotateCcw,
   ScrollText,
   Star,
-  Swords
+  Swords,
+  Timer
 } from "lucide-react";
 import { StatBar } from "../components/Bars";
 import { ChatPanel } from "../components/ChatPanel";
@@ -33,7 +36,7 @@ import { dimensionLabel, fmtPos } from "../lib/format";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work" | "build";
+type Tab = "chat" | "logs" | "inventory" | "tasks" | "combat" | "survival" | "work" | "build" | "login" | "always" | "view";
 
 export function BotDetail() {
   const { id = "" } = useParams();
@@ -60,6 +63,11 @@ export function BotDetail() {
     { id: "survival", label: t("botDetail.tabs.survival"), icon: Drumstick },
     { id: "work", label: t("botDetail.tabs.work"), icon: Axe },
     { id: "build", label: t("botDetail.tabs.build"), icon: Construction }
+  ];
+  const OPS: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
+    { id: "login", label: t("accounts.authMode"), icon: KeyRound },
+    { id: "always", label: t("ops.alwaysOn"), icon: Timer },
+    { id: "view", label: t("ops.viewer"), icon: Eye }
   ];
 
   // bot değişince yetkili listesini senkronla
@@ -212,46 +220,6 @@ export function BotDetail() {
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{problem}</div>
       )}
 
-      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
-        <label className="flex flex-col gap-1 text-xs text-zinc-400">
-          {t("accounts.authMode")}
-          <select
-            value={loginMode}
-            onChange={(e) => setLoginMode(e.target.value === "microsoft" ? "microsoft" : "offline")}
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
-          >
-            <option value="offline">{t("accounts.offline")}</option>
-            <option value="microsoft">{t("accounts.microsoft")}</option>
-          </select>
-        </label>
-        {loginMode === "microsoft" && (
-          <label className="flex min-w-[12rem] flex-col gap-1 text-xs text-zinc-400">
-            {t("accounts.pickAccount")}
-            <select
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
-            >
-              <option value="">{t("accounts.pickAccount")}</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.username || account.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <button type="button" onClick={() => void saveLogin()} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500">
-          {t("common.save")}
-        </button>
-        <Link to="/accounts" className="text-xs text-indigo-300 hover:underline">
-          {t("accounts.title")}
-        </Link>
-      </div>
-
-      <AlwaysOnCard botId={id} />
-      <ViewerCard botId={id} />
-
       <div className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:grid-cols-4">
         <StatBar
           value={bot.runtime.health}
@@ -326,7 +294,7 @@ export function BotDetail() {
 
       <NearbyPlayers botId={id} />
 
-      <div className="flex shrink-0 gap-1 border-b border-zinc-800">
+      <div className="flex shrink-0 flex-wrap items-end gap-1 border-b border-zinc-800">
         {TABS.map((item) => (
           <button
             key={item.id}
@@ -340,6 +308,21 @@ export function BotDetail() {
             <item.icon className="h-3.5 w-3.5" /> {item.label}
           </button>
         ))}
+        <div className="ml-auto flex gap-1">
+          {OPS.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setTab(item.id)}
+              className={`flex items-center gap-1.5 rounded-t-lg px-4 py-2 text-sm transition-colors ${
+                tab === item.id
+                  ? "border border-b-0 border-zinc-800 bg-zinc-900 text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <item.icon className="h-3.5 w-3.5" /> {item.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
@@ -357,6 +340,46 @@ export function BotDetail() {
               {tab === "survival" && <SurvivalPanel botId={id} />}
               {tab === "work" && <GatherCraftPanel botId={id} />}
               {tab === "build" && <BuildPanel botId={id} />}
+              {tab === "login" && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col gap-1 text-xs text-zinc-400">
+                    {t("accounts.authMode")}
+                    <select
+                      value={loginMode}
+                      onChange={(e) => setLoginMode(e.target.value === "microsoft" ? "microsoft" : "offline")}
+                      className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+                    >
+                      <option value="offline">{t("accounts.offline")}</option>
+                      <option value="microsoft">{t("accounts.microsoft")}</option>
+                    </select>
+                  </label>
+                  {loginMode === "microsoft" && (
+                    <label className="flex min-w-[12rem] flex-col gap-1 text-xs text-zinc-400">
+                      {t("accounts.pickAccount")}
+                      <select
+                        value={accountId}
+                        onChange={(e) => setAccountId(e.target.value)}
+                        className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100"
+                      >
+                        <option value="">{t("accounts.pickAccount")}</option>
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.username || account.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button type="button" onClick={() => void saveLogin()} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500">
+                    {t("common.save")}
+                  </button>
+                  <Link to="/accounts" className="text-xs text-indigo-300 hover:underline">
+                    {t("accounts.title")}
+                  </Link>
+                </div>
+              )}
+              {tab === "always" && <AlwaysOnCard botId={id} />}
+              {tab === "view" && <ViewerCard botId={id} />}
             </>
           )}
         </div>

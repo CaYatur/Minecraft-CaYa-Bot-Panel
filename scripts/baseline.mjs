@@ -361,17 +361,13 @@ async function main() {
       ok("three bots online together");
       const described = await req("POST", `/bots/${id1}/view/describe`, { fov: 90, radius: 6 });
       assert("view description is structured", described && described.look && Array.isArray(described.blocks), JSON.stringify(described).slice(0, 180));
-      let shotOk = false;
-      let shotDetail = "";
-      try {
-        const shot = await req("POST", `/bots/${id1}/view/snapshot`, { width: 320, height: 180 });
-        shotOk = Boolean(shot.base64 && shot.mimeType);
-        shotDetail = shot.mimeType || "";
-      } catch (err) {
-        shotOk = err.status === 409 && /webgl|viewer/i.test(String(err.message));
-        shotDetail = err.message;
-      }
-      assert("headless snapshot is an image or an explicit WebGL error", shotOk, shotDetail);
+      const shot = await req("POST", `/bots/${id1}/view/snapshot`, { width: 320, height: 180, viewDistance: 2 });
+      const shotBytes = Buffer.from(String(shot.base64 || ""), "base64");
+      assert(
+        "headless snapshot is a PNG of the bot view",
+        shot.mimeType === "image/png" && shotBytes.length > 800 && shotBytes[0] === 0x89 && shotBytes[1] === 0x50,
+        `mime=${shot.mimeType} bytes=${shotBytes.length}`
+      );
       const first = await getBot(id1);
       assert("vitals are live", first.runtime.health > 0 && first.runtime.position.y !== 0);
 

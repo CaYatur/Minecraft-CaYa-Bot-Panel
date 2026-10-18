@@ -277,7 +277,9 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
   r.post(
     "/bots/:id/view/snapshot",
     h(async (req, res) => {
-      const shot = await renderSnapshot(req.body ?? {});
+      const inst = manager.mustGet(req.params.id!);
+      if (!inst.bot || inst.status !== "online") throw new PanelError("Bot is not online");
+      const shot = await renderSnapshot(inst.bot, req.body ?? {});
       if (!shot.ok) throw new PanelError(shot.message, 409);
       res.json(shot);
     })

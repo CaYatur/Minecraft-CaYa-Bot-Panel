@@ -1,7 +1,11 @@
 import * as http from "http";
+import { createRequire } from "module";
 import type { Bot } from "mineflayer";
 import { createLogger } from "../../utils/logger";
 import { describeScene, inViewCone, type ScenePoint } from "./describe";
+import { createHeadlessCanvas, releaseRenderer, type HeadlessSurface } from "./headlessCanvas";
+
+const require = createRequire(__filename);
 
 const log = createLogger("viewer");
 const MAX_WIDTH = 1280;
@@ -68,7 +72,7 @@ export async function startView(botId: string, bot: Bot, version: string): Promi
     return {
       ok: false,
       code: "viewer.unavailable",
-      message: "prismarine-viewer is not installed. The text POV description still works."
+      message: "The built-in 3D viewer failed to load. The text POV description still works."
     };
   }
   const port = await freePort();
@@ -164,26 +168,98 @@ export function describeBot(bot: Bot, input: { yaw?: number; pitch?: number; fov
   });
 }
 
-export async function renderSnapshot(input: { width?: number; height?: number }): Promise<{ ok: true; mimeType: string; base64: string } | { ok: false; code: string; message: string }> {
+let shotChain: Promise<unknown> = Promise.resolve();
+
+export function renderSnapshot(bot: Bot, input: { width?: number; height?: number; viewDistance?: number; yaw?: number; pitch?: number }): Promise<{ ok: true; mimeType: string; base64: string; width: number; height: number } | { ok: false; code: string; message: string }> {
+  const run = shotChain.then(() => renderSnapshotNow(bot, input), () => renderSnapshotNow(bot, input));
+  shotChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: number; viewDistance?: number; yaw?: number; pitch?: number }): Promise<{ ok: true; mimeType: string; base64: string; width: number; height: number } | { ok: false; code: string; message: string }> {
   const width = Math.min(MAX_WIDTH, Math.max(160, Math.round(input.width ?? 640)));
   const height = Math.min(MAX_HEIGHT, Math.max(120, Math.round(input.height ?? 360)));
+  const viewDistance = Math.min(6, Math.max(2, Math.round(input.viewDistance ?? 3)));
+  if (!bot.entity?.position || !bot.world) {
+    return { ok: false, code: "viewer.offline", message: "The bot is not in a world yet, so no POV frame was rendered." };
+  }
+  let canvas: HeadlessSurface | undefined;
+  let renderer: { dispose(): void; render(scene: unknown, camera: unknown): void; setSize(w: number, h: number, updateStyle: boolean): void } | undefined;
+  let worldView: { init(pos: unknown): Promise<void>; removeListenersFromBot?(bot: Bot): void } | undefined;
+  let workers: { terminate(): Promise<number> }[] = [];
+  const hadWindow = Object.prototype.hasOwnProperty.call(global, "window");
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("node-canvas-webgl");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("prismarine-viewer");
-  } catch {
+    const THREE = require("three") as {
+      WebGLRenderer: new (options: { canvas: HeadlessSurface; antialias: boolean; alpha: boolean }) => NonNullable<typeof renderer>;
+    };
+    const viewerMod = require("prismarine-viewer") as {
+      viewer: {
+        Viewer: new (renderer: unknown) => {
+          scene: unknown;
+          camera: { position: { set(x: number, y: number, z: number): void }; rotation: { order: string; set(x: number, y: number, z: number): void } };
+          setVersion(version: string): boolean;
+          listen(emitter: unknown): void;
+          waitForChunksToRender(): Promise<void>;
+          world: { workers?: { terminate(): Promise<number> }[] };
+        };
+        WorldView: new (world: unknown, distance: number, position: unknown) => NonNullable<typeof worldView>;
+      };
+    };
+    canvas = createHeadlessCanvas(width, height);
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
+    renderer.setSize(width, height, false);
+    const viewer = new viewerMod.viewer.Viewer(renderer);
+    workers = viewer.world.workers ?? [];
+    if (!hadWindow) {
+      (global as { window?: { innerWidth: number; innerHeight: number; alert(): void } }).window = {
+        innerWidth: width,
+        innerHeight: height,
+        alert() { /* headless */ }
+      };
+    }
+    const supported = viewer.setVersion(bot.version);
+    if (!hadWindow) delete (global as { window?: unknown }).window;
+    if (!supported) {
+      return { ok: false, code: "viewer.version", message: `This Minecraft version cannot be rendered (${bot.version}).` };
+    }
+    const pos = bot.entity.position;
+    const yaw = input.yaw ?? bot.entity.yaw;
+    const pitch = input.pitch ?? bot.entity.pitch;
+    worldView = new viewerMod.viewer.WorldView(bot.world, viewDistance, pos);
+    viewer.listen(worldView);
+    viewer.camera.position.set(pos.x, pos.y + 1.62, pos.z);
+    viewer.camera.rotation.order = "ZYX";
+    viewer.camera.rotation.set(pitch, yaw, 0);
+    const chunks = (bot as { waitForChunksToLoad?: () => Promise<void> }).waitForChunksToLoad;
+    if (chunks) await Promise.race([chunks.call(bot), delay(8_000)]);
+    await worldView.init(pos);
+    await Promise.race([viewer.waitForChunksToRender(), delay(12_000)]);
+    renderer.render(viewer.scene, viewer.camera);
+    const png = canvas.toBuffer("image/png");
+    if (png.length < 32 || png[0] !== 0x89 || png[1] !== 0x50) {
+      return { ok: false, code: "viewer.render", message: "The POV frame did not produce a PNG." };
+    }
+    return { ok: true, mimeType: "image/png", base64: png.toString("base64"), width, height };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn("POV snapshot failed", message);
     return {
       ok: false,
       code: "viewer.webgl_unavailable",
-      message: `Headless WebGL is not available, so no PNG was rendered (${width}x${height}, cap ${MAX_WIDTH}x${MAX_HEIGHT}). Use bot_view_describe for the same view as text.`
+      message: `The built-in POV renderer failed (${width}x${height}). ${message}`
     };
+  } finally {
+    if (!hadWindow) delete (global as { window?: unknown }).window;
+    try {
+      worldView?.removeListenersFromBot?.(bot);
+    } catch { /* already detached */ }
+    await Promise.all(workers.map((worker) => worker.terminate().catch(() => 0)));
+    releaseRenderer(renderer, canvas);
   }
-  return {
-    ok: false,
-    code: "viewer.webgl_unavailable",
-    message: "The WebGL packages loaded, but this build does not render a headless frame yet. Use the live viewer or bot_view_describe."
-  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function freePort(): Promise<number> {

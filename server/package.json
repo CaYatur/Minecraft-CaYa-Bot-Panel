@@ -9,9 +9,12 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "canvas": "3.2.3",
     "discord.js": "^14.27.0",
     "express": "^4.21.0",
+    "gl": "8.1.6",
     "minecraft-data": "^3.111.0",
+    "node-canvas-webgl": "file:vendor/node-canvas-webgl",
     "mineflayer": "^4.39.0",
     "mineflayer-armor-manager": "^2.0.1",
     "mineflayer-pathfinder": "^2.4.5",

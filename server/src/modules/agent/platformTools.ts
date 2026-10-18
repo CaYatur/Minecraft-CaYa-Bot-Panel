@@ -323,13 +323,31 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "bot_view_screenshot",
-    description: "Render a headless POV frame. Returns an image when WebGL is available, otherwise a clear error. Caps at 1280x720.",
+    description: "Render a first-person PNG of what this bot sees. Caps at 1280x720. Does not move the bot.",
     category: "info",
-    inputSchema: { type: "object", properties: { width: { type: "number" }, height: { type: "number" } } },
-    async execute(_ctx, args) {
-      const shot = await renderSnapshot({ width: Number(args.width ?? 640), height: Number(args.height ?? 360) });
+    inputSchema: {
+      type: "object",
+      properties: {
+        width: { type: "number" },
+        height: { type: "number" },
+        viewDistance: { type: "number" },
+        yaw: { type: "number" },
+        pitch: { type: "number" }
+      }
+    },
+    async execute(ctx, args) {
+      const bot = online(ctx);
+      const width = Number(args.width ?? 640);
+      const height = Number(args.height ?? 360);
+      const shot = await renderSnapshot(bot, {
+        width,
+        height,
+        viewDistance: args.viewDistance === undefined ? undefined : Number(args.viewDistance),
+        yaw: args.yaw === undefined ? undefined : Number(args.yaw),
+        pitch: args.pitch === undefined ? undefined : Number(args.pitch)
+      });
       if (!shot.ok) throw new Error(`${shot.code}: ${shot.message}`);
-      return { text: `POV frame ${args.width ?? 640}x${args.height ?? 360}`, image: { data: shot.base64, mimeType: shot.mimeType } };
+      return { text: `POV frame ${shot.width}x${shot.height}`, image: { data: shot.base64, mimeType: shot.mimeType } };
     }
   },
   {

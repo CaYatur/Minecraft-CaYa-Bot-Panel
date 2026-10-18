@@ -90,5 +90,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "allowScripts": {
+    "canvas@3.2.3": true,
+    "gl@8.1.6": true
   }
 }
