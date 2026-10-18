@@ -5,7 +5,7 @@ import { createLogger } from "../../utils/logger";
 import { describeScene, inViewCone, type ScenePoint } from "./describe";
 import { createHeadlessCanvas, releaseRenderer, type HeadlessSurface } from "./headlessCanvas";
 
-const require = createRequire(__filename);
+const nodeRequire = createRequire(__filename);
 
 const log = createLogger("viewer");
 const MAX_WIDTH = 1280;
@@ -63,7 +63,7 @@ export async function startView(botId: string, bot: Bot, version: string): Promi
   let viewer: ((bot: Bot, options: { port: number; firstPerson: boolean }) => void) | undefined;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require("prismarine-viewer");
+    const mod = nodeRequire("prismarine-viewer");
     viewer = mod.mineflayer ?? mod.default?.mineflayer;
   } catch {
     viewer = undefined;
@@ -194,10 +194,10 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
   let workers: { terminate(): Promise<number> }[] = [];
   const hadWindow = Object.prototype.hasOwnProperty.call(global, "window");
   try {
-    const THREE = require("three") as {
+    const THREE = nodeRequire("three") as {
       WebGLRenderer: new (options: { canvas: HeadlessSurface; antialias: boolean; alpha: boolean }) => NonNullable<typeof renderer>;
     };
-    const viewerMod = require("prismarine-viewer") as {
+    const viewerMod = nodeRequire("prismarine-viewer") as {
       viewer: {
         Viewer: new (renderer: unknown) => {
           scene: unknown;
@@ -273,7 +273,7 @@ function delay(ms: number): Promise<void> {
  * Wrap require instead, and force the page onto 127.0.0.1.
  */
 export async function runWithLocalViewerServer(start: () => void, onServer?: (server: http.Server) => void): Promise<void> {
-  const Module = require("module") as { prototype: { require: NodeJS.Require } };
+  const Module = nodeRequire("module") as { prototype: { require: NodeJS.Require } };
   const original = Module.prototype.require;
   Module.prototype.require = function (this: unknown, id: string) {
     const loaded = original.apply(this, arguments as unknown as [string]);

@@ -6,12 +6,12 @@
 import { createRequire } from "module";
 import { EventEmitter } from "events";
 
-const require = createRequire(__filename);
-const { Canvas, Image } = require("canvas") as {
+const nodeRequire = createRequire(__filename);
+const { Canvas, Image } = nodeRequire("canvas") as {
   Canvas: new (width: number, height: number) => HeadlessSurface;
   Image: new () => unknown;
 };
-const createGLContext = require("gl") as (width: number, height: number, options?: Record<string, unknown>) => WebGLContext;
+const createGLContext = nodeRequire("gl") as (width: number, height: number, options?: Record<string, unknown>) => WebGLContext;
 
 interface WebGLContext {
   canvas: unknown;
@@ -167,7 +167,7 @@ export function createHeadlessCanvas(width: number, height: number): HeadlessSur
 
 /** A colored cube, used to prove the bundled WebGL path returns a real PNG. */
 export function renderProbePng(): Buffer {
-  const THREE = require("three") as {
+  const THREE = nodeRequire("three") as {
     Scene: new () => { add(obj: unknown): void; background: unknown };
     Color: new (hex: number) => unknown;
     PerspectiveCamera: new (fov: number, aspect: number, near: number, far: number) => { position: { set(x: number, y: number, z: number): void }; lookAt(x: number, y: number, z: number): void };
