@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
 
-const fieldClass = "rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-50";
+const fieldClass = "rounded-lg border border-zinc-600 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-100 hover:border-indigo-400 focus:border-indigo-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
 export function AlwaysOnCard({ botId }: { botId: string }) {
   const { t } = useI18n();
@@ -361,52 +361,139 @@ export function ViewerCard({ botId }: { botId: string }) {
   );
 }
 
+const DISCORD_EVENTS = ["death", "disconnect", "reconnect", "mention", "whisper", "taskDone", "taskFailed", "lowHealth"] as const;
+const pressable = "cursor-pointer rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 transition-colors hover:border-indigo-400 hover:bg-zinc-700 active:border-indigo-300 active:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50";
+const pressablePrimary = "cursor-pointer rounded-lg border border-indigo-400 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:border-indigo-200 hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50";
+
 export function DiscordCard() {
   const { t } = useI18n();
   const toast = useAppStore((s) => s.toast);
-  const [state, setState] = useState<{ hasToken?: boolean; hasWebhook?: boolean; webhookMasked?: string | null; gateway?: string; gatewayError?: string | null; bridge?: { enabled?: boolean; channelId?: string } } | null>(null);
+  const [state, setState] = useState<{
+    hasToken?: boolean;
+    hasWebhook?: boolean;
+    webhookMasked?: string | null;
+    gateway?: string;
+    gatewayError?: string | null;
+    guildId?: string;
+    sayAllowsCommands?: boolean;
+    bridge?: { enabled?: boolean; channelId?: string };
+    allow?: { userIds?: string[]; roleIds?: string[] };
+    events?: Record<string, boolean>;
+  } | null>(null);
   const [token, setToken] = useState("");
   const [webhook, setWebhook] = useState("");
   const [channelId, setChannelId] = useState("");
   const [userIds, setUserIds] = useState("");
+  const [roleIds, setRoleIds] = useState<string[]>([]);
+  const [guildId, setGuildId] = useState("");
 
-  const load = async () => setState(await api.get("/api/discord"));
+  const load = async () => {
+    const next = await api.get<NonNullable<typeof state>>("/api/discord");
+    setState(next);
+    setChannelId(next.bridge?.channelId ?? "");
+    setUserIds((next.allow?.userIds ?? []).join(" "));
+    setRoleIds(next.allow?.roleIds ?? []);
+    setGuildId(next.guildId ?? "");
+  };
   useEffect(() => { void load().catch(() => undefined); }, []);
 
-  const save = async () => {
+  const patch = async (body: unknown): Promise<boolean> => {
     try {
-      const body: Record<string, unknown> = {
-        bridge: { enabled: Boolean(state?.bridge?.enabled), channelId, maxPerMinute: 20 },
-        allow: { userIds: userIds.split(/[\s,]+/).filter(Boolean), roleIds: [] }
-      };
-      if (token.trim()) body.token = token.trim();
-      if (webhook.trim()) body.webhookUrl = webhook.trim();
-      await api.patch("/api/discord", body);
-      setToken("");
-      setWebhook("");
-      toast("success", t("common.save"));
-      await load();
+      const next = await api.patch<NonNullable<typeof state>>("/api/discord", body);
+      setState(next);
+      setRoleIds(next.allow?.roleIds ?? []);
+      return true;
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  };
+
+  const saveWebhook = async () => {
+    if (!webhook.trim()) return;
+    const ok = await patch({ webhookUrl: webhook.trim() });
+    if (!ok) return;
+    setWebhook("");
+    toast("success", t("common.save"));
+  };
+
+  const saveBot = async () => {
+    const body: Record<string, unknown> = {
+      guildId: guildId.trim(),
+      sayAllowsCommands: Boolean(state?.sayAllowsCommands),
+      bridge: { enabled: Boolean(state?.bridge?.enabled), channelId: channelId.trim(), maxPerMinute: 20 },
+      allow: { userIds: userIds.split(/[\s,]+/).filter(Boolean), roleIds }
+    };
+    if (token.trim()) body.token = token.trim();
+    const ok = await patch(body);
+    if (!ok) return;
+    setToken("");
+    toast("success", t("common.save"));
+  };
+
+  const test = async () => {
+    try {
+      await api.post("/api/discord/test", webhook.trim() ? { url: webhook.trim() } : {});
+      toast("success", t("ops.webhookOk"));
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
   };
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 lg:col-span-2">
-      <div className="mb-2 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.discord")}</div>
-      <p className="mb-3 text-xs text-zinc-500">{t("ops.discordHelp")}</p>
-      <p className="mb-2 text-xs text-zinc-400">
-        {t("ops.discordState", { gateway: state?.gateway ?? "off", webhook: state?.webhookMasked || (state?.hasWebhook ? t("ops.saved") : t("ops.missing")) })}
-        {state?.gatewayError ? ` — ${state.gatewayError}` : ""}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <input type="password" value={token} placeholder={state?.hasToken ? t("ops.tokenSaved") : t("ops.token")} onChange={(e) => setToken(e.target.value)} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm" />
-        <input type="password" value={webhook} placeholder={t("ops.webhook")} onChange={(e) => setWebhook(e.target.value)} className="min-w-56 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm" />
-        <input value={channelId} placeholder={t("ops.channel")} onChange={(e) => setChannelId(e.target.value)} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm" />
-        <input value={userIds} placeholder={t("ops.allowUsers")} onChange={(e) => setUserIds(e.target.value)} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm" />
-        <button type="button" className="rounded bg-indigo-600 px-3 py-1 text-sm text-white" onClick={() => void save()}>{t("common.save")}</button>
-        <button type="button" className="rounded bg-zinc-800 px-3 py-1 text-sm" onClick={() => void api.post("/api/discord/test").then(() => toast("success", t("ops.webhookOk"))).catch((err) => toast("error", err instanceof Error ? err.message : String(err)))}>{t("ops.testWebhook")}</button>
+    <div className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 lg:col-span-2">
+      <div>
+        <div className="mb-1 text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t("ops.discord")}</div>
+        <p className="text-xs text-zinc-400">
+          {t("ops.discordState", { gateway: state?.gateway ?? "off", webhook: state?.webhookMasked || (state?.hasWebhook ? t("ops.saved") : t("ops.missing")) })}
+          {state?.gatewayError ? ` — ${state.gatewayError}` : ""}
+        </p>
       </div>
+
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="text-sm font-medium text-zinc-100">{t("ops.discordWebhookTitle")}</div>
+        <p className="text-xs leading-relaxed text-zinc-400">{t("ops.discordWebhookHelp")}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="password" value={webhook} placeholder={t("ops.webhook")} onChange={(e) => setWebhook(e.target.value)} className={`min-w-64 ${fieldClass}`} />
+          <button type="button" className={pressablePrimary} disabled={!webhook.trim()} onClick={() => void saveWebhook()}>{t("ops.discordSaveWebhook")}</button>
+          <button type="button" className={pressable} onClick={() => void test()}>{t("ops.testWebhook")}</button>
+        </div>
+        <div className="text-xs font-medium text-zinc-300">{t("ops.discordEvents")}</div>
+        <div className="flex flex-wrap gap-2">
+          {DISCORD_EVENTS.map((key) => (
+            <label key={key} className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
+              <input
+                type="checkbox"
+                checked={Boolean(state?.events?.[key])}
+                onChange={(e) => void patch({ events: { [key]: e.target.checked } })}
+              />
+              {t(`ops.discordEvent.${key}`)}
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="text-sm font-medium text-zinc-100">{t("ops.discordBotTitle")}</div>
+        <p className="text-xs leading-relaxed text-zinc-400">{t("ops.discordBotHelp")}</p>
+        <div className="flex flex-wrap gap-2">
+          <input type="password" value={token} placeholder={state?.hasToken ? t("ops.tokenSaved") : t("ops.token")} onChange={(e) => setToken(e.target.value)} className={fieldClass} />
+          <input value={guildId} placeholder={t("ops.discordGuild")} onChange={(e) => setGuildId(e.target.value)} className={fieldClass} />
+          <input value={userIds} placeholder={t("ops.allowUsers")} onChange={(e) => setUserIds(e.target.value)} className={`min-w-56 ${fieldClass}`} />
+          <input value={channelId} placeholder={t("ops.channel")} onChange={(e) => setChannelId(e.target.value)} className={fieldClass} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
+            <input type="checkbox" checked={Boolean(state?.bridge?.enabled)} onChange={(e) => void patch({ bridge: { enabled: e.target.checked, channelId: channelId.trim() } })} />
+            {t("ops.discordBridge")}
+          </label>
+          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:border-indigo-400 hover:bg-zinc-700">
+            <input type="checkbox" checked={Boolean(state?.sayAllowsCommands)} onChange={(e) => void patch({ sayAllowsCommands: e.target.checked })} />
+            {t("ops.discordSayCommands")}
+          </label>
+          <button type="button" className={pressablePrimary} onClick={() => void saveBot()}>{t("ops.discordSaveBot")}</button>
+        </div>
+      </section>
     </div>
   );
 }
