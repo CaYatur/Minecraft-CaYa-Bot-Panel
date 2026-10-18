@@ -18,7 +18,18 @@ Stabilization and bug-fix release.
 - Existing plaintext files (`*_live-cache.json`, `*_mca-cache.json`, `*_xbl-cache.json`, `discord-secrets.json`, `login-secrets.json`) are encrypted on first start and the plaintext copies are overwritten and deleted.
 - When encryption is not available (plain `npm run dev`, or no OS keychain), the panel shows a warning banner instead of failing silently.
 - The MCP bearer token is sealed the same way in `mcp-token.json.sealed` and no longer stored in `mcp.json`. An existing token is moved on first start (the old `mcp.json` is wiped and rewritten without it), so connected MCP clients keep working.
-- The whole data folder is restricted to the current user on Windows (`icacls`, recursive). It no longer skips this when `USERNAME` is empty.
+- The data folder is restricted to the current user (by SID) and SYSTEM on Windows. The ACL is set on the folder itself and inherited by everything inside, not applied file by file. It no longer skips this when `USERNAME` is empty.
+- Recovery for files locked by the earlier per-file (`/T`) ACL run: on every start the panel first resets the ACLs inside the data folder to inherit from it (`icacls /reset /T`), taking ownership first if the reset is refused, and only then hardens the folder. Manual recovery, run as the same Windows user with the panel closed:
+
+  ```bat
+  icacls "%APPDATA%\Minecraft CaYa Bot Panel\data" /reset /T /C /Q
+  ```
+
+  If that reports "Access is denied", take ownership first, then repeat the reset:
+
+  ```bat
+  takeown /F "%APPDATA%\Minecraft CaYa Bot Panel\data" /R /D Y
+  ```
 - The REST API, Socket.IO and `/mcp` check the `Host` and `Origin` headers. Requests from other web pages (CSRF) and DNS-rebinding hosts are refused with 403. MCP clients and scripts that send no `Origin` keep working. Extra host names can be allowed with `CAYA_ALLOWED_HOSTS`.
 - Discord webhook calls, including **Test webhook**, only go to `https://discord.com/api/webhooks/…` (or `discordapp.com`). Other URLs are rejected before any request and redirects are not followed.
 

@@ -31,7 +31,7 @@ If Microsoft accepts the account but the server rejects the join (for example th
 - The data key belongs to the desktop app. Its main process keeps it in `secret-key.bin` next to the data folder, protected by the OS keychain (Electron `safeStorage`, DPAPI on Windows), and hands it to the backend at start. Copying the data folder to another Windows account or PC does not make the tokens readable.
 - Plaintext caches from older versions are encrypted on first start and the plaintext files are deleted.
 - Without a key (plain `npm run dev`, or no OS keychain) the panel shows a yellow "Secrets are not encrypted" banner and writes plain files as before.
-- On Windows the whole data folder ACL is limited to the current user (and SYSTEM). On Unix the directory is `0700` and secret files are `0600`.
+- On Windows the data folder ACL is limited to the current user (and SYSTEM) and inherited by the files inside. If files in the data folder become unreadable ("Access is denied"), close the panel and run `icacls "%APPDATA%\Minecraft CaYa Bot Panel\data" /reset /T /C /Q` as the same user (use `takeown /F <folder> /R /D Y` first if the reset is refused). The panel also does this itself on start. On Unix the directory is `0700` and secret files are `0600`.
 - Tokens are not sent on Socket.IO, not written to the panel log, and not included in bot config.
 
 The device code is shown only to the panel client that started the login.

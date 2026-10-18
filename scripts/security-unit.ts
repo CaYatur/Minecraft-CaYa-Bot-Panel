@@ -9,6 +9,8 @@ import * as path from "path";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "caya-sec-"));
 process.env.CAYA_DATA_DIR = tmpRoot;
+// Account folders are created and renamed quickly here; keep ACL tools out of the way.
+process.env.CAYA_SKIP_ACL = "1";
 
 let failures = 0;
 function assert(name: string, cond: boolean, detail?: string) {
@@ -201,7 +203,23 @@ async function main() {
   assert("icacls principal falls back when USERNAME is empty", perms.aclPrincipal({ USERNAME: "" }).length > 0);
   assert("icacls principal uses domain when present", perms.aclPrincipal({ USERNAME: "u", USERDOMAIN: "D" }) === "D\\u");
   const args = perms.icaclsArgs("C:\\data", "u");
-  assert("icacls is recursive and drops inheritance", args.includes("/T") && args.includes("/inheritance:r"));
+  assert("hardening is top-level and inheritable, not /T", !args.includes("/T") && args.includes("/inheritance:r") && args.includes("u:(OI)(CI)F"));
+  assert("recovery resets children recursively", perms.icaclsResetArgs("C:\\data").join(" ") === "C:\\data /reset /T /C /Q");
+  const winDir = fs.mkdtempSync(path.join(os.tmpdir(), "caya-acl-"));
+  const calls: string[] = [];
+  const fakeRun = (failReset: boolean) => async (cmd: string, a: string[]) => {
+    calls.push(`${cmd} ${a.join(" ")}`);
+    if (cmd === "whoami") return { ok: true, out: '"pc\\me","S-1-5-21-1-2-3-1001"' };
+    if (cmd === "icacls" && a.includes("/reset") && failReset && calls.filter((c) => c.includes("/reset")).length === 1) return { ok: false, out: "Access is denied." };
+    return { ok: true, out: "" };
+  };
+  const steps = await perms.hardenDataDir(winDir, "win32", fakeRun(false));
+  assert("startup resets before hardening", steps.join(",") === "reset,harden");
+  assert("hardening uses the user SID", calls.some((c) => c.includes("*S-1-5-21-1-2-3-1001:(OI)(CI)F")));
+  calls.length = 0;
+  const steps2 = await perms.hardenDataDir(winDir, "win32", fakeRun(true));
+  assert("refused reset takes ownership and retries", steps2.join(",") === "reset,takeown,reset,harden" && calls.some((c) => c.startsWith("takeown /F")));
+  fs.rmSync(winDir, { recursive: true, force: true });
 
   console.log("viewer limits");
   assert("viewer refuses on low memory", !view.viewerResourceCheck({ freeMb: 100, cpuCount: 8, running: 0 }).ok);

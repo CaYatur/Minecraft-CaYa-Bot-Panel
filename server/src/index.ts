@@ -13,7 +13,7 @@ import { migrateLoginSecrets } from "./modules/alwaysOn/secrets";
 import { accounts } from "./modules/auth/accounts";
 import { migrateDiscordSecrets } from "./modules/discord/store";
 import { httpGuard, parseAllowedHosts, socketGuard, type GuardOptions } from "./security/httpGuard";
-import { restrictToCurrentUser } from "./security/permissions";
+import { hardenDataDir } from "./security/permissions";
 import { initSecretBox } from "./security/secretBox";
 import { createLogger } from "./utils/logger";
 
@@ -47,7 +47,8 @@ async function main() {
 
   // Secrets must be readable before any store loads, so wait for the data key first.
   await initSecretBox();
-  restrictToCurrentUser(DATA_DIR);
+  // Finish before stores write, so no rename races a running icacls.
+  if (process.env.CAYA_SKIP_ACL !== "1") await hardenDataDir(DATA_DIR);
   try {
     accounts.load();
     migrateDiscordSecrets();
