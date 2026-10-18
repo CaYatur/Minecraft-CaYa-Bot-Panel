@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { builtinModules } from "node:module";
+import { isReleaseAsset } from "./release-assets.mjs";
 
 const root = process.cwd();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -36,6 +37,12 @@ check("dist:win writes checksums", dist.includes("scripts/checksums.mjs"));
 check("native modules are not packed into asar", build.asar === false || (build.asarUnpack ?? []).some((p) => /canvas|gl/.test(p)));
 for (const need of ["electron/**/*", "server/dist/**/*", "web/dist/**/*"]) check(`files include ${need}`, (build.files ?? []).includes(need));
 check("versions match", ["server", "web"].every((ws) => JSON.parse(fs.readFileSync(path.join(root, ws, "package.json"), "utf8")).version === pkg.version), pkg.version);
+
+console.log("release assets");
+const keep = ["Minecraft CaYa Bot Panel Setup 3.0.6.exe", "SHA256SUMS.txt"];
+const drop = ["Minecraft CaYa Bot Panel Setup 3.0.6.exe.blockmap", "builder-debug.yml", ".icon-ico", "win-unpacked", "builder-effective-config.yaml", "__uninstaller-nsis-caya.exe", "_release-notes-3.0.6.md"];
+check("release uploads the Setup exe and SHA256SUMS.txt", keep.every(isReleaseAsset));
+check("release skips build leftovers", drop.every((name) => !isReleaseAsset(name)), drop.filter(isReleaseAsset).join(", "));
 
 console.log("production dependency closure");
 const packages = lock.packages ?? {};

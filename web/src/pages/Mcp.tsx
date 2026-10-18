@@ -17,6 +17,7 @@ import {
   X,
   Zap
 } from "lucide-react";
+import { maskSecret } from "../lib/secrets";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import { EV } from "../lib/events";
@@ -374,7 +375,14 @@ function EndpointCard({ status, patch }: { status: McpStatusPayload; patch: (p: 
         </div>
         <div>
           <div className="mb-1 text-[11px] text-zinc-500">{t("mcp.claudeCmd")}</div>
-          <CopyLine value={status.claudeCommand} copyLabel={t("mcp.copy")} copiedLabel={t("mcp.copied")} />
+          <CopyLine
+            value={status.claudeCommand}
+            masked={s.mcpServer.requireToken && s.mcpServer.token ? maskSecret(status.claudeCommand, s.mcpServer.token) : undefined}
+            revealLabel={t("mcp.reveal")}
+            hideLabel={t("mcp.hide")}
+            copyLabel={t("mcp.copy")}
+            copiedLabel={t("mcp.copied")}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-zinc-800/70 pt-3">
@@ -401,7 +409,7 @@ function EndpointCard({ status, patch }: { status: McpStatusPayload; patch: (p: 
         {s.mcpServer.requireToken && (
           <CopyLine
             value={`Authorization: Bearer ${s.mcpServer.token}`}
-            masked={`Authorization: Bearer ${"•".repeat(12)}${s.mcpServer.token.slice(-4)}`}
+            masked={maskSecret(`Authorization: Bearer ${s.mcpServer.token}`, s.mcpServer.token)}
             revealLabel={t("mcp.reveal")}
             hideLabel={t("mcp.hide")}
             copyLabel={t("mcp.copy")}

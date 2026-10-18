@@ -95,10 +95,8 @@ export function Layout({ children }: { children: ReactNode }) {
             {t(`language.${locale}`)}
             {preference === "auto" ? ` · ${t("language.auto")}` : ""}
           </p>
-          <p className="px-1 text-[10px] leading-relaxed text-zinc-600">
-            {t("app.principleI1")}
-            <br />
-            {t("app.roadmap")}
+          <p className="px-1 text-[10px] leading-relaxed text-zinc-500">
+            {t("app.nameShort")} v{__APP_VERSION__}
           </p>
         </div>
       </aside>

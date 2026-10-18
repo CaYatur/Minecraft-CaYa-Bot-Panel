@@ -8,7 +8,7 @@ import { setupSocket } from "./api/socket";
 import { DATA_DIR, WEB_DIST_DIR } from "./config/paths";
 import { BotManager } from "./core/BotManager";
 import { AgentService } from "./modules/agent";
-import { createMcpRouter } from "./modules/agent/mcpHttp";
+import { createMcpRouter, isBrowserNavigation } from "./modules/agent/mcpHttp";
 import { migrateLoginSecrets } from "./modules/alwaysOn/secrets";
 import { accounts } from "./modules/auth/accounts";
 import { migrateDiscordSecrets } from "./modules/discord/store";
@@ -81,7 +81,9 @@ async function main() {
   if (fs.existsSync(path.join(WEB_DIST_DIR, "index.html"))) {
     app.use(express.static(WEB_DIST_DIR));
     app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io") || req.path.startsWith("/mcp")) return next();
+      if (req.path.startsWith("/api") || req.path.startsWith("/socket.io")) return next();
+      // /mcp is both the MCP endpoint and a panel page; only browser navigations get the page.
+      if (req.path.startsWith("/mcp") && !isBrowserNavigation(req)) return next();
       res.sendFile(path.join(WEB_DIST_DIR, "index.html"));
     });
     log.info("Compiled panel found — serving statically");

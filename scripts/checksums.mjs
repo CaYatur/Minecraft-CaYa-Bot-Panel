@@ -11,9 +11,9 @@ if (!fs.existsSync(outDir)) {
   console.error(`No ${outDir} folder; build first.`);
   process.exit(1);
 }
-const files = fs.readdirSync(outDir).filter((name) => name.toLowerCase().endsWith(".exe"));
+const files = fs.readdirSync(outDir).filter((name) => /setup.*\.exe$/i.test(name));
 if (!files.length) {
-  console.error("No .exe found to checksum.");
+  console.error("No Setup .exe found to checksum.");
   process.exit(1);
 }
 const lines = files.map((name) => {

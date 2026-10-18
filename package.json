@@ -27,9 +27,10 @@
     "test:build-rules": "tsx scripts/build-unit.ts",
     "test:security": "tsx scripts/security-unit.ts",
     "test:packaging": "node scripts/packaging-check.mjs",
+    "test:ui": "tsx scripts/ui-unit.ts",
     "test:build": "node scripts/build-smoke.mjs",
     "test:baseline": "tsx scripts/baseline.mjs",
-    "test:all": "npm run test:auth && npm run test:security && npm run test:packaging && npm run test:platform && npm run test:movement && npm run test:build-rules && npm run test:baseline",
+    "test:all": "npm run test:auth && npm run test:security && npm run test:packaging && npm run test:ui && npm run test:platform && npm run test:movement && npm run test:build-rules && npm run test:baseline",
     "electron:dev": "electron .",
     "dist:win": "npm run build && node scripts/patch-nan-msvc.mjs && npx --no-install electron-rebuild -f --only canvas,gl && electron-builder --win nsis && node scripts/checksums.mjs && npm rebuild canvas && npm rebuild gl"
   },

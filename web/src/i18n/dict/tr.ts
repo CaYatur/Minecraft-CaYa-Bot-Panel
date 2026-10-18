@@ -3,9 +3,7 @@ import type { MessageTree } from "../types";
 export const tr: MessageTree = {
   app: {
     name: "Minecraft CaYa Bot Panel",
-    nameShort: "CaYa Bot Panel",
-    roadmap: "Yol haritası: TODO.md",
-    principleI1: "Sistem mesajları asla oyun sohbetine yazılmaz (İ1)."
+    nameShort: "CaYa Bot Panel"
   },
   secrets: {
     title: "Gizli bilgiler şifrelenmiyor.",

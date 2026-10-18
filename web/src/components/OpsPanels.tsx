@@ -1,25 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
+import { looksLikeDiscordWebhook, templateValid } from "../lib/validate";
 import type { StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
-
-/** Same rule as the server: only real Discord webhook endpoints. */
-export function looksLikeDiscordWebhook(raw: string): boolean {
-  try {
-    const url = new URL(raw.trim());
-    return (
-      url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (!url.port || url.port === "443") &&
-      ["discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"].includes(url.hostname.toLowerCase()) &&
-      /^\/api\/(v\d+\/)?webhooks\/\d{5,30}\/[A-Za-z0-9_-]{20,200}\/?$/.test(url.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
 
 const SNOWFLAKE = /^\d{15,22}$/;
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -278,16 +262,19 @@ export function LoginPluginCard({ botId }: { botId: string }) {
             onChange={(e) => setLoginDraft(e.target.value)}
             onBlur={() => {
               const next = loginDraft || status?.config?.loginPlugin?.loginTemplate || "";
-              if (next && !next.includes("{password}")) {
-                toast("error", t("ops.templateNeedsPassword"));
-                return;
-              }
+              if (!templateValid(next)) return; // shown inline below; not saved
               void patch({ loginTemplate: next });
             }}
-            aria-invalid={Boolean(loginDraft) && !loginDraft.includes("{password}")}
+            aria-invalid={!templateValid(loginDraft || status?.config?.loginPlugin?.loginTemplate || "")}
+            aria-describedby={`login-tpl-${botId}`}
             placeholder="/l {password}"
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
+            className={`rounded-lg border bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100 ${templateValid(loginDraft || status?.config?.loginPlugin?.loginTemplate || "") ? "border-zinc-700" : "border-red-500 ring-1 ring-red-500/60"}`}
           />
+          {!templateValid(loginDraft || status?.config?.loginPlugin?.loginTemplate || "") && (
+            <span id={`login-tpl-${botId}`} role="alert" className="text-xs text-red-300">
+              {t("ops.templateNeedsPassword")}
+            </span>
+          )}
         </label>
       )}
       {(registerDraft || status?.config?.loginPlugin?.registerTemplate) && (
@@ -298,16 +285,19 @@ export function LoginPluginCard({ botId }: { botId: string }) {
             onChange={(e) => setRegisterDraft(e.target.value)}
             onBlur={() => {
               const next = registerDraft || status?.config?.loginPlugin?.registerTemplate || "";
-              if (next && !next.includes("{password}")) {
-                toast("error", t("ops.templateNeedsPassword"));
-                return;
-              }
+              if (!templateValid(next)) return; // shown inline below; not saved
               void patch({ registerTemplate: next });
             }}
-            aria-invalid={Boolean(registerDraft) && !registerDraft.includes("{password}")}
+            aria-invalid={!templateValid(registerDraft || status?.config?.loginPlugin?.registerTemplate || "")}
+            aria-describedby={`register-tpl-${botId}`}
             placeholder="/register {password}"
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100"
+            className={`rounded-lg border bg-zinc-800 px-2 py-1.5 font-mono text-sm text-zinc-100 ${templateValid(registerDraft || status?.config?.loginPlugin?.registerTemplate || "") ? "border-zinc-700" : "border-red-500 ring-1 ring-red-500/60"}`}
           />
+          {!templateValid(registerDraft || status?.config?.loginPlugin?.registerTemplate || "") && (
+            <span id={`register-tpl-${botId}`} role="alert" className="text-xs text-red-300">
+              {t("ops.templateNeedsPassword")}
+            </span>
+          )}
         </label>
       )}
       <p className="text-xs text-zinc-500">{t("ops.loginTemplateHint")}</p>

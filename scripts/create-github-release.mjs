@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isReleaseAsset } from "./release-assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -25,7 +26,7 @@ const outDir = path.join(root, "dist-electron");
 const assets = fs.existsSync(outDir)
   ? fs
       .readdirSync(outDir)
-      .filter((f) => f.toLowerCase().endsWith(".exe") || f === "SHA256SUMS.txt")
+      .filter(isReleaseAsset)
       .map((f) => path.join(outDir, f))
   : [];
 
