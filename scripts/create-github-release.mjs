@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * create-github-release.mjs <version>
- * Uploads dist-electron/*.exe to GitHub release v<version>.
+ * Uploads the Setup exe and SHA256SUMS.txt from dist-electron/ to GitHub release v<version>.
  * Requires: gh CLI authenticated.
  */
 import { spawnSync } from "node:child_process";
@@ -25,7 +25,7 @@ const outDir = path.join(root, "dist-electron");
 const assets = fs.existsSync(outDir)
   ? fs
       .readdirSync(outDir)
-      .filter((f) => f.toLowerCase().endsWith(".exe"))
+      .filter((f) => f.toLowerCase().endsWith(".exe") || f === "SHA256SUMS.txt")
       .map((f) => path.join(outDir, f))
   : [];
 
@@ -34,7 +34,7 @@ const notes = [
   "",
   "## Windows",
   "- **Setup (NSIS):** kurulum sihirbazı",
-  "- **Portable:** kurulum gerektirmez",
+  "- **SHA256SUMS.txt:** kurulum dosyasının SHA256 özeti",
   "",
   "MIT License © CaYatur"
 ].join("\n");
