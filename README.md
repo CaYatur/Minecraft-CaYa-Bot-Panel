@@ -788,8 +788,12 @@ Minecraft-CaYa-Bot-Panel/
 | `npm run test:combat` | Run combat-focused checks |
 | `npm run test:full` | Run the broader behavior suite |
 | `npm run test:grok` | Run the extended smoke suite included in the repository |
+| `npm run test:movement` | Fall damage, parkour gap, door, look, and food rules. No server |
+| `npm run test:build-rules` | Placement, facing, scaffold, schematic, and weapon rules. No server |
+| `npm run test:build` | Checks that `npm run build` wrote `server/dist` and `web/dist` |
 | `npm run test:baseline` | Current-behavior contract, including chat, movement, inventory, and job queues. Needs the API and `npm run testserver` |
-| `npm run test:all` | Auth checks plus the baseline contract |
+| `npm run test:all` | Auth, movement rules, build rules, and the baseline contract |
+| GitHub Actions `tests` | On every push and pull request: typecheck, build, build smoke, then `test:all` against the compiled server and flying-squid |
 | `npm run test:full` / `test:grok` / `smoke` | Older scenario scripts. Not part of `test:all` |
 
 ---

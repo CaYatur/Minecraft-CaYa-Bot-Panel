@@ -392,6 +392,16 @@ async function main() {
         return dist2d(row.runtime.position, here) <= 3.5 && !row.tasks.current;
       }, 90_000);
       ok("goto-waypoint reached");
+      const cancelFrom = (await getBot(id1)).runtime.position;
+      const cancelTarget = { x: cancelFrom.x + 8, y: cancelFrom.y, z: cancelFrom.z };
+      await req("POST", `/bots/${id1}/action`, { type: "goto", ...cancelTarget, range: 1 });
+      await sleep(600);
+      await req("POST", `/bots/${id1}/action`, { type: "stop" });
+      await waitFor("stop clears the live goto", async () => {
+        const row = await getBot(id1);
+        return row?.status === "online" && !row.tasks?.current && dist2d(row.runtime.position, cancelTarget) > 3;
+      }, 8_000);
+      ok("stop cancels an in-progress goto");
 
       await req("POST", `/bots/${id2}/action`, { type: "follow", player: "BaseS_1", distance: 2 });
       await sleep(2500);

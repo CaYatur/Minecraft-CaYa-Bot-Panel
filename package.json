@@ -22,8 +22,11 @@
     "test:full": "node scripts/full-suite.mjs",
     "test:grok": "node scripts/grok-smoke-all.mjs",
     "test:auth": "tsx scripts/auth-unit.ts",
+    "test:movement": "tsx scripts/movement-unit.ts",
+    "test:build-rules": "tsx scripts/build-unit.ts",
+    "test:build": "node scripts/build-smoke.mjs",
     "test:baseline": "tsx scripts/baseline.mjs",
-    "test:all": "npm run test:auth && npm run test:baseline",
+    "test:all": "npm run test:auth && npm run test:movement && npm run test:build-rules && npm run test:baseline",
     "electron:dev": "electron .",
     "dist:win": "npm run build && electron-builder --win nsis portable"
   },
