@@ -8,7 +8,7 @@ The release after **1.0.4** is **3.0.5**. There was never a 2.x release and no 3
 
 The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation templates, the bot view and the Windows installer) was first marked 1.0.5. That tag was withdrawn before it was published, and the batch was released as 3.0.5 instead, because it changed how the panel is used far more than a patch release would suggest (sign-in, stored secrets, a desktop installer). Nothing was skipped: every change between 1.0.4 and 3.0.5 is listed under 3.0.5 below. From 3.0.5 on, versions move one step at a time again.
 
-## 3.0.6 — Unreleased
+## 3.0.6 — 2026-10-18
 
 Stabilization and bug-fix release.
 
@@ -22,13 +22,13 @@ Stabilization and bug-fix release.
 - Recovery for files locked by the earlier per-file (`/T`) ACL run: on every start the panel first resets the ACLs inside the data folder to inherit from it (`icacls /reset /T`), taking ownership first if the reset is refused, and only then hardens the folder. Manual recovery, run as the same Windows user with the panel closed:
 
   ```bat
-  icacls "%APPDATA%\Minecraft CaYa Bot Panel\data" /reset /T /C /Q
+  icacls "%APPDATA%\caya-bot-panel\data" /reset /T /C /Q
   ```
 
   If that reports "Access is denied", take ownership first, then repeat the reset:
 
   ```bat
-  takeown /F "%APPDATA%\Minecraft CaYa Bot Panel\data" /R /D Y
+  takeown /F "%APPDATA%\caya-bot-panel\data" /R /D Y
   ```
 - The REST API, Socket.IO and `/mcp` check the `Host` and `Origin` headers. Requests from other web pages (CSRF) and DNS-rebinding hosts are refused with 403. MCP clients and scripts that send no `Origin` keep working. Extra host names can be allowed with `CAYA_ALLOWED_HOSTS`.
 - Discord webhook calls, including **Test webhook**, only go to `https://discord.com/api/webhooks/…` (or `discordapp.com`). Other URLs are rejected before any request and redirects are not followed.
