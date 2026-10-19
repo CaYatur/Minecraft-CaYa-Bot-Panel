@@ -91,7 +91,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "artifactName": "${name}-${version}-Setup.${ext}"
     }
   },
   "allowScripts": {
