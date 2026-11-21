@@ -8,7 +8,10 @@ import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, looksLikePlayerChat, normalizeLoginTemplate, redactGameCommand, unpromptedLoginKind } from "../server/src/modules/alwaysOn/loginPrompt";
 import { antiAfkAllowed, antiAfkAllowsAction, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
-import { runWithLocalViewerServer, viewerSupport } from "../server/src/modules/view/session";
+import { renderSnapshot, runWithLocalViewerServer, viewerSupport } from "../server/src/modules/view/session";
+import { buildStateRemap, remapColumnJson, substituteBlockName } from "../server/src/modules/view/remap";
+import { patchedNodeWorkerFile, patchedPageFile } from "../server/src/modules/view/heightPatch";
+import mcDataLoader from "minecraft-data";
 import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
 import { ACTION_META } from "../server/src/modules/automation/RuleEngine";
 import { BUNDLED_TEMPLATES } from "../server/src/modules/templates/bundled";
@@ -16,6 +19,9 @@ import { validateTemplate } from "../server/src/modules/templates/schema";
 import { allowSend, escapeDiscordMentions, isAllowlisted, sayIsBlocked, shouldBridgeDiscord, shouldBridgeMinecraft } from "../server/src/modules/discord/logic";
 import { postWebhook } from "../server/src/modules/discord/hub";
 import { chatComponentToText } from "../server/src/utils/chatText";
+
+type McBlocks = { blocksByName: Record<string, { minStateId: number; maxStateId: number; defaultState: number } | undefined> };
+const mcData = (v: string) => (mcDataLoader as unknown as (v: string) => McBlocks)(v);
 
 let failures = 0;
 const ok = (name: string) => console.log(`  ok ${name}`);
@@ -56,12 +62,28 @@ function unit() {
   assert("custom command must keep the placeholder", (() => { try { normalizeLoginTemplate("/login hunter2"); return false; } catch { return normalizeLoginTemplate("/l {password}") === "/l {password}"; } })());
   {
     const newer = viewerSupport("26.1");
-    assert("viewer refuses a version without textures instead of alerting null", !newer.ok && newer.code === "viewer.version_unsupported" && newer.message.includes("26.1") && !newer.message.startsWith("null"), JSON.stringify(newer));
+    assert("viewer falls back to the newest textures for 26.1 instead of alerting null", newer.ok && newer.textures === "1.21.4" && newer.fallback === true && Boolean(newer.note?.includes("1.21.4")), JSON.stringify(newer));
+    const unknown = viewerSupport("99.9");
+    assert("viewer refuses a version it knows nothing about with a clear message", !unknown.ok && unknown.code === "viewer.version_unsupported" && unknown.message.includes("99.9") && !unknown.message.startsWith("null"), JSON.stringify(unknown));
     const mapped = viewerSupport("1.21.11");
     assert("viewer maps a newer 1.21 patch to the last 1.21 textures with a note", mapped.ok && mapped.textures === "1.21.4" && Boolean(mapped.note), JSON.stringify(mapped));
     const exact = viewerSupport("1.16.1");
     assert("viewer uses exact textures when it has them", exact.ok && exact.textures === "1.16.1" && !exact.note, JSON.stringify(exact));
     assert("viewer refuses an empty version", !viewerSupport("").ok);
+
+    const remap = buildStateRemap("26.1", "1.21.4");
+    const r26 = mcData("26.1");
+    const r214 = mcData("1.21.4");
+    const stairs = (data: typeof r26) => data.blocksByName.oak_stairs!;
+    // oak_stairs facing=east half=top shape=straight waterlogged=false: same property order in both versions
+    const offset = stairs(r26).maxStateId - stairs(r26).minStateId;
+    assert("26.1 block states are translated by name and properties", Boolean(remap) && remap!.blocks[r26.blocksByName.grass_block!.defaultState] === r214.blocksByName.grass_block!.defaultState && remap!.blocks[stairs(r26).minStateId + offset] === stairs(r214).minStateId + offset);
+    assert("new 26.1 blocks fall back to the closest older block", Boolean(remap) && remap!.blocks[r26.blocksByName.oak_shelf!.defaultState] === r214.blocksByName.oak_planks!.defaultState && substituteBlockName("copper_lantern", (n) => n === "lantern") === "lantern");
+    const column = { toJson: () => JSON.stringify({ sections: [JSON.stringify({ data: JSON.stringify({ type: "indirect", palette: [0, r26.blocksByName.diamond_block!.defaultState] }) }), JSON.stringify({ data: JSON.stringify({ type: "single", value: r26.blocksByName.dirt!.defaultState }) })], biomes: [] }) };
+    const out = JSON.parse(remapColumnJson(column, remap!));
+    const first = JSON.parse(JSON.parse(out.sections[0]).data);
+    const second = JSON.parse(JSON.parse(out.sections[1]).data);
+    assert("chunk palettes are rewritten for the texture version", first.palette[1] === r214.blocksByName.diamond_block!.defaultState && second.value === r214.blocksByName.dirt!.defaultState, JSON.stringify([first, second]));
   }
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
   assert("anti-afk mode repeats one action", pickAntiAfkAction(() => 0.99, "look") === "look" && pickAntiAfkAction(() => 0.99, "mixed") === "jump");
@@ -144,6 +166,96 @@ async function viewerBind() {
   assert("3D viewer page binds to localhost", bound === "127.0.0.1", bound);
 }
 
+/** Issue #34: a 26.1 world (no 26.1 textures in prismarine-viewer) still renders with 1.21.4 textures. */
+async function pov26(groundY = 3) {
+  const { Vec3 } = require("vec3") as typeof import("vec3");
+  const Chunk = require("prismarine-chunk")("26.1");
+  const reg = mcData("26.1");
+  const cols = new Map<string, unknown>();
+  const colAt = (cx: number, cz: number) => {
+    const key = `${cx},${cz}`;
+    if (cols.has(key)) return cols.get(key);
+    const col = new Chunk({ minY: -64, worldHeight: 384 });
+    for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) {
+      for (let y = groundY - 3; y < groundY; y++) col.setBlockStateId(new Vec3(x, y, z), reg.blocksByName.dirt!.defaultState);
+      col.setBlockStateId(new Vec3(x, groundY, z), reg.blocksByName.grass_block!.defaultState);
+    }
+    // diamond wall north of the bot, mixed with a 26.1-only block (oak_shelf)
+    if (cx === 0 && cz === -1) for (let y = groundY + 1; y < groundY + 5; y++) for (let x = 4; x < 12; x++) col.setBlockStateId(new Vec3(x, y, 8), reg.blocksByName[x % 2 ? "diamond_block" : "oak_shelf"]!.defaultState);
+    cols.set(key, col);
+    return col;
+  };
+  const bot = {
+    version: "26.1",
+    entity: { position: new Vec3(8, groundY + 1, 8), yaw: 0, pitch: -0.2 },
+    world: { getColumnAt: async (p: { x: number; z: number }) => colAt(Math.floor(p.x / 16), Math.floor(p.z / 16)), raycast: () => null },
+    on() {},
+    removeListener() {}
+  };
+  const { createCanvas, loadImage } = require("canvas") as {
+    createCanvas(w: number, h: number): { getContext(kind: "2d"): { drawImage(img: unknown, x: number, y: number): void; getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } } };
+    loadImage(src: Buffer): Promise<{ width: number; height: number }>;
+  };
+  let cyan = 0;
+  let detail = "";
+  const shot = await renderSnapshot(bot as never, { width: 320, height: 180, viewDistance: 2 });
+  if (!shot.ok) detail = `${shot.code}: ${shot.message}`;
+  else {
+    const img = await loadImage(Buffer.from(shot.base64, "base64"));
+    const canvas = createCanvas(img.width, img.height);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, img.width, img.height).data;
+    cyan = 0;
+    for (let i = 0; i < data.length; i += 4) if (data[i]! < 140 && data[i + 1]! > 170 && data[i + 2]! > 160) cyan++;
+    detail = `${cyan} diamond-coloured pixels`;
+  }
+  assert(groundY < 0 ? "blocks below y=0 render (1.18+ height, flat worlds)" : "a 26.1 world renders with 1.21.4 textures and translated blocks", cyan >= 50, detail);
+}
+
+/** Issue #34: every 26.1 block state lands on a real 1.21.4 state, and a world full of them still renders. */
+async function allBlocks26() {
+  const { Vec3 } = require("vec3") as typeof import("vec3");
+  const Chunk = require("prismarine-chunk")("26.1");
+  const src = mcData("26.1") as McBlocks & { blocksArray: { name: string; minStateId: number; maxStateId: number; defaultState: number }[] };
+  const dst = mcData("1.21.4") as McBlocks & { blocksArray: { maxStateId: number }[] };
+  const remap = buildStateRemap("26.1", "1.21.4");
+  let maxDst = 0;
+  for (const b of dst.blocksArray) maxDst = Math.max(maxDst, b.maxStateId);
+  let outside = 0;
+  for (const b of src.blocksArray) for (let s = b.minStateId; s <= b.maxStateId; s++) {
+    const m = remap ? remap.blocks[s]! : -1;
+    if (!(m >= 0 && m <= maxDst)) outside++;
+  }
+  assert("every 26.1 block state maps to a 1.21.4 state", Boolean(remap) && outside === 0, `${outside} unmapped`);
+  const blocks = src.blocksArray.filter((b) => b.name !== "air");
+  const cols = new Map<string, unknown>();
+  const colAt = (cx: number, cz: number) => {
+    const key = `${cx},${cz}`;
+    if (cols.has(key)) return cols.get(key);
+    const col = new Chunk({ minY: -64, worldHeight: 384 });
+    for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) col.setBlockStateId(new Vec3(x, 0, z), src.blocksByName.grass_block!.defaultState);
+    // her bölümde 128 farklı blok (paletli kalsın diye); komşu chunk'larda en yüksek durum id'si
+    const alt = (cx + cz) & 1;
+    blocks.forEach((b, i) => {
+      const k = i % 128;
+      col.setBlockStateId(new Vec3(((k % 64) % 8) * 2, Math.floor(i / 128) * 16 + (k < 64 ? 2 : 9), Math.floor((k % 64) / 8) * 2), alt ? b.maxStateId : b.defaultState);
+    });
+    cols.set(key, col);
+    return col;
+  };
+  const bot = {
+    version: "26.1",
+    entity: { position: new Vec3(8, 20, 8), yaw: 0.6, pitch: -0.5 },
+    world: { getColumnAt: async (p: { x: number; z: number }) => colAt(Math.floor(p.x / 16), Math.floor(p.z / 16)) },
+    on() {},
+    removeListener() {}
+  };
+  const started = Date.now();
+  const shot = await renderSnapshot(bot as never, { width: 320, height: 180, viewDistance: 2 });
+  assert("a 26.1 world with every block renders without crashing", shot.ok && Date.now() - started < 11_000, shot.ok ? `${Date.now() - started} ms` : `${shot.code}: ${shot.message}`);
+}
+
 function glProbe() {
   let png: Buffer;
   try {
@@ -176,6 +288,15 @@ function glProbe() {
 void (async () => {
   unit();
   await viewerBind();
+  await pov26();
+  await pov26(-61);
+  const page = patchedPageFile("index.js");
+  const pageWorker = patchedPageFile("worker.js");
+  const nodeWorker = patchedNodeWorkerFile();
+  const read = (f: string | null) => (f ? require("fs").readFileSync(f, "utf8") as string : "");
+  assert("viewer page is patched for y<0 chunks and camera", Boolean(page) && read(page).includes("for(let i=-64;i<320;i+=16)") && !/if\(\w\.y>0&&\w&&\(\w\.target/.test(read(page)));
+  assert("viewer workers are patched for y<0 sections", Boolean(pageWorker) && Boolean(nodeWorker) && read(nodeWorker).includes(".minY||0"));
+  await allBlocks26();
   await glProbe();
   await webhook();
   if (failures) {
