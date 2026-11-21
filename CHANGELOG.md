@@ -8,6 +8,22 @@ The release after **1.0.4** is **3.0.5**. There was never a 2.x release and no 3
 
 The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation templates, the bot view and the Windows installer) was first marked 1.0.5. That tag was withdrawn before it was published, and the batch was released as 3.0.5 instead, because it changed how the panel is used far more than a patch release would suggest (sign-in, stored secrets, a desktop installer). Nothing was skipped: every change between 1.0.4 and 3.0.5 is listed under 3.0.5 below. From 3.0.5 on, versions move one step at a time again.
 
+## 3.0.7 — 2026-11-21
+
+Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
+
+### Fixes
+- **3D view on newer Minecraft versions.** A bot that joins as 26.x (for example through ViaVersion) no longer shows "null is not supported" and a blank blue screen. The viewer only has textures up to 1.21.4, so the panel now uses those textures and shows a short note. Blocks are translated by name and properties. Blocks that 1.21.4 does not have are drawn as the closest older block, a full block with no match is drawn as stone, and anything else is skipped. Versions the viewer cannot show at all get a clear message.
+- **3D view below y=0.** Blocks below y=0 and above y=255 are drawn, and the camera is placed for bots at any height, so flat worlds and underground bots no longer show an empty view.
+- POV snapshots wait for all chunks to finish drawing before the frame is taken.
+
+### Features
+- **Use the held item and click menus.** A bot can right-click its held item (for example a lobby compass), read the menu that opens (titles, custom names and lore), click a slot (left, right, shift and more), switch hotbar slots and close the menu. Available in the Inventory tab, over REST and Socket.IO, and as MCP tools: `get_open_window`, `use_held_item`, `select_hotbar_slot`, `click_window_slot`, `close_window`.
+- **Bulk actions on selected bots.** Every bot card on the Dashboard has a checkbox, and the "Actions for selected bots" bar runs start, stop, stop work, chat (`{bot}` becomes each bot's name), use held item, hotbar, menu slot click and close menu on all of them, with a result per bot. Also available as `POST /api/bots/bulk-action` and the `bulk_action` MCP tool.
+
+### Tests
+- New `npm run test:gui` against a lobby "Server Selector" menu on the test server, plus 26.1 viewer tests in `npm run test:platform`.
+
 ## 3.0.6 — 2026-10-18
 
 Stabilization and bug-fix release.
