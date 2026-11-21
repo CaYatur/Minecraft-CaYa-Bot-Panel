@@ -171,8 +171,8 @@ async function main() {
   const meta = await req("GET", "/rules/meta");
   assert("bundled templates are listed",
     Array.isArray(meta.templates) && meta.templates.includes("Auto farm") && meta.templates.includes("AFK fisher") &&
-    meta.templates.includes("Mob grinder guard") && meta.templates.includes("Auto eat and sleep") &&
-    Array.isArray(meta.blueprints) && meta.blueprints.length === 4);
+    meta.templates.includes("Mob grinder guard") && meta.templates.includes("Auto eat and sleep") && meta.templates.includes("Join game mode on spawn") &&
+    Array.isArray(meta.blueprints) && meta.blueprints.length === 5);
   const badImport = await req("POST", "/rules/import", { template: { schema: "nope", version: 1, name: "x", description: "", rules: [{ actions: [{ type: "eval" }] }] } }).then(() => null).catch((err) => err);
   assert("invalid template is rejected", badImport && badImport.status === 400, badImport && badImport.message);
   const imported = await req("POST", "/rules/import", { apply: true, template: await req("GET", "/rules/templates/auto-farm") });
