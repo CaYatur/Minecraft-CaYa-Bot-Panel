@@ -363,6 +363,12 @@ export interface BuildRuntime {
   activityMaterial?: string | null;
 }
 
+/** Sunucunun gönderdiği komut ağacından çıkan satırlar. null = henüz yok. */
+export interface ServerCommandList {
+  lines: string[];
+  truncated: boolean;
+}
+
 export interface BotSnapshot {
   config: BotConfig;
   status: BotStatus;
@@ -372,6 +378,7 @@ export interface BotSnapshot {
   inventory: InventorySnapshot | null;
   combat: CombatRuntime;
   build?: BuildRuntime;
+  serverCommands?: ServerCommandList | null;
 }
 
 export interface ChestMemory {

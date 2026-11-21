@@ -14,6 +14,7 @@ export const EV = {
   BOT_BUILD: "bot:build",
   BOT_FALL_GUARD: "bot:fallGuard",
   BOT_WINDOW: "bot:window",
+  BOT_SERVER_COMMANDS: "bot:serverCommands",
   PANEL_NOTIFY: "panel:notify",
   MCP_STATUS: "mcp:status",
   MCP_ACTIVITY: "mcp:activity",

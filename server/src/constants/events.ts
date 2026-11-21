@@ -19,6 +19,8 @@ export const EV = {
   BOT_FALL_GUARD: "bot:fallGuard",
   /** Issue #34 — açık GUI penceresi (sunucu seçici menüleri) */
   BOT_WINDOW: "bot:window",
+  /** Issue #34 — sunucunun declare_commands listesi */
+  BOT_SERVER_COMMANDS: "bot:serverCommands",
   PANEL_NOTIFY: "panel:notify",
   // Faz 18 — MCP / AI agent
   MCP_STATUS: "mcp:status",

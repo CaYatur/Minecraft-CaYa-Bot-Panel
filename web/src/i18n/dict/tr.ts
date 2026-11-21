@@ -1112,7 +1112,15 @@ export const tr: MessageTree = {
     whisperTag: "[fısıltı]",
     whisperTitle: "{name} — fısılda",
     botTag: "(bot)",
-    inputPlaceholder: "Sohbete yaz ( / ile komut )…"
+    inputPlaceholder: "Sohbete yaz ( / ile komut )…",
+    commandsTitle: "Sunucu komutları",
+    commandsSearch: "Komut ara…",
+    commandsEmptyOffline: "Bu sunucunun komutlarını görmek için botu bağla.",
+    commandsEmptyWaiting: "Sunucu komut listesini henüz göndermedi.",
+    commandsEmptyFilter: "Bu aramaya uyan komut yok.",
+    commandsCount: "{n} komut",
+    commandsTruncated: "Liste okunabilir kalsın diye kısaltıldı.",
+    commandsFill: "Komutu sohbet kutusuna yaz"
   },
   logs: {
     title: "Loglar",

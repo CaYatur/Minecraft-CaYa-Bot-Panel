@@ -9,6 +9,7 @@ import { classifyDisconnect } from "../modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, loginSendMode, passwordRepeat, redactGameCommand, unpromptedLoginKind } from "../modules/alwaysOn/loginPrompt";
 import { hasLoginSecret, readLoginSecret } from "../modules/alwaysOn/secrets";
 import { markSessionEnd, markSessionStart, uptimeFor } from "../modules/alwaysOn/uptime";
+import { flattenDeclarePacket } from "../modules/chat/commandTree";
 import {
   applyLearnedPrefix,
   extractNameDecor,
@@ -37,6 +38,7 @@ import type {
   BotSnapshot,
   BotStatus,
   ChatEntry,
+  ServerCommandList,
   InventorySnapshot,
   ServerProfile,
   TaskSummary
@@ -90,6 +92,8 @@ export class BotInstance extends EventEmitter {
   private pingCounter = 0;
   private lastInventory: InventorySnapshot | null = null;
   private windowTimer: NodeJS.Timeout | null = null;
+  /** Son declare_commands paketi. Yeni paket listeyi bütünüyle değiştirir. */
+  private serverCommandState: ServerCommandList | null = null;
   private invTimer: NodeJS.Timeout | null = null;
   private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
@@ -356,8 +360,14 @@ export class BotInstance extends EventEmitter {
       tasks: { current: this.tasks.currentSummary, queue: this.tasks.queueSummaries },
       inventory: this.lastInventory,
       combat: this.combat.getRuntime(),
-      build: this.build.getRuntime()
+      build: this.build.getRuntime(),
+      serverCommands: this.serverCommandState
     };
+  }
+
+  /** Sunucunun bu bota gönderdiği komut listesi. Paket gelmediyse null. */
+  serverCommandList(): ServerCommandList | null {
+    return this.serverCommandState;
   }
 
   /**
@@ -1134,7 +1144,28 @@ export class BotInstance extends EventEmitter {
     }
 
     this.bot = bot;
+    this.hookCommandTree(bot!);
     this.hookBotEvents(bot!);
+  }
+
+  /** declare_commands her geldiğinde listeyi baştan kurar. Paket spawn'dan önce de gelebilir. */
+  private hookCommandTree(bot: Bot) {
+    const client = (bot as unknown as { _client?: { on?: (event: string, cb: (packet: unknown) => void) => void } })._client;
+    client?.on?.("declare_commands", (packet: unknown) => {
+      try {
+        const next = flattenDeclarePacket(packet);
+        if (!next) return;
+        this.serverCommandState = next;
+        this.emit("serverCommands", { botId: this.config.id, commands: next });
+      } catch (err) {
+        this.log.warn("Komut ağacı okunamadı", err instanceof Error ? err.message : String(err));
+      }
+    });
+  }
+
+  private clearServerCommands() {
+    this.serverCommandState = null;
+    this.emit("serverCommands", { botId: this.config.id, commands: null });
   }
 
   private hookBotEvents(bot: Bot) {
@@ -1531,8 +1562,9 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.windowTimer);
       this.windowTimer = null;
     }
-    // bağlantı kopunca panelde açık kalmış menü görünmesin
+    // bağlantı kopunca panelde açık kalmış menü ve eski komut listesi görünmesin
     this.emit("window", { botId: this.config.id, window: snapshotWindow(null) });
+    this.clearServerCommands();
     this.combat.detach();
     this.survival.detach();
     this.build.onDisconnect(); // freeze build state; auto-resume arms if enabled
