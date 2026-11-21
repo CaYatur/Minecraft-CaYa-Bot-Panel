@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Settings2, X } from "lucide-react";
 import { ItemPicker } from "../components/ItemPicker";
+import { GuiActionFields } from "../components/automation/GuiActionFields";
 import {
   AdvancedFlowBuilder,
   countFlowNodes,
@@ -94,6 +95,11 @@ type ActRow = {
   waypoint?: string;
   /** report_status: panel | chat | both */
   to?: string;
+  /** menü aksiyonları (issue #34) */
+  hotbar?: number | string;
+  slot?: number | string;
+  button?: string;
+  waitSeconds?: number | string;
 };
 
 const emptyCond = (): CondRow => ({ type: "task_idle" });
@@ -277,6 +283,7 @@ export function Automations() {
       if (item) trigger.item = item;
       trigger.threshold = threshold || 1;
     }
+    if (triggerType === "window_opened" && pattern.trim()) trigger.pattern = pattern.trim();
     if (triggerType === "task_done" || triggerType === "task_failed") {
       if (taskType) trigger.taskType = taskType;
     }
@@ -748,6 +755,7 @@ export function Automations() {
           )}
         </>
       )}
+      <GuiActionFields action={a} patch={(p) => onPatch(i, p as Partial<ActRow>)} t={t} fieldCls={fieldCls} />
       <button type="button" onClick={onRemove} className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-950/40">
         <X className="h-3.5 w-3.5" />
       </button>
@@ -766,6 +774,7 @@ export function Automations() {
     if (triggerType === "player_far") return `${player || "@follow"} > ${radius}m`;
     if (triggerType === "follow_out_of_range")
       return t("automations.summaryFollowOut", { radius });
+    if (triggerType === "window_opened") return pattern.trim() ? `${triggerType} "${pattern.trim()}"` : triggerType;
     return triggerType;
   };
 
@@ -1202,6 +1211,18 @@ export function Automations() {
               )}
               {triggerType === "follow_out_of_range" && (
                 <p className="sm:col-span-2 text-[10px] text-zinc-500">{t("automations.followOutHint")}</p>
+              )}
+
+              {triggerType === "window_opened" && (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-zinc-400">{t("automations.gui.windowTitle")}</span>
+                  <input
+                    value={pattern}
+                    onChange={(e) => setPattern(e.target.value)}
+                    placeholder={t("automations.gui.phWindowTitle")}
+                    className={fieldCls}
+                  />
+                </label>
               )}
 
               {(triggerType === "task_done" || triggerType === "task_failed") && (

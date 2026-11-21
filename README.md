@@ -162,7 +162,7 @@ The project is designed around three principles:
 | **Server login** | `/login` or `/register` when the server asks, on every join, or on the first join, including a custom `{password}` command |
 | **Discord** | Optional death, disconnect, and task alerts, slash commands, and a two-way chat bridge |
 | **Templates** | Import, export, and bundled automation packs that stay off until you enable them |
-| **Menus & item use** | Right-click the held item (for example a lobby compass), read the menu that opens with custom names and lore, click a slot, switch hotbar slots and close the menu — from the Inventory tab, REST, Socket.IO or MCP |
+| **Menus & item use** | Right-click the held item (for example a lobby compass), read the menu that opens with custom names and lore, click a slot, switch hotbar slots and close the menu — from the Inventory tab, REST, Socket.IO or MCP. Menu items can be clicked by name or lore text instead of a slot number. Automation rules have the same actions plus a `window_opened` trigger, and the **Join game mode on spawn** blueprint joins a mode automatically after each spawn |
 | **Actions for selected bots** | Checkboxes on Dashboard bot cards and an action bar: start, stop, stop work, chat (`{bot}` placeholder), use held item, hotbar, menu slot click and close menu on many bots at once, with a result per bot. Also `POST /api/bots/bulk-action` and the `bulk_action` MCP tool |
 | **Bot view** | A localhost 3D page, a still first-person PNG, and a text description of what is in view. 26.x bots render with 1.21.4 textures and nearest-block stand-ins; y -64 to 319 is drawn |
 | **Persistence** | Server profiles, bot profiles, rules, waypoints, schematic indexes and logs stored locally as JSON/files |
@@ -268,7 +268,7 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 | Farming | `till_soil`, `plant_crops`, `harvest_crops`, `farm_cycle` (continuous farm loop with chest deposit) |
 | Crafting & survival | `craft_item`, `preview_craft_plan`, `cook_food`, `eat_now`, `sleep_in_bed`, `wake_up` |
 | Inventory / storage | `deposit_items`, `withdraw_items`, `give_item_to_player`, `drop_items`, `equip_item` |
-| Menus & item use | `use_held_item` (right-click, e.g. a lobby compass), `select_hotbar_slot`, `click_window_slot`, `close_window` (inventory category). See [docs/gui-and-bulk.md](docs/gui-and-bulk.md) |
+| Menus & item use | `use_held_item` (right-click, e.g. a lobby compass), `select_hotbar_slot`, `click_window_slot`, `close_window` (inventory category). `click_window_slot` accepts `slot` or `item` (menu item name or lore text) and `waitWindowMs`. See [docs/gui-and-bulk.md](docs/gui-and-bulk.md) |
 | Building (creative) | `plan_structure`, `build_structure`, `build_schematic`, `stop_build` |
 | Defense | `set_self_defense`, `protect_player`, `flee`, `stop_combat` |
 | Attack *(off by default)* | `attack_player`, `clear_hostile_mobs` |
@@ -738,6 +738,8 @@ Discord is optional. A webhook can report death, disconnect, reconnect, mention,
 ### Menus and bulk actions
 
 The **Inventory** tab shows the open menu (custom names, lore, slot numbers) with a **Use held item** button and left, right or shift clicks. On the **Dashboard**, tick the checkbox on each bot card and use **Actions for selected bots** to run the same action on all of them. REST: `GET /api/bots/:id/window`, `POST /api/bots/:id/gui`, `POST /api/bots/bulk-action`. Details: [docs/gui-and-bulk.md](docs/gui-and-bulk.md).
+
+In **Automations** the **Menu** category has the actions *Use held item*, *Select hotbar slot*, *Click menu slot* (by item name or lore, or by slot number) and *Close menu*, and the **Window opened** trigger fires when a menu whose title contains the given text opens. The **Join game mode on spawn** blueprint waits 2 s after `bot_spawned`, right-clicks the compass and clicks the mode by name. Rules with these actions can also be created over MCP with `template_import` (`apply: true`).
 
 ---
 

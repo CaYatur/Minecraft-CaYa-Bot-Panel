@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import { ItemPicker } from "../ItemPicker";
+import { GuiActionFields } from "./GuiActionFields";
 
 export type FlowAction = Record<string, unknown> & { type: string };
 export type BotCondition = Record<string, unknown> & { type: string };
@@ -736,6 +737,7 @@ function ActionEditor({ action, onChange, ...props }: Omit<Props, "value" | "onC
         )}
         {["clear-mobs", "clear_mobs", "hunt", "collect_drops"].includes(type) && <input type="number" value={Number(action.radius ?? 16)} onChange={(event) => patch({ radius: Number(event.target.value) })} className={`${fieldCls} w-24`} />}
         {type === "wait" && <input type="number" value={Number(action.seconds ?? 1)} onChange={(event) => patch({ seconds: Number(event.target.value) })} className={`${fieldCls} w-24`} />}
+        <GuiActionFields action={action} patch={patch} t={props.t} fieldCls={fieldCls} />
         {type === "drop_items" && (
           <>
             <ItemPicker

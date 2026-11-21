@@ -185,6 +185,44 @@ async function main() {
     assert("bulk stop", stopped.okCount === 2);
     await waitFor("both bots stopped", async () => (await Promise.all(ids.map(getBot))).every((x) => x?.status === "stopped"), 15_000);
     ok("both bots stopped");
+
+    // otomasyon (issue #34): doğunca pusulayı kullan → menüde "OneBlock" adlı eşyaya tıkla.
+    // Kural MCP template_import ile kurulur; böylece şablon doğrulaması ve MCP yolu da sınanır.
+    const template = {
+      schema: "caya.automation-template",
+      version: 1,
+      name: "GuiTest join on spawn",
+      description: "gui-test",
+      rules: [
+        {
+          name: "GuiTest join on spawn",
+          enabled: true,
+          botIds: [b],
+          trigger: { type: "bot_spawned" },
+          conditions: [],
+          actions: [
+            { type: "send_chat", text: "/give CaYaGui2 compass 1" },
+            { type: "wait", seconds: 2 },
+            { type: "use_held_item", item: "compass", waitSeconds: 4 },
+            { type: "click_window_slot", item: "oneblock", button: "left", waitSeconds: 4 }
+          ],
+          cooldownMs: 30_000
+        }
+      ]
+    };
+    const imported = await mcp("template_import", { template, apply: true });
+    assert("MCP template_import accepts the menu actions", !imported.isError && /"created"/.test(imported.text), imported.text);
+    const ruleIds = imported.isError ? [] : JSON.parse(imported.text).created ?? [];
+    const badTpl = await mcp("template_import", { template: { ...template, rules: [{ ...template.rules[0], actions: [{ type: "click_window_slotz" }] }] } });
+    assert("template_import still refuses unknown actions", badTpl.isError && /unknown action/.test(badTpl.text), badTpl.text);
+    try {
+      await req("POST", `/bots/${b}/start`);
+      await waitFor("automation joined OneBlock on spawn", () => chatHas(b, "[selector] joined OneBlock"), 45_000);
+      ok("spawn automation used the compass and joined OneBlock by item name");
+    } finally {
+      for (const id of ruleIds) await req("DELETE", `/rules/${id}`).catch(() => {});
+      await req("POST", `/bots/${b}/stop`).catch(() => {});
+    }
   } finally {
     await req("PATCH", "/mcp/settings", { enabled: mcpBefore.enabled, mcpServer: { enabled: mcpBefore.mcpServer.enabled } }).catch(() => {});
     for (const id of ids) await req("DELETE", `/bots/${id}`).catch(() => {});

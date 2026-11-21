@@ -69,6 +69,26 @@ export const BUNDLED_TEMPLATES: TemplateFile[] = [
         actions: [{ type: "sleep" }]
       }
     ]
+  },
+  {
+    schema: TEMPLATE_SCHEMA,
+    version: TEMPLATE_VERSION,
+    name: "Join game mode on spawn",
+    description:
+      "For lobby servers: after spawning, right-click the compass (server selector) and click a game mode in the menu. Change the item and the mode name (text on the menu item) to match your server.",
+    rules: [
+      {
+        name: "Join game mode on spawn",
+        enabled: false,
+        trigger: { type: "bot_spawned" },
+        conditions: [],
+        actions: [
+          { type: "wait", seconds: 2 },
+          { type: "use_held_item", item: "compass", waitSeconds: 3 },
+          { type: "click_window_slot", item: "Survival", button: "left", waitSeconds: 3 }
+        ]
+      }
+    ]
   }
 ];
 

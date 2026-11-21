@@ -90,19 +90,21 @@ export const GUI_TOOLS: AgentToolDef[] = [
     description:
       "Click a slot of the currently open GUI window (server selector, shop, chest...). button: left (default, picks an option in most server menus), " +
       "right, shift (quick-move), shift-right, middle, drop, drop-stack, number (swap with hotbar slot given in `hotbar`). " +
-      "Get slot numbers from get_open_window. Pass windowId to make sure the same menu is still open. " +
+      "Get slot numbers from get_open_window, or pass `item` (part of the item's name, custom name or lore, e.g. 'OneBlock') instead of `slot`. " +
+      "Pass windowId to make sure the same menu is still open; waitWindowMs waits for a menu that is still opening. " +
       "Returns what changed: same (menu still open, maybe updated), new-window (another menu opened) or closed (e.g. the server sent you to the chosen game mode).",
     category: "inventory",
     inputSchema: {
       type: "object",
       properties: {
-        slot: { type: "number", description: "window slot number (0-based)" },
+        slot: { type: "number", description: "window slot number (0-based). Give slot or item" },
+        item: { type: "string", description: "click the menu slot whose name, custom name or lore contains this text (used when slot is not given)" },
+        waitWindowMs: { type: "number", description: "if no menu is open yet, wait this long for one (0-15000 ms, default 0)" },
         button: { type: "string", enum: CLICK_BUTTONS, description: "click type (default left)" },
         hotbar: { type: "number", description: "hotbar 0-8, only for button=number" },
         windowId: { type: "number", description: "expected window id from get_open_window (optional safety check)" },
         waitMs: { type: "number", description: "wait for the server's reaction (0-10000 ms, default 1200)" }
-      },
-      required: ["slot"]
+      }
     },
     async execute(ctx, args) {
       online(ctx);

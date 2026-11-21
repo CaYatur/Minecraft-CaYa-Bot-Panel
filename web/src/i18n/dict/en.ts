@@ -385,7 +385,8 @@ export const en: MessageTree = {
       bot_spawned: "Bot spawned",
       bot_died: "Bot died",
       task_done: "Task completed successfully",
-      task_failed: "Task failed"
+      task_failed: "Task failed",
+      window_opened: "Menu (GUI window) opened"
     },
     triggerHints: {
       chat: "match=command → !come Steve (arg0). Public / does not reach the bot. startsWith, contains, exact, regex.",
@@ -395,7 +396,8 @@ export const en: MessageTree = {
         "While following, fires if target goes beyond followDistance+4 (or radius). THEN: unfollow / abort_all",
       item_count: "e.g. oak_log < 16 → collect",
       item_gained: "After collect/loot/craft count rises. empty item = any; threshold = min increase",
-      task_done: "collect-wood, mine, craft… empty taskType = all"
+      task_done: "collect-wood, mine, craft… empty taskType = all",
+      window_opened: "Fires when a server menu opens. Optional text in the menu title. Vars: {windowTitle}, {windowId}"
     },
     conditions: {
       online: "Bot online",
@@ -464,7 +466,11 @@ export const en: MessageTree = {
       till: "Till soil (farmland)",
       plant: "Plant crops",
       harvest: "Harvest mature crops (+replant)",
-      "farm-cycle": "Farm loop (till→harvest→plant→deposit)"
+      "farm-cycle": "Farm loop (till→harvest→plant→deposit)",
+      use_held_item: "Use held item (right-click)",
+      select_hotbar_slot: "Select hotbar slot",
+      click_window_slot: "Click menu slot",
+      close_window: "Close menu"
     },
     actionCategories: {
       Sohbet: "Chat",
@@ -477,7 +483,21 @@ export const en: MessageTree = {
       Combat: "Combat",
       Survival: "Survival",
       Work: "Work",
-      Farm: "Farm"
+      Farm: "Farm",
+      Menu: "Menu"
+    },
+    gui: {
+      holdItem: "Item to hold (optional)",
+      phHoldItem: "compass",
+      hotbarOptional: "Hotbar 0-8 (optional)",
+      hotbar: "Hotbar slot 0-8",
+      waitSeconds: "Wait for menu (s)",
+      menuItem: "Menu item name or lore",
+      phMenuItem: "OneBlock",
+      slotOptional: "or slot number",
+      button: "Click",
+      windowTitle: "Menu title contains (optional)",
+      phWindowTitle: "Server Selector"
     },
     varsTitle: "Context variables — use in next action as {name}",
     varsForTrigger: "For this trigger",
@@ -545,7 +565,10 @@ export const en: MessageTree = {
       taskError: "Task error message",
       taskProgressDone: "Completed task progress",
       taskProgressTotal: "Total task progress",
-      taskProgressLabel: "Task progress label"
+      taskProgressLabel: "Task progress label",
+      windowTitle: "Title of the menu that opened",
+      windowId: "Window id of the menu",
+      windowType: "Window type (e.g. minecraft:generic_9x3)"
     },
     howToUseVars:
       "LIVE vars ({task},{label},{busy}…) fill on EVERY trigger including chat. Example: IF task_busy THEN “Task: {task} — {label}” ELSE “No running task.”",

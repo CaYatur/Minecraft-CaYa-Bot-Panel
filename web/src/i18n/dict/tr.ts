@@ -385,7 +385,8 @@ export const tr: MessageTree = {
       bot_spawned: "Bot spawn oldu",
       bot_died: "Bot öldü",
       task_done: "Görev başarıyla bitti",
-      task_failed: "Görev başarısız"
+      task_failed: "Görev başarısız",
+      window_opened: "Menü (GUI penceresi) açıldı"
     },
     triggerHints: {
       chat: "match=command → !gel Steve (arg0). Herkese açık sohbette / çalışmaz. startsWith, contains, exact, regex.",
@@ -395,7 +396,8 @@ export const tr: MessageTree = {
         "Takip varken hedef followDistance+4 (veya radius) dışına çıkınca. THEN: unfollow / abort_all",
       item_count: "Örn. oak_log < 16 → topla",
       item_gained: "Toplama/loot/craft sonrası adet artınca. item boş = herhangi; threshold = min artım",
-      task_done: "collect-wood, mine, craft… taskType boş = hepsi"
+      task_done: "collect-wood, mine, craft… taskType boş = hepsi",
+      window_opened: "Sunucu menüsü açılınca çalışır. Menü başlığında geçen metin isteğe bağlı. Değişkenler: {windowTitle}, {windowId}"
     },
     conditions: {
       online: "Bot online",
@@ -464,7 +466,11 @@ export const tr: MessageTree = {
       till: "Toprağı çapala (farmland)",
       plant: "Ekin ek",
       harvest: "Olgun ekinleri hasat et (+yeniden ekim)",
-      "farm-cycle": "Tarım döngüsü (çapala→hasat→ek→depola)"
+      "farm-cycle": "Tarım döngüsü (çapala→hasat→ek→depola)",
+      use_held_item: "Eldeki eşyayı kullan (sağ tık)",
+      select_hotbar_slot: "Hotbar slotu seç",
+      click_window_slot: "Menü slotuna tıkla",
+      close_window: "Menüyü kapat"
     },
     actionCategories: {
       Sohbet: "Sohbet",
@@ -477,7 +483,21 @@ export const tr: MessageTree = {
       Combat: "Dövüş",
       Survival: "Yaşam",
       Work: "İş",
-      Farm: "Tarım"
+      Farm: "Tarım",
+      Menu: "Menü"
+    },
+    gui: {
+      holdItem: "Ele alınacak eşya (isteğe bağlı)",
+      phHoldItem: "compass",
+      hotbarOptional: "Hotbar 0-8 (isteğe bağlı)",
+      hotbar: "Hotbar slotu 0-8",
+      waitSeconds: "Menüyü bekle (sn)",
+      menuItem: "Menü eşyasının adı veya açıklaması",
+      phMenuItem: "OneBlock",
+      slotOptional: "veya slot numarası",
+      button: "Tıklama",
+      windowTitle: "Menü başlığında geçen (isteğe bağlı)",
+      phWindowTitle: "Server Selector"
     },
     varsTitle: "Context değişkenleri — sonraki aksiyonda {isim} olarak kullan",
     varsForTrigger: "Bu tetikleyicide",
@@ -544,7 +564,10 @@ export const tr: MessageTree = {
       taskError: "Görev hata mesajı",
       taskProgressDone: "Görev tamamlanan ilerleme",
       taskProgressTotal: "Görev toplam ilerleme",
-      taskProgressLabel: "Görev ilerleme etiketi"
+      taskProgressLabel: "Görev ilerleme etiketi",
+      windowTitle: "Açılan menünün başlığı",
+      windowId: "Menünün pencere id'si",
+      windowType: "Pencere tipi (ör. minecraft:generic_9x3)"
     },
     howToUseVars:
       "CANLI değişkenler ({task},{label},{busy}…) HER tetikte dolar (sohbet dahil). Örn: IF görev çalışıyor THEN “Görev: {task} — {label}” ELSE “çalışan görev yok.”",
