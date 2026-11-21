@@ -10,7 +10,7 @@ The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation
 
 ## 3.0.7 — 2026-11-21
 
-Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34), reported by @xvvvyyy.
+Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
 
 ### Fixes
 - **3D view on newer Minecraft versions.** A bot that joins as 26.x (for example through ViaVersion) no longer shows "null is not supported" and a blank blue screen. The viewer only has textures up to 1.21.4, so the panel now uses those textures and shows a short note. Blocks are translated by name and properties. Blocks that 1.21.4 does not have are drawn as the closest older block, a full block with no match is drawn as stone, and anything else is skipped. Versions the viewer cannot show at all get a clear message.
