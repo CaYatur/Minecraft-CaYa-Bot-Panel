@@ -264,6 +264,44 @@ export interface InventorySnapshot {
   ts: number;
 }
 
+/** Issue #34 — açık GUI penceresi (server/src/modules/window aynası) */
+export interface WindowItem {
+  slot: number;
+  name: string;
+  displayName: string;
+  customName: string | null;
+  lore: string[];
+  count: number;
+  section: "container" | "inventory" | "hotbar";
+}
+
+export interface WindowSnapshot {
+  open: boolean;
+  id: number | null;
+  type: string | null;
+  title: string;
+  containerSlots: number;
+  totalSlots: number;
+  slots: (WindowItem | null)[];
+  heldQuickBar: number;
+  heldItem: string | null;
+  ts: number;
+}
+
+export interface BulkBotResult {
+  botId: string;
+  username: string;
+  ok: boolean;
+  message: string;
+}
+
+export interface BulkResult {
+  action: string;
+  okCount: number;
+  failCount: number;
+  results: BulkBotResult[];
+}
+
 export interface BuildPlacedBlock {
   name: string;
   x: number;

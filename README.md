@@ -259,13 +259,14 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 
 | Category | Tools |
 |---|---|
-| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all`, `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status` |
+| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `get_open_window`, `bulk_action` (each action also needs its own category), `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all`, `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status` |
 | Chat | `send_chat`, `send_whisper` |
 | Movement | `goto`, `goto_player`, `follow_player`, `goto_waypoint`, `interact_block` |
 | Gathering | `collect_wood`, `mine_ore`, `collect_blocks`, `collect_drops`, `hunt_animals` |
 | Farming | `till_soil`, `plant_crops`, `harvest_crops`, `farm_cycle` (continuous farm loop with chest deposit) |
 | Crafting & survival | `craft_item`, `preview_craft_plan`, `cook_food`, `eat_now`, `sleep_in_bed`, `wake_up` |
 | Inventory / storage | `deposit_items`, `withdraw_items`, `give_item_to_player`, `drop_items`, `equip_item` |
+| Menus & item use | `use_held_item` (right-click, e.g. a lobby compass), `select_hotbar_slot`, `click_window_slot`, `close_window` (inventory category). See [docs/gui-and-bulk.md](docs/gui-and-bulk.md) |
 | Building (creative) | `plan_structure`, `build_structure`, `build_schematic`, `stop_build` |
 | Defense | `set_self_defense`, `protect_player`, `flee`, `stop_combat` |
 | Attack *(off by default)* | `attack_player`, `clear_hostile_mobs` |

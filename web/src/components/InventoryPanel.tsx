@@ -4,6 +4,7 @@ import { useI18n } from "../i18n/useI18n";
 import { api } from "../lib/api";
 import type { InventoryItem, StateSnapshot } from "../lib/types";
 import { useAppStore } from "../stores/useAppStore";
+import { WindowPanel } from "./WindowPanel";
 const OFFHAND = 45;
 const MAIN = Array.from({ length: 27 }, (_, i) => 9 + i);
 const HOTBAR = Array.from({ length: 9 }, (_, i) => 36 + i);
@@ -46,6 +47,15 @@ export function InventoryPanel({ botId }: { botId: string }) {
     try {
       await api.post(`/api/bots/${botId}/inventory`, body);
       if (okMsg) toast("success", okMsg);
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // sağ tık sonucu (açılan menü) WindowPanel'e socket ile gelir
+  const gui = async (body: Record<string, unknown>) => {
+    try {
+      await api.post(`/api/bots/${botId}/gui`, body);
     } catch (e) {
       toast("error", e instanceof Error ? e.message : String(e));
     }
@@ -125,6 +135,9 @@ export function InventoryPanel({ botId }: { botId: string }) {
           {t("inventory.offlineHint", { detail: inv ? t("inventory.offlineWithInv") : t("inventory.offlineNoInv") })}
         </div>
       )}
+
+      {/* sunucu menüleri + eldeki eşyayı kullan (issue #34) */}
+      <WindowPanel botId={botId} />
 
       <div className="flex flex-wrap items-start gap-6">
         {/* zırh + offhand */}
@@ -236,6 +249,13 @@ export function InventoryPanel({ botId }: { botId: string }) {
                 {selected !== null && selected >= 36 && selected <= 44 && (
                   <ActionBtn onClick={() => op({ op: "setHotbar", quickBar: selected - 36 })}>
                     <MousePointerClick className="h-3.5 w-3.5" /> {t("inventory.setHotbarButton")}
+                  </ActionBtn>
+                )}
+                {selected !== null && selected >= 9 && selected <= 44 && (
+                  <ActionBtn
+                    onClick={() => void gui(selected >= 36 ? { op: "use", hotbar: selected - 36 } : { op: "use", item: selectedItem.name })}
+                  >
+                    <MousePointerClick className="h-3.5 w-3.5" /> {t("gui.useThis")}
                   </ActionBtn>
                 )}
                 <ActionBtn onClick={() => op({ op: "toss", slot: selected, amount: 1 })}>{t("inventory.tossOneButton")}</ActionBtn>

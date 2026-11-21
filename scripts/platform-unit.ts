@@ -16,6 +16,8 @@ import { validateTemplate } from "../server/src/modules/templates/schema";
 import { allowSend, escapeDiscordMentions, isAllowlisted, sayIsBlocked, shouldBridgeDiscord, shouldBridgeMinecraft } from "../server/src/modules/discord/logic";
 import { postWebhook } from "../server/src/modules/discord/hub";
 import { chatComponentToText } from "../server/src/utils/chatText";
+import { clickButton, describeWindow, clampHotbar, snapshotWindow } from "../server/src/modules/window";
+import { BULK_ACTION_CATEGORY, BULK_ACTIONS, bulkActionType, normalizeBulkIds } from "../server/src/modules/bulk";
 
 let failures = 0;
 const ok = (name: string) => console.log(`  ok ${name}`);
@@ -54,6 +56,20 @@ function unit() {
   assert("register can take one password", loginPluginCommand("register", "secret", 1) === "/register secret" && loginPluginCommand("register", "secret", 2) === "/register secret secret");
   assert("custom login command uses the placeholder", loginPluginCommand("login", "secret", 1, "/l {password}") === "/l secret");
   assert("custom command must keep the placeholder", (() => { try { normalizeLoginTemplate("/login hunter2"); return false; } catch { return normalizeLoginTemplate("/l {password}") === "/l {password}"; } })());
+  {
+    const throws = (fn: () => unknown) => { try { fn(); return false; } catch { return true; } };
+    assert("GUI click types map and unknown ones are refused", clickButton(undefined) === "left" && clickButton("SHIFT") === "shift" && throws(() => clickButton("double")));
+    assert("hotbar stays 0-8", clampHotbar(0) === 0 && clampHotbar("8") === 8 && throws(() => clampHotbar(9)) && throws(() => clampHotbar(-1)) && throws(() => clampHotbar(1.5)));
+    const closed = snapshotWindow(null);
+    assert("no bot means no open window", !closed.open && closed.slots.length === 0 && /No window is open/.test(describeWindow(closed)));
+    const text = describeWindow({
+      open: true, id: 7, type: "minecraft:generic_9x3", title: "Server Selector", containerSlots: 27, totalSlots: 63, heldQuickBar: 0, heldItem: "compass", ts: 0,
+      slots: [null, { slot: 1, name: "grass_block", displayName: "Grass Block", customName: "OneBlock", lore: ["Click to join"], count: 1, section: "container" }, { slot: 40, name: "compass", displayName: "Compass", customName: null, lore: [], count: 1, section: "hotbar" }]
+    });
+    assert("window description lists menu slots with custom names and hides player rows", text.includes('slot 1 [container]: "OneBlock" (grass_block) ×1 — Click to join') && !text.includes("slot 40"), text);
+    assert("bulk ids are de-duplicated and capped", normalizeBulkIds(["a", "a", " b "]).join(",") === "a,b" && normalizeBulkIds("a, b c").length === 3 && throws(() => normalizeBulkIds([])) && throws(() => normalizeBulkIds(Array.from({ length: 101 }, (_, i) => `id${i}`))));
+    assert("bulk actions are known and the raw task action is panel-only", bulkActionType("Use-Item") === "use-item" && throws(() => bulkActionType("nuke")) && BULK_ACTIONS.every((a) => a in BULK_ACTION_CATEGORY) && BULK_ACTION_CATEGORY.task === null);
+  }
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
   assert("anti-afk mode repeats one action", pickAntiAfkAction(() => 0.99, "look") === "look" && pickAntiAfkAction(() => 0.99, "mixed") === "jump");
   assert("anti-afk interval stays between 5s and 10min", clampAntiAfkInterval(1000) === 5_000 && clampAntiAfkInterval(9_000_000) === 600_000 && clampAntiAfkInterval(12_000) === 12_000);

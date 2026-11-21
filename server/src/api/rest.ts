@@ -33,6 +33,8 @@ import { deleteUserTemplate, getTemplate, listTemplates, saveUserTemplate } from
 import { describeBot, renderSnapshot, startView, stopView, touchView, viewStatus } from "../modules/view/session";
 import type { AgentService } from "../modules/agent";
 import { runInventoryOp } from "../modules/inventory";
+import { runGuiOp } from "../modules/window";
+import { BULK_ACTIONS, runBulkAction } from "../modules/bulk";
 import { logHub } from "../utils/logger";
 
 type Handler = (req: Request, res: Response) => void | Promise<void>;
@@ -313,6 +315,22 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
     })
   );
 
+  // ---- seçili botlara toplu işlem (issue #34) ---------------------------------------
+  r.get(
+    "/bots/bulk-action",
+    h((_req, res) => {
+      res.json({ actions: BULK_ACTIONS });
+    })
+  );
+  r.post(
+    "/bots/bulk-action",
+    h(async (req, res) => {
+      const { ids, action } = req.body ?? {};
+      const input = action && typeof action === "object" ? action : req.body ?? {};
+      res.json(await runBulkAction(manager, ids, input));
+    })
+  );
+
   r.post(
     "/bots/:id/chat",
     h((req, res) => {
@@ -387,6 +405,26 @@ export function createRestRouter(manager: BotManager, supportedVersions: string[
         throw new PanelError(`Inventory action failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       res.json({ ok: true });
+    })
+  );
+
+  // ---- GUI pencereleri + eldeki eşyayı kullanma (issue #34) -------------------------
+  r.get(
+    "/bots/:id/window",
+    h((req, res) => {
+      res.json(manager.mustGet(req.params.id!).windowSnapshot());
+    })
+  );
+  r.post(
+    "/bots/:id/gui",
+    h(async (req, res) => {
+      const inst = manager.mustGet(req.params.id!);
+      try {
+        res.json(await runGuiOp(inst, req.body ?? {}));
+      } catch (err) {
+        if (err instanceof PanelError) throw err;
+        throw new PanelError(`GUI action failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     })
   );
 
