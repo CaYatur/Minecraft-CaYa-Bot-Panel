@@ -20,9 +20,11 @@ Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-
 ### Features
 - **Use the held item and click menus.** A bot can right-click its held item (for example a lobby compass), read the menu that opens (titles, custom names and lore), click a slot (left, right, shift and more), switch hotbar slots and close the menu. Available in the Inventory tab, over REST and Socket.IO, and as MCP tools: `get_open_window`, `use_held_item`, `select_hotbar_slot`, `click_window_slot`, `close_window`.
 - **Bulk actions on selected bots.** Every bot card on the Dashboard has a checkbox, and the "Actions for selected bots" bar runs start, stop, stop work, chat (`{bot}` becomes each bot's name), use held item, hotbar, menu slot click and close menu on all of them, with a result per bot. Also available as `POST /api/bots/bulk-action` and the `bulk_action` MCP tool.
+- **Menu actions in automations.** Rules can use the held item, select a hotbar slot, click a menu slot and close the menu. A slot can be clicked by item name or lore text instead of a number, and the click waits for the menu to open. The REST, Socket.IO and MCP `click_window_slot` accept the same `item` and `waitWindowMs` options.
+- **Window opened trigger** that fires when a menu whose title contains a given text opens, and a **Join game mode on spawn** blueprint (spawn, wait, use compass, click the mode by name). Rules with menu actions can be imported over MCP with `template_import`.
 
 ### Tests
-- New `npm run test:gui` against a lobby "Server Selector" menu on the test server, plus 26.1 viewer tests in `npm run test:platform`.
+- New `npm run test:gui` against a lobby "Server Selector" menu on the test server, including a spawn automation that joins a mode, plus 26.1 viewer tests in `npm run test:platform` and unit tests for the menu actions.
 
 ## 3.0.6 — 2026-10-18
 

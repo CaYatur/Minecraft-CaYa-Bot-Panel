@@ -39,7 +39,26 @@ Socket clients can send the same body as `bot:gui` with `{ botId, op, ... }`. Wh
 | `click_window_slot` | inventory | Clicks a slot and reports `same`, `new-window` or `closed` |
 | `close_window` | inventory | Closes the menu |
 
-A typical agent flow is `use_held_item {item:"compass"}`, then read the slots, then `click_window_slot {slot: 13}`, then `get_recent_chat`.
+A typical agent flow is `use_held_item {item:"compass"}`, then read the slots, then `click_window_slot {slot: 13}` (or `click_window_slot {item: "Lifesteal"}`), then `get_recent_chat`.
+
+`click_window_slot` (REST `POST /api/bots/:id/gui` with `op: "click"`, Socket.IO and MCP) takes either `slot` or `item`. `item` is matched against the menu items' custom name, display name and item id: an exact match wins, then a name that contains the text, then lore that contains it. Only the menu's own slots are searched, not the player inventory rows. If no menu is open yet, `waitWindowMs` (up to 15000) waits for one to open.
+
+## Automation
+
+The rule editor (simple and advanced) has a **Menu** action category. The actions reuse the same GUI code, so the hunter-mode lock and errors are the same as above.
+
+| Action | Fields | What it does |
+|---|---|---|
+| `use_held_item` | `item` (optional, picks that hotbar item), `hotbar` (optional 0-8), `waitSeconds` (default 2) | Right-clicks the held item and waits for a menu. With `requireWindow: true` the rule fails if no menu opens |
+| `select_hotbar_slot` | `slot` (0-8) | Switches the hotbar slot |
+| `click_window_slot` | `item` (name or lore text) or `slot`, `button` (`left`, `right`, `shift`), `waitSeconds` (default 3) | Waits for a menu if none is open, then clicks the matching slot. The rule fails if nothing matches |
+| `close_window` | none | Closes the open menu |
+
+Text fields accept `{variables}`. The **Window opened** trigger (`window_opened`) fires once per new menu. Its `pattern` is matched as text contained in the title, case-insensitive, and the rule gets `{windowTitle}`, `{windowId}` and `{windowType}`.
+
+The **Join game mode on spawn** blueprint (disabled when imported) runs on `bot_spawned`: wait 2 s, `use_held_item` with `compass`, then `click_window_slot` with `Survival`. Change the item and the mode name to match your server. `bot_spawned` also fires after a respawn or a server switch; if the bot has no compass there, the rule just fails and logs it.
+
+MCP has no separate rule-editing tool. Create these rules with `template_import` and `apply: true`. Templates are checked against the action catalog, so the menu actions are accepted and unknown action types are refused.
 
 ## Bulk actions for selected bots
 
@@ -57,4 +76,4 @@ The MCP tool `bulk_action` takes `bots` (usernames or ids, or `["*"]` for every 
 
 ## Test server
 
-`test-server/server-selector.cjs` adds a small server selector to the flying-squid test server. Right-clicking a compass opens "Server Selector", with OneBlock in slot 11, Lifesteal in 13 and Survival in 15. Picking one closes the menu and writes `[selector] joined <mode>` in chat. `npm run test:gui` (part of `npm run test:all`) drives this through REST, the bulk endpoint and MCP.
+`test-server/server-selector.cjs` adds a small server selector to the flying-squid test server. Right-clicking a compass opens "Server Selector", with OneBlock in slot 11, Lifesteal in 13 and Survival in 15. Picking one closes the menu and writes `[selector] joined <mode>` in chat. `npm run test:gui` (part of `npm run test:all`) drives this through REST, the bulk endpoint and MCP, and checks that a spawn automation imported over MCP uses the compass and joins OneBlock by item name.

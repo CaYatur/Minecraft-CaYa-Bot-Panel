@@ -264,6 +264,10 @@ export function clickButton(value: unknown): ClickButton {
 
 export interface ClickInput {
   slot?: unknown;
+  /** slot yerine: menüdeki eşyanın adı / özel adı / lore parçası (ör. "OneBlock") */
+  item?: unknown;
+  /** menü henüz açık değilse açılmasını bu kadar bekle (ms, varsayılan 0) */
+  waitWindowMs?: unknown;
   button?: unknown;
   /** "number" tıklaması için hedef hotbar (0-8) */
   hotbar?: unknown;
@@ -279,14 +283,49 @@ export interface ClickResult {
   changed: "same" | "closed" | "new-window";
 }
 
+/** Menüde metne göre slot bulur: önce tam ad eşleşmesi, sonra ad veya lore içinde geçen. */
+export function findWindowSlot(snap: WindowSnapshot, query: unknown, sections: WindowItem["section"][] = ["container"]): WindowItem | null {
+  const q = String(query ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
+  if (!q) return null;
+  const items = snap.slots.filter((it): it is WindowItem => Boolean(it) && sections.includes(it!.section));
+  const names = (it: WindowItem) => [it.customName ?? "", it.displayName, it.name, it.name.replace(/_/g, " ")].map((n) => n.toLowerCase());
+  return (
+    items.find((it) => names(it).includes(q)) ??
+    items.find((it) => names(it).some((n) => n.includes(q))) ??
+    items.find((it) => it.lore.some((line) => line.toLowerCase().includes(q))) ??
+    null
+  );
+}
+
+function clampMs(value: unknown, fallback: number, max: number): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  return Math.max(0, Math.min(max, Math.floor(Number(value) || 0)));
+}
+
 export async function clickWindowSlot(bot: Bot | null | undefined, online: boolean, input: ClickInput): Promise<ClickResult> {
   const b = requireBot(bot, online);
+  const openWait = clampMs(input.waitWindowMs, 0, 15_000);
+  if (!currentWindow(b) && openWait > 0) await waitForWindow(b, openWait);
   const win = currentWindow(b);
-  if (!win) throw new PanelError("No GUI window is open. Use the held item (right-click) first.");
+  if (!win) throw new PanelError(openWait > 0 ? `No GUI window opened within ${openWait} ms.` : "No GUI window is open. Use the held item (right-click) first.");
   if (input.windowId !== undefined && input.windowId !== null && input.windowId !== "" && Number(input.windowId) !== win.id) {
     throw new PanelError(`Window ${String(input.windowId)} is no longer open (current window id ${win.id}).`);
   }
-  const slot = Number(input.slot);
+  const bySlot = input.slot !== undefined && input.slot !== null && input.slot !== "";
+  let slot = Number(input.slot);
+  if (!bySlot) {
+    const query = typeof input.item === "string" ? input.item.trim() : "";
+    if (!query) throw new PanelError("Give a slot number or the item name to click.");
+    // menü eşyaları pencere açıldıktan hemen sonra gelir; kısa bir süre tekrar bak
+    const deadline = Date.now() + Math.max(1_500, openWait);
+    let hit = findWindowSlot(snapshotWindow(b), query);
+    while (!hit && Date.now() < deadline && currentWindow(b) === win) {
+      await sleep(100);
+      hit = findWindowSlot(snapshotWindow(b), query);
+    }
+    if (!hit) throw new PanelError(`No menu slot matches "${query}" in "${snapshotWindow(b).title || "the open window"}".`);
+    slot = hit.slot;
+  }
   const total = Math.max(win.inventoryEnd ?? win.slots.length, win.slots.length);
   if (!Number.isInteger(slot) || slot < 0 || slot >= total) throw new PanelError(`Slot must be 0-${total - 1} for this window.`);
   const button = clickButton(input.button);

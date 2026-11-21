@@ -5,6 +5,7 @@ import { newId, type TaskSummary } from "../../types";
 import { findBlueprint, RULE_BLUEPRINTS, type RuleBlueprint } from "./blueprints";
 import { enqueueFish, enqueueSleep } from "./extraActions";
 import { notifyCustom } from "../discord/hub";
+import { runGuiOp, type GuiOpInput, type WindowSnapshot } from "../window";
 import {
   defaultConditionGroup,
   newFlowNodeId,
@@ -65,7 +66,9 @@ export type TriggerType =
   | "player_left"
   | "inventory_full"
   | "task_done"
-  | "task_failed";
+  | "task_failed"
+  /** sunucu menüsü (GUI penceresi) açıldı; pattern = başlıkta geçen metin */
+  | "window_opened";
 
 export interface RuleTrigger {
   type: TriggerType;
@@ -182,6 +185,8 @@ export class RuleEngine {
   private knownPlayers = new Map<string, Set<string>>(); // botId -> names
   /** item_gained: botId -> itemName -> last count */
   private itemSnapshots = new Map<string, Map<string, number>>();
+  /** window_opened: botId -> son açık pencere id'si (aynı menü tekrar tetiklemesin) */
+  private openWindows = new Map<string, number>();
   /** ruleId:botId -> çalışan gelişmiş akış sayısı */
   private activeRuns = new Map<string, number>();
   /** Her bot for aktif otomasyon akışlarını topluca geçersiz kılan nesil sayacı. */
@@ -374,6 +379,27 @@ export class RuleEngine {
       }
     }
     this.knownPlayers.set(botId, next);
+  }
+
+  /** BotInstance "window" yayını: yalnızca yeni açılan pencere tetikler, slot güncellemeleri tetiklemez */
+  onWindow(botId: string, snap: Pick<WindowSnapshot, "open" | "id" | "title" | "type">) {
+    if (!snap.open || snap.id == null) {
+      this.openWindows.delete(botId);
+      return;
+    }
+    if (this.openWindows.get(botId) === snap.id) return;
+    this.openWindows.set(botId, snap.id);
+    const title = snap.title ?? "";
+    this.fireMatching(
+      botId,
+      "window_opened",
+      { windowTitle: title, windowId: String(snap.id), windowType: String(snap.type ?? "") },
+      (rule) => {
+        if (rule.trigger.type !== "window_opened") return false;
+        const want = (rule.trigger.pattern ?? "").trim().toLowerCase();
+        return !want || title.toLowerCase().includes(want);
+      }
+    );
   }
 
   onInventoryFull(botId: string) {
@@ -1352,6 +1378,21 @@ export class RuleEngine {
       this.manager.cancelAllWork(botId, "automation stop_tasks");
       return;
     }
+    // ---- Issue #34: eldeki eşya ve sunucu menüleri (pencere modülüyle aynı yol, hunter kilidi dahil)
+    const gui = guiActionInput(type, action, ctx);
+    if (gui) {
+      const res = await runGuiOp(inst, gui);
+      if (res.op === "use") {
+        if (action.requireWindow === true && !res.result.openedWindow && !res.result.window.open) {
+          throw new Error(`No menu opened after using ${res.result.used ?? "the empty hand"}.`);
+        }
+        log.info(`${inst.config.username}: used ${res.result.used ?? "empty hand"}${res.result.window.open ? ` → "${res.result.window.title}"` : ""}`);
+      } else if (res.op === "click") {
+        const c = res.result;
+        log.info(`${inst.config.username}: clicked slot ${c.clicked.slot} (${c.clicked.item ?? "empty"}) → ${c.changed}`);
+      }
+      return;
+    }
     if (type === "eat") {
       inst.survival.enqueueEatNow();
       return;
@@ -1732,6 +1773,42 @@ function interpolateValue(value: string, ctx: AutomationContext): string {
   });
 }
 
+/** saniye alanını (waitSeconds) ms'ye çevirir; waitWindowMs verilmişse o geçerli */
+function waitMsOf(action: RuleAction, ctx: Record<string, string>, fallbackSeconds: number): number {
+  if (action.waitWindowMs !== undefined && action.waitWindowMs !== "") return Number(interpolate(String(action.waitWindowMs), ctx)) || 0;
+  const raw = action.waitSeconds !== undefined && action.waitSeconds !== "" ? interpolate(String(action.waitSeconds), ctx) : String(fallbackSeconds);
+  const sec = Number(raw);
+  return Math.round((Number.isFinite(sec) ? Math.max(0, sec) : fallbackSeconds) * 1000);
+}
+
+/** Otomasyon GUI aksiyonlarını runGuiOp girdisine çevirir; GUI aksiyonu değilse null. */
+export function guiActionInput(type: string, action: RuleAction, ctx: Record<string, string> = {}): GuiOpInput | null {
+  const text = (v: unknown) => (v === undefined || v === null ? "" : interpolate(String(v), ctx).trim());
+  const opt = (v: unknown) => {
+    const t = text(v);
+    return t === "" ? undefined : t;
+  };
+  switch (type) {
+    case "use_held_item":
+      return { op: "use", hotbar: opt(action.hotbar), item: opt(action.item), waitWindowMs: waitMsOf(action, ctx, 2) };
+    case "select_hotbar_slot": {
+      const slot = opt(action.slot ?? action.hotbar);
+      if (slot === undefined) throw new Error("select_hotbar_slot needs a slot (0-8).");
+      return { op: "hotbar", hotbar: slot };
+    }
+    case "click_window_slot": {
+      const slot = opt(action.slot);
+      const item = opt(action.item);
+      if (slot === undefined && item === undefined) throw new Error("click_window_slot needs a slot number or an item name.");
+      return { op: "click", slot, item, button: opt(action.button) ?? "left", waitWindowMs: waitMsOf(action, ctx, 3) };
+    }
+    case "close_window":
+      return { op: "close" };
+    default:
+      return null;
+  }
+}
+
 function interpolate(s: string, ctx: Record<string, string>) {
   return interpolateValue(s, ctx);
 }
@@ -1988,7 +2065,13 @@ export const TRIGGER_META: Array<{ type: TriggerType; label: string; fields: str
     fields: ["taskType"],
     hint: "collect-wood, mine, craft, gather… empty taskType = all"
   },
-  { type: "task_failed", label: "Task failed", fields: ["taskType"] }
+  { type: "task_failed", label: "Task failed", fields: ["taskType"] },
+  {
+    type: "window_opened",
+    label: "Menu (GUI window) opened",
+    fields: ["pattern"],
+    hint: "pattern = text in the menu title (empty = any menu). Vars: {windowTitle}, {windowId}"
+  }
 ];
 
 export const CONDITION_META: Array<{
@@ -2048,6 +2131,22 @@ export const CONDITION_META: Array<{
 ];
 
 export const ACTION_META: Array<{ type: string; label: string; fields: string[]; hint?: string; category?: string }> = [
+  {
+    type: "use_held_item",
+    label: "Use held item (right-click)",
+    fields: ["item", "hotbar", "waitSeconds"],
+    hint: "item / hotbar (0-8) pick what to hold first (optional). Waits waitSeconds (default 2) for a menu",
+    category: "Menu"
+  },
+  { type: "select_hotbar_slot", label: "Select hotbar slot", fields: ["slot"], hint: "0-8, left to right", category: "Menu" },
+  {
+    type: "click_window_slot",
+    label: "Click menu slot",
+    fields: ["item", "slot", "button", "waitSeconds"],
+    hint: "item = text in the slot's name or lore (e.g. OneBlock), or a slot number. button left | right | shift. Waits waitSeconds (default 3) for the menu",
+    category: "Menu"
+  },
+  { type: "close_window", label: "Close menu", fields: [], category: "Menu" },
   { type: "send_chat", label: "Write to chat", fields: ["text"], category: "Chat" },
   { type: "panel_notify", label: "Panel notification", fields: ["message", "level"], category: "Chat" },
   { type: "discord_notify", label: "Discord notification", fields: ["message"], category: "Chat" },
@@ -2313,7 +2412,12 @@ export const CONTEXT_VARS_BY_TRIGGER: Record<string, ContextVarDoc[]> = {
   inventory_full: [],
   interval: [],
   bot_spawned: [],
-  bot_died: []
+  bot_died: [],
+  window_opened: [
+    { name: "windowTitle", desc: "Menu title" },
+    { name: "windowId", desc: "Window id" },
+    { name: "windowType", desc: "Window type" }
+  ]
 };
 
 export const CONTEXT_VARS_ALL: string[] = [

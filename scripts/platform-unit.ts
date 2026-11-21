@@ -19,7 +19,8 @@ import { validateTemplate } from "../server/src/modules/templates/schema";
 import { allowSend, escapeDiscordMentions, isAllowlisted, sayIsBlocked, shouldBridgeDiscord, shouldBridgeMinecraft } from "../server/src/modules/discord/logic";
 import { postWebhook } from "../server/src/modules/discord/hub";
 import { chatComponentToText } from "../server/src/utils/chatText";
-import { clickButton, describeWindow, clampHotbar, snapshotWindow } from "../server/src/modules/window";
+import { clickButton, describeWindow, clampHotbar, findWindowSlot, snapshotWindow } from "../server/src/modules/window";
+import { ACTION_META, TRIGGER_META, guiActionInput } from "../server/src/modules/automation/RuleEngine";
 import { BULK_ACTION_CATEGORY, BULK_ACTIONS, bulkActionType, normalizeBulkIds } from "../server/src/modules/bulk";
 
 type McBlocks = { blocksByName: Record<string, { minStateId: number; maxStateId: number; defaultState: number } | undefined> };
@@ -73,6 +74,24 @@ function unit() {
       slots: [null, { slot: 1, name: "grass_block", displayName: "Grass Block", customName: "OneBlock", lore: ["Click to join"], count: 1, section: "container" }, { slot: 40, name: "compass", displayName: "Compass", customName: null, lore: [], count: 1, section: "hotbar" }]
     });
     assert("window description lists menu slots with custom names and hides player rows", text.includes('slot 1 [container]: "OneBlock" (grass_block) ×1 — Click to join') && !text.includes("slot 40"), text);
+    const menu = {
+      open: true, id: 3, type: "minecraft:generic_9x3", title: "Server Selector", containerSlots: 27, totalSlots: 63, heldQuickBar: 0, heldItem: "compass", ts: 0,
+      slots: [
+        { slot: 11, name: "grass_block", displayName: "Grass Block", customName: "OneBlock", lore: ["Click to join OneBlock"], count: 1, section: "container" as const },
+        { slot: 15, name: "iron_pickaxe", displayName: "Iron Pickaxe", customName: "Survival", lore: ["Classic survival"], count: 1, section: "container" as const },
+        { slot: 40, name: "compass", displayName: "Compass", customName: null, lore: [], count: 1, section: "hotbar" as const }
+      ]
+    };
+    assert("menu slot is found by custom name, item id and lore", findWindowSlot(menu, "oneblock")?.slot === 11 && findWindowSlot(menu, "iron pickaxe")?.slot === 15 && findWindowSlot(menu, "classic")?.slot === 15);
+    assert("menu search ignores the player's own rows and unknown text", findWindowSlot(menu, "compass") === null && findWindowSlot(menu, "skyblock") === null);
+    const use = guiActionInput("use_held_item", { type: "use_held_item", item: "{arg0}", hotbar: "" }, { arg0: "compass" });
+    assert("automation use_held_item maps to the GUI op with {var} and a 2 s menu wait", use?.op === "use" && use.item === "compass" && use.hotbar === undefined && use.waitWindowMs === 2000, JSON.stringify(use));
+    const click = guiActionInput("click_window_slot", { type: "click_window_slot", item: "OneBlock", button: "right", waitSeconds: 1.5 });
+    assert("automation click_window_slot by item name", click?.op === "click" && click.item === "OneBlock" && click.slot === undefined && click.button === "right" && click.waitWindowMs === 1500, JSON.stringify(click));
+    assert("automation click_window_slot by slot defaults to left and 3 s", (() => { const c = guiActionInput("click_window_slot", { type: "click_window_slot", slot: 13 }); return c?.slot === "13" && c.button === "left" && c.waitWindowMs === 3000; })());
+    assert("automation GUI actions refuse missing targets", throws(() => guiActionInput("click_window_slot", { type: "click_window_slot" })) && throws(() => guiActionInput("select_hotbar_slot", { type: "select_hotbar_slot" })));
+    assert("non-GUI actions are left to the rule engine", guiActionInput("send_chat", { type: "send_chat" }) === null && guiActionInput("close_window", { type: "close_window" })?.op === "close");
+    assert("automation catalog lists the menu actions and the window_opened trigger", ["use_held_item", "select_hotbar_slot", "click_window_slot", "close_window"].every((type) => ACTION_META.some((m) => m.type === type && m.category === "Menu")) && TRIGGER_META.some((m) => m.type === "window_opened"));
     assert("bulk ids are de-duplicated and capped", normalizeBulkIds(["a", "a", " b "]).join(",") === "a,b" && normalizeBulkIds("a, b c").length === 3 && throws(() => normalizeBulkIds([])) && throws(() => normalizeBulkIds(Array.from({ length: 101 }, (_, i) => `id${i}`))));
     assert("bulk actions are known and the raw task action is panel-only", bulkActionType("Use-Item") === "use-item" && throws(() => bulkActionType("nuke")) && BULK_ACTIONS.every((a) => a in BULK_ACTION_CATEGORY) && BULK_ACTION_CATEGORY.task === null);
     const newer = viewerSupport("26.1");

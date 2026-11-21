@@ -526,6 +526,9 @@ export class BotManager extends EventEmitter {
     });
     inst.on("tabPlayers", (p: { botId: string; names: string[] }) => this.rules.onTabPlayers(p.botId, p.names));
     inst.on("inventoryFull", (p: { botId: string }) => this.rules.onInventoryFull(p.botId));
+    inst.on("window", (p: { botId: string; window: { open: boolean; id: number | null; title: string; type: string | null } }) =>
+      this.rules.onWindow(p.botId, p.window)
+    );
     inst.on(
       "taskEvent",
       (p: {
