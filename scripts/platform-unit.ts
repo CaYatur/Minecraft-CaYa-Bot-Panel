@@ -8,7 +8,7 @@ import { classifyDisconnect } from "../server/src/modules/alwaysOn/classify";
 import { detectLoginPrompt, loginPluginCommand, looksLikePlayerChat, normalizeLoginTemplate, redactGameCommand, unpromptedLoginKind } from "../server/src/modules/alwaysOn/loginPrompt";
 import { antiAfkAllowed, antiAfkAllowsAction, clampAntiAfkHold, clampAntiAfkInterval, clampAutostartDelaySec, pickAntiAfkAction } from "../server/src/modules/alwaysOn/antiAfk";
 import { describeScene, inViewCone } from "../server/src/modules/view/describe";
-import { runWithLocalViewerServer } from "../server/src/modules/view/session";
+import { runWithLocalViewerServer, viewerSupport } from "../server/src/modules/view/session";
 import { renderProbePng } from "../server/src/modules/view/headlessCanvas";
 import { ACTION_META } from "../server/src/modules/automation/RuleEngine";
 import { BUNDLED_TEMPLATES } from "../server/src/modules/templates/bundled";
@@ -54,6 +54,15 @@ function unit() {
   assert("register can take one password", loginPluginCommand("register", "secret", 1) === "/register secret" && loginPluginCommand("register", "secret", 2) === "/register secret secret");
   assert("custom login command uses the placeholder", loginPluginCommand("login", "secret", 1, "/l {password}") === "/l secret");
   assert("custom command must keep the placeholder", (() => { try { normalizeLoginTemplate("/login hunter2"); return false; } catch { return normalizeLoginTemplate("/l {password}") === "/l {password}"; } })());
+  {
+    const newer = viewerSupport("26.1");
+    assert("viewer refuses a version without textures instead of alerting null", !newer.ok && newer.code === "viewer.version_unsupported" && newer.message.includes("26.1") && !newer.message.startsWith("null"), JSON.stringify(newer));
+    const mapped = viewerSupport("1.21.11");
+    assert("viewer maps a newer 1.21 patch to the last 1.21 textures with a note", mapped.ok && mapped.textures === "1.21.4" && Boolean(mapped.note), JSON.stringify(mapped));
+    const exact = viewerSupport("1.16.1");
+    assert("viewer uses exact textures when it has them", exact.ok && exact.textures === "1.16.1" && !exact.note, JSON.stringify(exact));
+    assert("viewer refuses an empty version", !viewerSupport("").ok);
+  }
   assert("anti-afk waits for an idle grounded bot", antiAfkAllowed({ enabled: true, taskRunning: false, onGround: true }) && !antiAfkAllowed({ enabled: true, taskRunning: true, onGround: true }));
   assert("anti-afk mode repeats one action", pickAntiAfkAction(() => 0.99, "look") === "look" && pickAntiAfkAction(() => 0.99, "mixed") === "jump");
   assert("anti-afk interval stays between 5s and 10min", clampAntiAfkInterval(1000) === 5_000 && clampAntiAfkInterval(9_000_000) === 600_000 && clampAntiAfkInterval(12_000) === 12_000);

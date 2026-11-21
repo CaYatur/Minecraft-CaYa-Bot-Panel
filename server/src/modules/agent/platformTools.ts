@@ -6,7 +6,7 @@ import { discordPublicState, notifyCustom, recentBridgeLines, updateDiscordSetti
 import { validateTemplate, templateFromRules } from "../templates/schema";
 import { deleteUserTemplate, getTemplate, listTemplates, saveUserTemplate } from "../templates/store";
 import { ACTION_META } from "../automation/RuleEngine";
-import { describeBot, renderSnapshot, startView, stopView, viewStatus } from "../view/session";
+import { describeBot, renderSnapshot, startView, stopView, viewerSupport, viewStatus } from "../view/session";
 
 function str(args: Record<string, unknown>, key: string, fallback = ""): string {
   const value = args[key];
@@ -374,11 +374,12 @@ export const PLATFORM_TOOLS: AgentToolDef[] = [
   },
   {
     name: "bot_view_status",
-    description: "Whether the panel 3D page is running. MCP vision uses bot_view_screenshot, not this page.",
+    description: "Whether the panel 3D page is running, and whether this bot's Minecraft version can be drawn at all (support.ok=false with viewer.version_unsupported means bot_view_screenshot and the 3D page will refuse; use bot_view_describe instead). MCP vision uses bot_view_screenshot, not this page.",
     category: "info",
     inputSchema: { type: "object", properties: {} },
     async execute(ctx) {
-      return json(viewStatus(ctx.inst.config.id));
+      const version = ctx.inst.bot?.version ?? null;
+      return json({ ...viewStatus(ctx.inst.config.id), version, support: version ? viewerSupport(version) : null });
     }
   }
 ];

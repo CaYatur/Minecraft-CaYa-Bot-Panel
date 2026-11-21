@@ -23,7 +23,54 @@ const sessions = new Map<string, LiveSession>();
 /** Starts in progress, so two clicks (or panel + MCP) cannot open two ports for one bot. */
 const starting = new Map<string, Promise<StartResult>>();
 
-type StartResult = { ok: true; url: string; port: number } | { ok: false; code: string; message: string };
+type StartResult = { ok: true; url: string; port: number; textures?: string; note?: string } | { ok: false; code: string; message: string };
+
+type ViewerSupport = { ok: true; textures: string; note?: string } | { ok: false; code: string; message: string };
+
+/**
+ * prismarine-viewer only ships textures and block states for a fixed list of
+ * versions. For anything outside that list its page calls
+ * window.alert(`${null} is not supported`) and keeps a light-blue empty scene
+ * (issue #34). Check the version here, before a port or a page is opened.
+ */
+export function viewerSupport(mcVersion: string | null | undefined): ViewerSupport {
+  const version = String(mcVersion ?? "").trim();
+  let getVersion: ((v: string) => string | null) | undefined;
+  let supported: string[] = [];
+  let pkgVersion = "?";
+  try {
+    const mod = nodeRequire("prismarine-viewer/viewer/lib/version.js") as { getVersion?: (v: string) => string | null; supportedVersions?: string[] };
+    getVersion = mod.getVersion;
+    supported = Array.isArray(mod.supportedVersions) ? mod.supportedVersions.map(String) : [];
+    pkgVersion = String((nodeRequire("prismarine-viewer/package.json") as { version?: string }).version ?? "?");
+  } catch {
+    getVersion = undefined;
+  }
+  if (!getVersion) {
+    return { ok: false, code: "viewer.unavailable", message: "The built-in 3D viewer failed to load. The text POV description still works." };
+  }
+  if (!version) return { ok: false, code: "viewer.version", message: "This bot has no Minecraft version yet." };
+  const textures = getVersion(version);
+  if (!textures) {
+    const newest = supported[supported.length - 1] ?? "?";
+    const oldest = supported[0] ?? "?";
+    return {
+      ok: false,
+      code: "viewer.version_unsupported",
+      message:
+        `The 3D viewer cannot show Minecraft ${version}. Its built-in viewer (prismarine-viewer ${pkgVersion}) only has textures for ${oldest} to ${newest}, ` +
+        `so the page would stay light blue with "null is not supported". The bot itself works normally on ${version}; use Describe view for a text description.`
+    };
+  }
+  if (textures !== version) {
+    return {
+      ok: true,
+      textures,
+      note: `Minecraft ${version} is drawn with ${textures} textures. Blocks added after ${textures} can look wrong or missing.`
+    };
+  }
+  return { ok: true, textures };
+}
 
 /** The 3D viewer renders on the CPU; keep it off weak or busy machines. */
 export const VIEWER_MIN_FREE_MB = 512;
@@ -109,10 +156,15 @@ export function startView(botId: string, bot: Bot, version: string): Promise<Sta
 
 async function startViewNow(botId: string, bot: Bot, version: string): Promise<StartResult> {
   if (!version) return { ok: false, code: "viewer.version", message: "This bot has no Minecraft version yet." };
+  // The page receives bot.version (the version actually negotiated), not the
+  // server profile value, which can be "auto".
+  const support = viewerSupport(bot.version || version);
+  if (!support.ok) return support;
+  const extra = { textures: support.textures, ...(support.note ? { note: support.note } : {}) };
   const existing = sessions.get(botId);
   if (existing && existing.bot === bot) {
     existing.lastSeen = Date.now();
-    return { ok: true, url: `http://127.0.0.1:${existing.port}`, port: existing.port };
+    return { ok: true, url: `http://127.0.0.1:${existing.port}`, port: existing.port, ...extra };
   }
   const resources = viewerResourceCheck({ replacing: Boolean(existing) });
   if (!resources.ok) return resources;
@@ -168,8 +220,8 @@ async function startViewNow(botId: string, bot: Bot, version: string): Promise<S
       }
     }
   });
-  log.info(`Viewer started for ${botId} on 127.0.0.1:${port}`);
-  return { ok: true, url: `http://127.0.0.1:${port}`, port };
+  log.info(`Viewer started for ${botId} on 127.0.0.1:${port} (textures ${support.textures})`);
+  return { ok: true, url: `http://127.0.0.1:${port}`, port, ...extra };
 }
 
 export function describeBot(bot: Bot, input: { yaw?: number; pitch?: number; fov?: number; radius?: number; applyLook?: boolean }): ReturnType<typeof describeScene> {
@@ -245,6 +297,8 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
   if (!bot.entity?.position || !bot.world) {
     return { ok: false, code: "viewer.offline", message: "The bot is not in a world yet, so no POV frame was rendered." };
   }
+  const support = viewerSupport(bot.version);
+  if (!support.ok) return support;
   let canvas: HeadlessSurface | undefined;
   let renderer: { dispose(): void; render(scene: unknown, camera: unknown): void; setSize(w: number, h: number, updateStyle: boolean): void } | undefined;
   let worldView: { init(pos: unknown): Promise<void>; removeListenersFromBot?(bot: Bot): void } | undefined;
