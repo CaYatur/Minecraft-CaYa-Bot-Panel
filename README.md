@@ -154,7 +154,7 @@ The project is designed around three principles:
 | **Recursive crafting** | Recipe dependency planning, raw-material acquisition, crafting-table use, furnace chains and storage withdrawal |
 | **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes — deposits are verified (chest-full is reported honestly) and a specific chest can be targeted by coordinates |
 | **Schematic building** | `.schem`, `.schematic`, `.litematic` and `.caya.json`, rotation, mirroring, material planning, partial building and scaffold cleanup |
-| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 87 tools, trust system, persistent memory, autopilot |
+| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 93 tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
 | **Localization** | English, Turkish and automatic locale detection |
 | **Microsoft accounts** | Device-code sign-in for online-mode servers, a local token cache, and per-bot offline or Microsoft login |
@@ -162,20 +162,22 @@ The project is designed around three principles:
 | **Server login** | `/login` or `/register` when the server asks, on every join, or on the first join, including a custom `{password}` command |
 | **Discord** | Optional death, disconnect, and task alerts, slash commands, and a two-way chat bridge |
 | **Templates** | Import, export, and bundled automation packs that stay off until you enable them |
-| **Bot view** | A localhost 3D page, a still first-person PNG, and a text description of what is in view |
+| **Menus & item use** | Right-click the held item (for example a lobby compass), read the menu that opens with custom names and lore, click a slot, switch hotbar slots and close the menu — from the Inventory tab, REST, Socket.IO or MCP |
+| **Actions for selected bots** | Checkboxes on Dashboard bot cards and an action bar: start, stop, stop work, chat (`{bot}` placeholder), use held item, hotbar, menu slot click and close menu on many bots at once, with a result per bot. Also `POST /api/bots/bulk-action` and the `bulk_action` MCP tool |
+| **Bot view** | A localhost 3D page, a still first-person PNG, and a text description of what is in view. 26.x bots render with 1.21.4 textures and nearest-block stand-ins; y -64 to 319 is drawn |
 | **Persistence** | Server profiles, bot profiles, rules, waypoints, schematic indexes and logs stored locally as JSON/files |
 
 ---
 
 ## MCP / AI agent system
 
-The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (87 tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
+The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (93 tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
 
 ```text
 ┌─────────────────────┐      tools       ┌──────────────────┐
 │ Ollama (local LLM)  │ ───────────────► │                  │
 │ in-game agent       │                  │  Agent tool      │      TaskQueue /
-└─────────────────────┘                  │  registry (87)  │ ───► RealismLayer ───► Minecraft
+└─────────────────────┘                  │  registry (93)  │ ───► RealismLayer ───► Minecraft
 ┌─────────────────────┐   /mcp endpoint  │                  │
 │ Claude Code, Cursor │ ───────────────► │                  │
 │ VS Code, any client │  (JSON-RPC/HTTP) └──────────────────┘
@@ -731,7 +733,11 @@ Discord is optional. A webhook can report death, disconnect, reconnect, mention,
 
 ### Bot view
 
-**Bot view** opens a 3D page on `127.0.0.1` only while that tab sends a heartbeat. Closing it stops the page after about 20 seconds. A snapshot is a still first-person PNG, up to 1280×720, and does not turn the bot. `canvas` and headless WebGL ship with the panel. Details: [docs/viewer.md](docs/viewer.md).
+**Bot view** opens a 3D page on `127.0.0.1` only while that tab sends a heartbeat. Closing it stops the page after about 20 seconds. A snapshot is a still first-person PNG, up to 1280×720, and does not turn the bot. `canvas` and headless WebGL ship with the panel. Bots on versions newer than the viewer's textures (for example 26.x through ViaVersion) render with 1.21.4 textures and a short note; blocks 1.21.4 lacks are drawn as the closest older block, a full block with no match as stone, and anything else is skipped. The whole 1.18+ height (y -64 to 319) is drawn, so flat worlds and underground bots show too. Details: [docs/viewer.md](docs/viewer.md).
+
+### Menus and bulk actions
+
+The **Inventory** tab shows the open menu (custom names, lore, slot numbers) with a **Use held item** button and left, right or shift clicks. On the **Dashboard**, tick the checkbox on each bot card and use **Actions for selected bots** to run the same action on all of them. REST: `GET /api/bots/:id/window`, `POST /api/bots/:id/gui`, `POST /api/bots/bulk-action`. Details: [docs/gui-and-bulk.md](docs/gui-and-bulk.md).
 
 ---
 
@@ -850,10 +856,11 @@ Minecraft-CaYa-Bot-Panel/
 | `npm run test:build-rules` | Placement, facing, scaffold, schematic, and weapon rules. No server |
 | `npm run test:build` | Checks that `npm run build` wrote `server/dist` and `web/dist` |
 | `npm run test:baseline` | Current-behavior contract, including chat, flat movement, the flying-squid parkour course (gap, stairs, ladder, a refused same-level 4-block jump, and an MLG), inventory, and job queues. Needs the API and `npm run testserver` |
-| `npm run test:platform` | Always-on backoff, login-plugin prompts, template validation, and Discord bridge rules. See `docs/always-on.md`, `docs/discord.md`, `docs/templates.md`, and `docs/viewer.md` |
+| `npm run test:platform` | Always-on backoff, login-plugin prompts, template validation, Discord bridge rules, window and bulk helpers, and the 26.x viewer fallback (block translation, every-block and below-y=0 renders). See `docs/always-on.md`, `docs/discord.md`, `docs/templates.md`, and `docs/viewer.md` |
 | `npm run test:security` | Secret encryption and migration, webhook URL rules, Host/Origin rules, ACL arguments, viewer limits. No server |
 | `npm run test:packaging` | Windows package config (Setup only, checksums) and that viewer, Discord, canvas and gl ship with the app. No server |
-| `npm run test:all` | Auth, security, packaging, platform, movement rules, build rules, and the baseline contract |
+| `npm run test:gui` | Use held item, menu reads and clicks, and bulk actions over REST and MCP against the test server's "Server Selector" compass menu. Needs the API and `npm run testserver` |
+| `npm run test:all` | Auth, security, packaging, UI, platform, movement rules, build rules, the baseline contract, and the GUI test |
 | GitHub Actions `tests` | On every push and pull request: typecheck, build, build smoke, then `test:all` against the compiled server and flying-squid |
 | `npm run test:full` / `test:grok` / `smoke` | Older scenario scripts. Not part of `test:all` |
 
