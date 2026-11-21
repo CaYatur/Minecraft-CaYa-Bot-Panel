@@ -1,6 +1,16 @@
-# Server menus, item use, and bulk actions
+# Server menus, item use, bulk actions, and the command list
 
 Added for [issue #34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34). None of these move the bot.
+
+## Server command list
+
+The **Chat** tab shows the commands the server told this bot it may use. The list comes from the `declare_commands` tree sent when the bot joins. A later tree, for example after a server switch, replaces the list entirely.
+
+Each row is one command. Arguments stay on that row as `<player>` or `<message>`. Redirects are followed once, and the list stops at 8 words and 400 rows so a large tree stays readable. Clicking a row writes the command into the chat box. It is not sent until you press Send.
+
+If the bot is offline, or the server has not sent a tree yet, the list is empty.
+
+The MCP tool `server_commands` (info category, always on) returns the same lines. Pass `filter` for a case-insensitive substring and `limit` (1–200, default 80). It does not run a command. That is separate from `server_command`, which sends one slash command and stays behind utility mode.
 
 ## Server menus (GUI windows)
 
@@ -34,6 +44,7 @@ Socket clients can send the same body as `bot:gui` with `{ botId, op, ... }`. Wh
 | Tool | Category | What it does |
 |---|---|---|
 | `get_open_window` | info | Lists the open menu's title and slots, with custom names and lore |
+| `server_commands` | info | Read-only command list from the server tree. Optional `filter` and `limit`. Does not send a command |
 | `use_held_item` | inventory | Right-clicks, optionally after picking a hotbar slot or an item by name or custom name. Waits for a menu and returns it |
 | `select_hotbar_slot` | inventory | Selects hotbar slot 0-8 |
 | `click_window_slot` | inventory | Clicks a slot and reports `same`, `new-window` or `closed` |

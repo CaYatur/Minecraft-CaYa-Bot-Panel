@@ -429,6 +429,12 @@ export interface BuildRuntimeSnapshot {
   activityMaterial?: string | null;
 }
 
+/** Sunucunun declare_commands ağacından çıkan komut satırları. null = henüz gelmedi. */
+export interface ServerCommandList {
+  lines: string[];
+  truncated: boolean;
+}
+
 export interface BotSnapshot {
   config: BotConfig;
   status: BotStatus;
@@ -438,6 +444,8 @@ export interface BotSnapshot {
   inventory: InventorySnapshot | null;
   combat: CombatRuntime;
   build: BuildRuntimeSnapshot;
+  /** null: paket yok ya da bot çevrimdışı. Satırlar eğik çizgisizdir. */
+  serverCommands?: ServerCommandList | null;
 }
 
 export interface StateSnapshot {

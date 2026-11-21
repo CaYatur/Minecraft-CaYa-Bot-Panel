@@ -1112,7 +1112,15 @@ export const en: MessageTree = {
     whisperTag: "[whisper]",
     whisperTitle: "{name} — whisper",
     botTag: "(bot)",
-    inputPlaceholder: "Type in chat ( / for commands )…"
+    inputPlaceholder: "Type in chat ( / for commands )…",
+    commandsTitle: "Server commands",
+    commandsSearch: "Search commands…",
+    commandsEmptyOffline: "Connect the bot to see this server's commands.",
+    commandsEmptyWaiting: "The server has not sent its command list yet.",
+    commandsEmptyFilter: "No command matches this search.",
+    commandsCount: "{n} commands",
+    commandsTruncated: "The list is cut short so it stays readable.",
+    commandsFill: "Put this command in the chat box"
   },
   logs: {
     title: "Logs",

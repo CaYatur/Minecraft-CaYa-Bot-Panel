@@ -154,7 +154,7 @@ The project is designed around three principles:
 | **Recursive crafting** | Recipe dependency planning, raw-material acquisition, crafting-table use, furnace chains and storage withdrawal |
 | **Storage** | Chests, trapped chests, barrels, placed shulker boxes and temporary use/recovery of portable shulker boxes — deposits are verified (chest-full is reported honestly) and a specific chest can be targeted by coordinates |
 | **Schematic building** | `.schem`, `.schematic`, `.litematic` and `.caya.json`, rotation, mirroring, material planning, partial building and scaffold cleanup |
-| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 93 tools, trust system, persistent memory, autopilot |
+| **AI agent (MCP + Ollama)** | Drive bots with an LLM: a local Ollama model plays in-game (chat replies, tasks, creative building) or any MCP client (Claude Code, Cursor, VS Code…) uses the bots as tools — 94 tools, trust system, persistent memory, autopilot |
 | **Advanced automations** | Nested IF/ELSE, AND/OR/NOT groups, variables, task-result capture, loops, waits, retries, timeouts and error branches |
 | **Localization** | English, Turkish and automatic locale detection |
 | **Microsoft accounts** | Device-code sign-in for online-mode servers, a local token cache, and per-bot offline or Microsoft login |
@@ -171,13 +171,13 @@ The project is designed around three principles:
 
 ## MCP / AI agent system
 
-The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (93 tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
+The **MCP / AI** tab connects the bots to a language model in two independent ways. Both paths share the same tool registry (94 tools), and every tool executes through the normal task queue and realism layers — the model can only do what a player could do through the panel.
 
 ```text
 ┌─────────────────────┐      tools       ┌──────────────────┐
 │ Ollama (local LLM)  │ ───────────────► │                  │
 │ in-game agent       │                  │  Agent tool      │      TaskQueue /
-└─────────────────────┘                  │  registry (93)  │ ───► RealismLayer ───► Minecraft
+└─────────────────────┘                  │  registry (94)  │ ───► RealismLayer ───► Minecraft
 ┌─────────────────────┐   /mcp endpoint  │                  │
 │ Claude Code, Cursor │ ───────────────► │                  │
 │ VS Code, any client │  (JSON-RPC/HTTP) └──────────────────┘
@@ -261,7 +261,7 @@ Every category can be toggled in **Tool Permissions**; info/perception tools are
 
 | Category | Tools |
 |---|---|
-| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `get_open_window`, `bulk_action` (each action also needs its own category), `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all`, `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status` |
+| Info / perception (always on) | `list_bots`, `get_status`, `get_inventory`, `get_open_window`, `server_commands` (read-only command tree, optional `filter`), `bulk_action` (each action also needs its own category), `look_around`, `find_blocks`, `get_recent_chat`, `get_tasks`, `get_build_status`, `list_waypoints`, `list_schematics`, `list_trusted_players`, `stop_all`, `account_list`, `account_login_start`, `account_login_status`, `account_remove`, `bot_set_account`, `bot_auth_status` |
 | Chat | `send_chat`, `send_whisper` |
 | Movement | `goto`, `goto_player`, `follow_player`, `goto_waypoint`, `interact_block` |
 | Gathering | `collect_wood`, `mine_ore`, `collect_blocks`, `collect_drops`, `hunt_animals` |
@@ -737,7 +737,7 @@ Discord is optional. A webhook can report death, disconnect, reconnect, mention,
 
 ### Menus and bulk actions
 
-The **Inventory** tab shows the open menu (custom names, lore, slot numbers) with a **Use held item** button and left, right or shift clicks. On the **Dashboard**, tick the checkbox on each bot card and use **Actions for selected bots** to run the same action on all of them. REST: `GET /api/bots/:id/window`, `POST /api/bots/:id/gui`, `POST /api/bots/bulk-action`. Details: [docs/gui-and-bulk.md](docs/gui-and-bulk.md).
+The **Inventory** tab shows the open menu (custom names, lore, slot numbers) with a **Use held item** button and left, right or shift clicks. On the **Dashboard**, tick the checkbox on each bot card and use **Actions for selected bots** to run the same action on all of them. The **Chat** tab lists the commands the server sent for this bot; clicking a row fills the chat box and does not send it. REST: `GET /api/bots/:id/window`, `POST /api/bots/:id/gui`, `POST /api/bots/bulk-action`. The read-only MCP tool is `server_commands`. Details: [docs/gui-and-bulk.md](docs/gui-and-bulk.md).
 
 In **Automations** the **Menu** category has the actions *Use held item*, *Select hotbar slot*, *Click menu slot* (by item name or lore, or by slot number) and *Close menu*, and the **Window opened** trigger fires when a menu whose title contains the given text opens. The **Join game mode on spawn** blueprint waits 2 s after `bot_spawned`, right-clicks the compass and clicks the mode by name. Rules with these actions can also be created over MCP with `template_import` (`apply: true`).
 

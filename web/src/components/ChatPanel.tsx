@@ -15,6 +15,7 @@ export function ChatPanel({ botId }: { botId: string }) {
   const [input, setInput] = useState("");
   const [filter, setFilter] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const stickBottom = useRef(true);
 
   useEffect(() => {
@@ -55,8 +56,14 @@ export function ChatPanel({ botId }: { botId: string }) {
       )
     : entries;
 
+  const fillCommand = (line: string) => {
+    setInput(line.startsWith("/") ? line : `/${line}`);
+    inputRef.current?.focus();
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 gap-3">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
         <input
           value={filter}
@@ -81,6 +88,7 @@ export function ChatPanel({ botId }: { botId: string }) {
 
       <div className="flex gap-2 border-t border-zinc-800 pt-2">
         <input
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -96,6 +104,58 @@ export function ChatPanel({ botId }: { botId: string }) {
         </button>
       </div>
     </div>
+    <ServerCommandList botId={botId} onPick={fillCommand} />
+    </div>
+  );
+}
+
+/** Sunucunun declare_commands listesi. Tıklamak yalnızca sohbet kutusunu doldurur. */
+function ServerCommandList({ botId, onPick }: { botId: string; onPick: (line: string) => void }) {
+  const { t } = useI18n();
+  const bot = useAppStore((s) => s.bots[botId]);
+  const [query, setQuery] = useState("");
+  const online = bot?.status === "online";
+  const offline = !bot || bot.status === "stopped" || bot.status === "kicked" || bot.status === "error";
+  const received = online ? bot?.serverCommands ?? null : null;
+  const needle = query.trim().toLowerCase();
+  const lines = received?.lines.filter((line) => !needle || line.toLowerCase().includes(needle)) ?? [];
+
+  return (
+    <aside className="flex h-full min-h-0 w-72 shrink-0 flex-col rounded-lg border border-zinc-800 bg-zinc-950/40">
+      <div className="border-b border-zinc-800 px-3 py-2">
+        <div className="text-xs font-medium text-zinc-300">{t("chat.commandsTitle")}</div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("chat.commandsSearch")}
+          className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 outline-none focus:border-indigo-600"
+        />
+      </div>
+      <div className="mono min-h-0 flex-1 overflow-y-auto py-1 text-[12px]">
+        {offline && <p className="px-3 py-6 text-center text-xs text-zinc-600">{t("chat.commandsEmptyOffline")}</p>}
+        {!offline && !received && <p className="px-3 py-6 text-center text-xs text-zinc-600">{t("chat.commandsEmptyWaiting")}</p>}
+        {online && received && needle && lines.length === 0 && (
+          <p className="px-3 py-6 text-center text-xs text-zinc-600">{t("chat.commandsEmptyFilter")}</p>
+        )}
+        {lines.map((line) => (
+          <button
+            key={line}
+            type="button"
+            title={t("chat.commandsFill")}
+            onClick={() => onPick(line)}
+            className="block w-full truncate px-3 py-1 text-left text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+          >
+            /{line}
+          </button>
+        ))}
+      </div>
+      {received && (
+        <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-zinc-600">
+          <div>{t("chat.commandsCount", { n: received.lines.length })}</div>
+          {received.truncated && <div>{t("chat.commandsTruncated")}</div>}
+        </div>
+      )}
+    </aside>
   );
 }
 

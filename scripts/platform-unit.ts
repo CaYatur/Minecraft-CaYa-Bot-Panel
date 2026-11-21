@@ -19,6 +19,7 @@ import { validateTemplate } from "../server/src/modules/templates/schema";
 import { allowSend, escapeDiscordMentions, isAllowlisted, sayIsBlocked, shouldBridgeDiscord, shouldBridgeMinecraft } from "../server/src/modules/discord/logic";
 import { postWebhook } from "../server/src/modules/discord/hub";
 import { chatComponentToText } from "../server/src/utils/chatText";
+import { COMMAND_TREE_LIMITS, flattenCommandNodes, flattenDeclarePacket, type CommandNode } from "../server/src/modules/chat/commandTree";
 import { clickButton, describeWindow, clampHotbar, findWindowSlot, snapshotWindow } from "../server/src/modules/window";
 import { ACTION_META, TRIGGER_META, guiActionInput } from "../server/src/modules/automation/RuleEngine";
 import { BULK_ACTION_CATEGORY, BULK_ACTIONS, bulkActionType, normalizeBulkIds } from "../server/src/modules/bulk";
@@ -163,6 +164,86 @@ function unit() {
   assert("discord echo is not bridged back", !shouldBridgeDiscord({ authorIsBot: true, text: "[MC] Bot: hi" }));
   const history: number[] = [];
   assert("bridge rate limit holds", allowSend(history, 1_000, 1) && !allowSend(history, 1_100, 1));
+
+  const ob: CommandNode[] = [
+    { kind: "root", children: [1] },
+    { kind: "literal", name: "ob", children: [2] },
+    { kind: "literal", name: "team", children: [3, 4] },
+    { kind: "literal", name: "invite", children: [5] },
+    { kind: "literal", name: "accept", executable: true },
+    { kind: "argument", name: "player", executable: true }
+  ];
+  const obFlat = flattenCommandNodes(ob);
+  assert(
+    "command tree keeps an argument chain on one line",
+    obFlat.lines.includes("ob team accept") && obFlat.lines.includes("ob team invite <player>") && !obFlat.lines.some((line) => line.split(" ").length > 4),
+    obFlat.lines.join(" | ")
+  );
+
+  const msg: CommandNode[] = [
+    { kind: "root", children: [1] },
+    { kind: "literal", name: "msg", children: [2] },
+    { kind: "argument", name: "player", children: [3] },
+    { kind: "argument", name: "message", executable: true }
+  ];
+  assert("nested arguments stay on one line", flattenCommandNodes(msg).lines.join(",") === "msg <player> <message>");
+
+  const redirected: CommandNode[] = [
+    { kind: "root", children: [1, 2] },
+    { kind: "literal", name: "say", children: [3] },
+    { kind: "literal", name: "execute", children: [4] },
+    { kind: "argument", name: "message", executable: true },
+    { kind: "literal", name: "run", executable: true, redirect: 0 }
+  ];
+  const redirectedFlat = flattenCommandNodes(redirected);
+  assert(
+    "a redirect is followed once and does not loop",
+    redirectedFlat.lines.includes("say <message>") &&
+      redirectedFlat.lines.includes("execute run") &&
+      redirectedFlat.lines.includes("execute run say <message>") &&
+      !redirectedFlat.lines.some((line) => line.includes("execute run execute run execute")),
+    redirectedFlat.lines.join(" | ")
+  );
+
+  const cycle: CommandNode[] = [
+    { kind: "root", children: [1] },
+    { kind: "literal", name: "a", executable: true, children: [2] },
+    { kind: "literal", name: "b", executable: true, children: [1] }
+  ];
+  const cycled = flattenCommandNodes(cycle);
+  assert("a child cycle stops", cycled.lines.includes("a") && cycled.lines.includes("a b") && !cycled.lines.some((line) => line.split(" ").length > 4), cycled.lines.join(" | "));
+
+  const deep: CommandNode[] = [{ kind: "root", children: [1] }];
+  for (let i = 1; i <= 12; i++) deep.push({ kind: "literal", name: `n${i}`, executable: i === 12, children: i === 12 ? [] : [i + 1] });
+  const deepFlat = flattenCommandNodes(deep, 0, { maxDepth: 4, maxLines: 20 });
+  assert(
+    "depth limit cuts a long chain",
+    deepFlat.truncated && deepFlat.lines.every((line) => line.split(" ").length <= 4) && !deepFlat.lines.some((line) => line.includes("n12")),
+    deepFlat.lines.join(" | ")
+  );
+
+  const wide: CommandNode[] = [{ kind: "root", children: [] }];
+  for (let i = 1; i <= 30; i++) {
+    wide.push({ kind: "literal", name: `c${i}`, executable: true });
+    wide[0]!.children!.push(i);
+  }
+  const wideFlat = flattenCommandNodes(wide, 0, { maxDepth: 8, maxLines: 10 });
+  assert("line limit cuts a wide tree", wideFlat.truncated && wideFlat.lines.length === 10, String(wideFlat.lines.length));
+
+  const packet = flattenDeclarePacket({
+    rootIndex: 0,
+    nodes: [
+      { children: [1], flags: { command_node_type: 0, has_command: 0 } },
+      { children: [2], extraNodeData: { name: "msg" }, flags: { command_node_type: 1, has_command: 0 } },
+      { children: [], extraNodeData: { name: "message", parser: "minecraft:message" }, flags: { command_node_type: 2, has_command: 1 } }
+    ]
+  });
+  assert("a declare_commands packet flattens to one line", packet?.lines.join(",") === "msg <message>" && packet?.truncated === false, packet?.lines.join(" | "));
+  assert("a broken command packet is ignored", flattenDeclarePacket(null) === null && flattenDeclarePacket({ nodes: "nope" }) === null);
+  assert("command list defaults stay bounded", COMMAND_TREE_LIMITS.maxDepth === 8 && COMMAND_TREE_LIMITS.maxLines === 400);
+
+  const replaced = flattenCommandNodes([{ kind: "root", children: [1] }, { kind: "literal", name: "later", executable: true }]);
+  assert("a new tree replaces the previous lines", replaced.lines.join(",") === "later" && !replaced.lines.includes("ob"));
 }
 
 async function webhook(): Promise<void> {

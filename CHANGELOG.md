@@ -8,6 +8,11 @@ The release after **1.0.4** is **3.0.5**. There was never a 2.x release and no 3
 
 The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation templates, the bot view and the Windows installer) was first marked 1.0.5. That tag was withdrawn before it was published, and the batch was released as 3.0.5 instead, because it changed how the panel is used far more than a patch release would suggest (sign-in, stored secrets, a desktop installer). Nothing was skipped: every change between 1.0.4 and 3.0.5 is listed under 3.0.5 below. From 3.0.5 on, versions move one step at a time again.
 
+## Unreleased
+
+### Features
+- **Server command list.** The Chat tab shows the commands the connected server sent for that bot, with search. Clicking a row fills the chat box and does not send it. The list is replaced whenever a new command tree arrives, and it is capped so argument-heavy trees stay short. The read-only MCP tool `server_commands` returns the same list, with an optional filter. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
+
 ## 3.0.7 — 2026-11-21
 
 Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).

@@ -187,5 +187,37 @@ export const GUI_TOOLS: AgentToolDef[] = [
       for (const r of refused) lines.push(`- ${r} (skipped)`);
       return lines.join("\n");
     }
+  },
+  {
+    name: "server_commands",
+    description:
+      "Read-only list of the slash commands this server told the bot it can use. The list comes from the command tree sent when the bot joins, and a new tree replaces it (for example after a server switch). Nothing is executed. " +
+      "filter is an optional case-insensitive substring. Each line is one command; arguments look like <player>.",
+    category: "info",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filter: { type: "string", description: "optional substring matched against the command text, without the leading slash" },
+        limit: { type: "number", description: "maximum lines to return (1-200, default 80)" }
+      }
+    },
+    async execute(ctx, args) {
+      online(ctx);
+      const list = ctx.inst.serverCommandList();
+      if (!list) return "The server has not sent a command list for this bot yet.";
+      const filter = String(args.filter ?? "").trim().toLowerCase();
+      const rawLimit = Number(args.limit ?? 80);
+      const limit = Math.max(1, Math.min(200, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 80));
+      const matched = list.lines.filter((line) => !filter || line.toLowerCase().includes(filter));
+      const shown = matched.slice(0, limit);
+      if (!shown.length) return filter ? `No server commands match "${filter}".` : "The server command list is empty.";
+      const title = filter ? `${matched.length} commands match "${filter}".` : `${matched.length} commands.`;
+      const notes = [
+        list.truncated ? "The stored list was cut short." : "",
+        shown.length < matched.length ? `Showing ${shown.length}.` : ""
+      ].filter(Boolean);
+      const head = notes.length ? `${title} ${notes.join(" ")}` : title;
+      return [head, ...shown.map((line) => `/${line}`)].join("\n");
+    }
   }
 ];
