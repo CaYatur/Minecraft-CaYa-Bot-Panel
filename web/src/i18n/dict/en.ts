@@ -1474,6 +1474,7 @@ export const en: MessageTree = {
     viewerHelp: "Opens a 3D page of this bot on this computer only. It closes about 20 seconds after you leave this tab. An MCP session does not open this page. It sees the world through the POV screenshot and the text description.",
     viewTabHint: "3D view of the bot",
     viewStart: "Open 3D view",
+    viewFailed: "The 3D view could not open",
     viewDescribe: "Describe view",
     viewFull: "Full screen",
     viewExit: "Leave full screen",

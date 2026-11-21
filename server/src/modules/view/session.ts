@@ -5,6 +5,8 @@ import type { Bot } from "mineflayer";
 import { createLogger } from "../../utils/logger";
 import { describeScene, inViewCone, type ScenePoint } from "./describe";
 import { createHeadlessCanvas, releaseRenderer, type HeadlessSurface } from "./headlessCanvas";
+import { buildStateRemap, remappedWorld, viewerBot, type StateRemap } from "./remap";
+import { patchHeadlessRenderer, wrapViewerHandler } from "./heightPatch";
 
 const nodeRequire = createRequire(__filename);
 
@@ -23,7 +25,82 @@ const sessions = new Map<string, LiveSession>();
 /** Starts in progress, so two clicks (or panel + MCP) cannot open two ports for one bot. */
 const starting = new Map<string, Promise<StartResult>>();
 
-type StartResult = { ok: true; url: string; port: number } | { ok: false; code: string; message: string };
+type StartResult = { ok: true; url: string; port: number; textures?: string; note?: string } | { ok: false; code: string; message: string };
+
+type ViewerSupport = { ok: true; textures: string; note?: string; fallback?: boolean } | { ok: false; code: string; message: string };
+
+function dataVersion(version: string): number | null {
+  try {
+    const mcData = nodeRequire("minecraft-data") as (v: string) => { version?: { dataVersion?: number } } | undefined;
+    const n = mcData(version)?.version?.dataVersion;
+    return typeof n === "number" ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * prismarine-viewer only ships textures and block states for a fixed list of
+ * versions. For anything outside that list its page calls
+ * window.alert(`${null} is not supported`) and keeps a light-blue empty scene
+ * (issue #34). Check the version here, before a port or a page is opened.
+ */
+export function viewerSupport(mcVersion: string | null | undefined): ViewerSupport {
+  const version = String(mcVersion ?? "").trim();
+  let getVersion: ((v: string) => string | null) | undefined;
+  let supported: string[] = [];
+  let pkgVersion = "?";
+  try {
+    const mod = nodeRequire("prismarine-viewer/viewer/lib/version.js") as { getVersion?: (v: string) => string | null; supportedVersions?: string[] };
+    getVersion = mod.getVersion;
+    supported = Array.isArray(mod.supportedVersions) ? mod.supportedVersions.map(String) : [];
+    pkgVersion = String((nodeRequire("prismarine-viewer/package.json") as { version?: string }).version ?? "?");
+  } catch {
+    getVersion = undefined;
+  }
+  if (!getVersion) {
+    return { ok: false, code: "viewer.unavailable", message: "The built-in 3D viewer failed to load. The text POV description still works." };
+  }
+  if (!version) return { ok: false, code: "viewer.version", message: "This bot has no Minecraft version yet." };
+  const textures = getVersion(version);
+  if (!textures) {
+    const newest = supported[supported.length - 1] ?? "";
+    const oldest = supported[0] ?? "?";
+    // Issue #34: a newer version (26.1 through ViaVersion and so on) is drawn with the newest
+    // textures the viewer ships. Block states are translated by name in remap.ts.
+    const mine = dataVersion(version);
+    const last = newest ? dataVersion(newest) : null;
+    if (newest && mine !== null && last !== null && mine > last && buildStateRemap(version, newest)) {
+      return {
+        ok: true,
+        textures: newest,
+        fallback: true,
+        note: `The 3D view has no ${version} textures yet, so it uses Minecraft ${newest} textures. Blocks added after ${newest} are shown as the closest older block.`
+      };
+    }
+    return {
+      ok: false,
+      code: "viewer.version_unsupported",
+      message:
+        `The 3D viewer cannot show Minecraft ${version}. Its built-in viewer (prismarine-viewer ${pkgVersion}) only has textures for ${oldest} to ${newest || "?"}, ` +
+        `so the page would stay light blue with "null is not supported". The bot itself works normally on ${version}; use Describe view for a text description.`
+    };
+  }
+  if (textures !== version) {
+    return {
+      ok: true,
+      textures,
+      note: `Minecraft ${version} is drawn with ${textures} textures. Blocks added after ${textures} are shown as the closest older block.`
+    };
+  }
+  return { ok: true, textures };
+}
+
+/** Doku sürümü botun sürümünden farklıysa blok durum id'lerini çeviren tablo */
+function remapFor(bot: Bot, textures: string): StateRemap | null {
+  if (!bot.version || bot.version === textures) return null;
+  return buildStateRemap(bot.version, textures);
+}
 
 /** The 3D viewer renders on the CPU; keep it off weak or busy machines. */
 export const VIEWER_MIN_FREE_MB = 512;
@@ -109,10 +186,15 @@ export function startView(botId: string, bot: Bot, version: string): Promise<Sta
 
 async function startViewNow(botId: string, bot: Bot, version: string): Promise<StartResult> {
   if (!version) return { ok: false, code: "viewer.version", message: "This bot has no Minecraft version yet." };
+  // The page receives bot.version (the version actually negotiated), not the
+  // server profile value, which can be "auto".
+  const support = viewerSupport(bot.version || version);
+  if (!support.ok) return support;
+  const extra = { textures: support.textures, ...(support.note ? { note: support.note } : {}) };
   const existing = sessions.get(botId);
   if (existing && existing.bot === bot) {
     existing.lastSeen = Date.now();
-    return { ok: true, url: `http://127.0.0.1:${existing.port}`, port: existing.port };
+    return { ok: true, url: `http://127.0.0.1:${existing.port}`, port: existing.port, ...extra };
   }
   const resources = viewerResourceCheck({ replacing: Boolean(existing) });
   if (!resources.ok) return resources;
@@ -136,7 +218,9 @@ async function startViewNow(botId: string, bot: Bot, version: string): Promise<S
   let server: http.Server | undefined;
   try {
     await runWithLocalViewerServer(() => {
-      viewer!(bot, { port, firstPerson: false });
+      // The page gets the texture version, and chunks use that version's block state ids.
+      const shown = support.textures === bot.version ? bot : viewerBot(bot, support.textures, remapFor(bot, support.textures));
+      viewer!(shown, { port, firstPerson: false });
     }, (created) => {
       server = created;
     });
@@ -168,8 +252,8 @@ async function startViewNow(botId: string, bot: Bot, version: string): Promise<S
       }
     }
   });
-  log.info(`Viewer started for ${botId} on 127.0.0.1:${port}`);
-  return { ok: true, url: `http://127.0.0.1:${port}`, port };
+  log.info(`Viewer started for ${botId} on 127.0.0.1:${port} (textures ${support.textures})`);
+  return { ok: true, url: `http://127.0.0.1:${port}`, port, ...extra };
 }
 
 export function describeBot(bot: Bot, input: { yaw?: number; pitch?: number; fov?: number; radius?: number; applyLook?: boolean }): ReturnType<typeof describeScene> {
@@ -245,6 +329,8 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
   if (!bot.entity?.position || !bot.world) {
     return { ok: false, code: "viewer.offline", message: "The bot is not in a world yet, so no POV frame was rendered." };
   }
+  const support = viewerSupport(bot.version);
+  if (!support.ok) return support;
   let canvas: HeadlessSurface | undefined;
   let renderer: { dispose(): void; render(scene: unknown, camera: unknown): void; setSize(w: number, h: number, updateStyle: boolean): void } | undefined;
   let worldView: { init(pos: unknown): Promise<void>; removeListenersFromBot?(bot: Bot): void } | undefined;
@@ -271,6 +357,8 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
     renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
     renderer.setSize(width, height, false);
     const viewer = new viewerMod.viewer.Viewer(renderer);
+    // y<0 ve y>=256 bölümleri de çizilsin (setVersion'dan önce olmalı)
+    patchHeadlessRenderer(viewer.world as never);
     workers = viewer.world.workers ?? [];
     if (!hadWindow) {
       (global as { window?: { innerWidth: number; innerHeight: number; alert(): void } }).window = {
@@ -279,7 +367,7 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
         alert() { /* headless */ }
       };
     }
-    const supported = viewer.setVersion(bot.version);
+    const supported = viewer.setVersion(support.textures);
     if (!hadWindow) delete (global as { window?: unknown }).window;
     if (!supported) {
       return { ok: false, code: "viewer.version", message: `This Minecraft version cannot be rendered (${bot.version}).` };
@@ -287,7 +375,8 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
     const pos = bot.entity.position;
     const yaw = input.yaw ?? bot.entity.yaw;
     const pitch = input.pitch ?? bot.entity.pitch;
-    worldView = new viewerMod.viewer.WorldView(bot.world, viewDistance, pos);
+    const remap = remapFor(bot, support.textures);
+    worldView = new viewerMod.viewer.WorldView(remap ? remappedWorld(bot.world, remap) : bot.world, viewDistance, pos);
     viewer.listen(worldView);
     viewer.camera.position.set(pos.x, pos.y + 1.62, pos.z);
     viewer.camera.rotation.order = "ZYX";
@@ -295,7 +384,7 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
     const chunks = (bot as { waitForChunksToLoad?: () => Promise<void> }).waitForChunksToLoad;
     if (chunks) await Promise.race([chunks.call(bot), delay(8_000)]);
     await worldView.init(pos);
-    await Promise.race([viewer.waitForChunksToRender(), delay(12_000)]);
+    await settleChunks(viewer as unknown as SettleViewer, Date.now() + 12_000);
     renderer.render(viewer.scene, viewer.camera);
     const png = canvas.toBuffer("image/png");
     if (png.length < 32 || png[0] !== 0x89 || png[1] !== 0x50) {
@@ -320,6 +409,27 @@ async function renderSnapshotNow(bot: Bot, input: { width?: number; height?: num
   }
 }
 
+type SettleViewer = { waitForChunksToRender(): Promise<void>; world: { sectionMeshs?: Record<string, unknown>; sectionsOutstanding?: Set<string> } };
+
+/**
+ * prismarine-viewer'ın waitForChunksToRender'ı erken çözülebiliyor: komşu bölüm için gelen
+ * eski "sectionFinished" mesajı, yeniden kirlenen bölümü bekleme listesinden siler.
+ * Bu yüzden mesh sayısı iki worker turu boyunca sabit kalana kadar bekliyoruz.
+ */
+async function settleChunks(viewer: SettleViewer, deadline: number): Promise<void> {
+  const left = () => Math.max(0, deadline - Date.now());
+  await Promise.race([viewer.waitForChunksToRender(), delay(left())]);
+  let last = -1;
+  let stable = 0;
+  while (left() > 0 && stable < 2) {
+    await delay(Math.min(150, left()));
+    await Promise.race([viewer.waitForChunksToRender(), delay(left())]);
+    const count = Object.keys(viewer.world.sectionMeshs ?? {}).length;
+    stable = count === last && (viewer.world.sectionsOutstanding?.size ?? 0) === 0 ? stable + 1 : 0;
+    last = count;
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -340,6 +450,8 @@ export async function runWithLocalViewerServer(start: () => void, onServer?: (se
         if (prop !== "createServer") return Reflect.get(target, prop, receiver);
         const create = Reflect.get(target, prop, receiver) as typeof http.createServer;
         return (...args: Parameters<typeof http.createServer>) => {
+          // sayfanın index.js/worker.js dosyaları yükseklik düzeltmeli kopyadan gelsin
+          if (typeof args[0] === "function") args[0] = wrapViewerHandler(args[0] as http.RequestListener) as never;
           const created = create.apply(target, args);
           onServer?.(created);
           const listen = created.listen.bind(created);

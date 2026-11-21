@@ -50,6 +50,8 @@ When a check fails the view does not start and the panel says why. The text desc
 ## Troubleshooting
 
 - **"The built-in 3D viewer failed to load"**: the native `canvas` or `gl` module did not load. On a source checkout run `npm rebuild canvas gl`. In the installed app, reinstall with the latest Setup.
-- **"This Minecraft version cannot be shown"**: the viewer does not support that protocol. Use the POV tools instead.
+- **Newer Minecraft versions (for example 26.x through ViaVersion)**: the 3D viewer ships textures up to 1.21.4. For a newer bot version the panel uses the 1.21.4 textures and translates every block by name and properties. Blocks that 1.21.4 does not have are drawn as the closest older block (for example shelves as planks and copper lanterns as lanterns). If there is no close match, a full block is drawn as stone and anything else is skipped. A small note under the view says this. `bot_view_status` reports it in `support.fallback` and `support.note`.
+- **"This Minecraft version cannot be shown"**: the version is older than the viewer supports, or the panel has no block data for it. Use the POV tools instead.
+- **Blocks below y=0 or above y=255**: these are drawn too (1.18+ world height, flat worlds, deep caves). The panel serves a patched copy of the viewer page and worker for this.
 - **"Not enough free memory" / "Only N 3D views can run at once"**: close another bot view or free memory, then open it again.
 - **Black or empty view right after joining**: chunks are still loading. Wait a few seconds.
