@@ -17,6 +17,8 @@ export const EV = {
   BOT_NEARBY: "bot:nearby",
   BOT_BUILD: "bot:build",
   BOT_FALL_GUARD: "bot:fallGuard",
+  /** Issue #34 — açık GUI penceresi (sunucu seçici menüleri) */
+  BOT_WINDOW: "bot:window",
   PANEL_NOTIFY: "panel:notify",
   // Faz 18 — MCP / AI agent
   MCP_STATUS: "mcp:status",
@@ -27,7 +29,9 @@ export const EV = {
 
   // panel -> server
   SEND_CHAT: "bot:sendChat",
-  BOT_ACTION: "bot:action"
+  BOT_ACTION: "bot:action",
+  /** Issue #34 — GUI: { botId, op: "use" | "hotbar" | "click" | "close", ... } */
+  BOT_GUI: "bot:gui"
 } as const;
 
 export type EventName = (typeof EV)[keyof typeof EV];

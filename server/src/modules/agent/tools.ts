@@ -2,6 +2,7 @@ import { Vec3 } from "vec3";
 import { accounts } from "../auth/accounts";
 import { redactGameCommand } from "../alwaysOn/loginPrompt";
 import { PLATFORM_TOOLS } from "./platformTools";
+import { GUI_TOOLS } from "./guiTools";
 import type { BotInstance } from "../../core/BotInstance";
 import type { BotManager } from "../../core/BotManager";
 import { PRIORITY } from "../../core/TaskQueue";
@@ -1494,6 +1495,8 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   forgetMemoryTool,
   // waypoints
   saveWaypointHere,
+  // GUI menüleri, eldeki eşya ve toplu işlem (issue #34)
+  ...GUI_TOOLS,
   ...PLATFORM_TOOLS
 ];
 

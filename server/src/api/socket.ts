@@ -4,6 +4,7 @@ import { accounts } from "../modules/auth/accounts";
 import type { BotInstance } from "../core/BotInstance";
 import type { BotManager } from "../core/BotManager";
 import type { AgentService } from "../modules/agent";
+import { runGuiOp, type GuiOpInput } from "../modules/window";
 import { createLogger, logHub } from "../utils/logger";
 
 const log = createLogger("socket");
@@ -23,6 +24,7 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
     inst.on("nearby", (p) => io.emit(EV.BOT_NEARBY, p));
     inst.on("build", (p) => io.emit(EV.BOT_BUILD, p));
     inst.on("fallGuard", (p) => io.emit(EV.BOT_FALL_GUARD, p));
+    inst.on("window", (p) => io.emit(EV.BOT_WINDOW, p));
   };
 
   for (const inst of manager.bots.values()) wireInstance(inst);
@@ -86,6 +88,23 @@ export function setupSocket(io: Server, manager: BotManager, supportedVersions: 
       } catch (err) {
         log.warn(`Socket action failed (${payload?.type})`, err instanceof Error ? err.message : String(err));
       }
+    });
+
+    // Issue #34 — GUI işlemleri; ack varsa sonucu ya da hatayı geri döndürür
+    socket.on(EV.BOT_GUI, (payload: { botId?: string; [k: string]: unknown }, ack?: (reply: unknown) => void) => {
+      const inst = payload?.botId ? manager.get(payload.botId) : undefined;
+      const reply = typeof ack === "function" ? ack : () => undefined;
+      if (!inst) {
+        reply({ ok: false, error: "Bot not found." });
+        return;
+      }
+      runGuiOp(inst, payload as GuiOpInput)
+        .then((result) => reply({ ok: true, result }))
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(`Socket GUI action failed (${String(payload?.op)})`, message);
+          reply({ ok: false, error: message });
+        });
     });
 
     socket.on("disconnect", () => log.debug(`Panel disconnected (${socket.id})`));

@@ -25,7 +25,8 @@ mc.createMCServer({
   kickTimeout: 30000,
   plugins: {
     [path.join(__dirname, "parkour-course.cjs")]: {},
-    [path.join(__dirname, "mlg-physics.cjs")]: {}
+    [path.join(__dirname, "mlg-physics.cjs")]: {},
+    [path.join(__dirname, "server-selector.cjs")]: {}
   },
   modpe: false,
   "view-distance": 6,

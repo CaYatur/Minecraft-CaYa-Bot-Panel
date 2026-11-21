@@ -8,7 +8,18 @@ import { useAppStore } from "../stores/useAppStore";
 import { StatBar } from "./Bars";
 import { StatusBadge } from "./StatusBadge";
 
-export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProfile }) {
+export function BotCard({
+  bot,
+  server,
+  selected,
+  onToggleSelect
+}: {
+  bot: BotSnapshot;
+  server?: ServerProfile;
+  /** issue #34 — dashboard çoklu seçim */
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   const toast = useAppStore((s) => s.toast);
   const accounts = useAppStore((s) => s.accounts);
   const { t, locale } = useI18n();
@@ -34,9 +45,23 @@ export function BotCard({ bot, server }: { bot: BotSnapshot; server?: ServerProf
   };
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 transition-colors hover:border-zinc-700">
+    <div
+      className={`flex flex-col gap-3 rounded-xl border bg-zinc-900/70 p-4 transition-colors ${
+        selected ? "border-indigo-500 ring-1 ring-indigo-500/60" : "border-zinc-800 hover:border-zinc-700"
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
-        <Link to={`/bots/${bot.config.id}`} className="group min-w-0">
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={Boolean(selected)}
+            onChange={onToggleSelect}
+            aria-label={t("dashboard.select")}
+            title={t("dashboard.select")}
+            className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-indigo-500"
+          />
+        )}
+        <Link to={`/bots/${bot.config.id}`} className="group min-w-0 flex-1">
           <div className="flex items-center gap-2">
             {head && <img src={head} alt="" width={20} height={20} className="h-5 w-5 rounded bg-zinc-800" />}
             <div className="truncate font-semibold text-zinc-100 group-hover:text-indigo-300">

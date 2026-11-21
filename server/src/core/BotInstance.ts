@@ -28,6 +28,7 @@ import { FarmService } from "../modules/farm";
 import { GatherService } from "../modules/gather";
 import { snapshotInventory, usedMainSlots } from "../modules/inventory";
 import { depositToChest, withdrawFromChest } from "../modules/inventory/chestOps";
+import { snapshotWindow, type WindowSnapshot } from "../modules/window";
 import { restoreDefaultMovement, runFollow, runGoto, runGotoPlayer, runParkourGoto, stopMovement } from "../modules/movement";
 import { SurvivalService } from "../modules/survival";
 import type {
@@ -88,6 +89,7 @@ export class BotInstance extends EventEmitter {
   private lastPosKey = "";
   private pingCounter = 0;
   private lastInventory: InventorySnapshot | null = null;
+  private windowTimer: NodeJS.Timeout | null = null;
   private invTimer: NodeJS.Timeout | null = null;
   private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
@@ -1525,6 +1527,12 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.invTimer);
       this.invTimer = null;
     }
+    if (this.windowTimer) {
+      clearTimeout(this.windowTimer);
+      this.windowTimer = null;
+    }
+    // bağlantı kopunca panelde açık kalmış menü görünmesin
+    this.emit("window", { botId: this.config.id, window: snapshotWindow(null) });
     this.combat.detach();
     this.survival.detach();
     this.build.onDisconnect(); // freeze build state; auto-resume arms if enabled
@@ -1672,6 +1680,41 @@ export class BotInstance extends EventEmitter {
     const push = () => this.scheduleInventorySync();
     bot.inventory.on("updateSlot", push);
     (bot as unknown as NodeJS.EventEmitter).on("heldItemChanged", push);
+    // Issue #34 — açık GUI penceresi (sunucu seçici vb.) panele canlı akar
+    const pushWindow = () => this.scheduleWindowSync();
+    const emitter = bot as unknown as NodeJS.EventEmitter;
+    emitter.on("windowOpen", (win: NodeJS.EventEmitter) => {
+      try {
+        win.on("updateSlot", pushWindow);
+      } catch {
+        /* pencere olay yaymıyorsa yalnızca açılış yayını yeter */
+      }
+      pushWindow();
+    });
+    emitter.on("windowClose", pushWindow);
+    emitter.on("heldItemChanged", pushWindow);
+  }
+
+  /** Açık GUI penceresinin anlık görüntüsü (yoksa open=false) */
+  windowSnapshot(): WindowSnapshot {
+    return snapshotWindow(this.status === "online" ? this.bot : null);
+  }
+
+  /** 120ms debounce: menü açılışında gelen slot patlamasını tek yayına toplar */
+  private scheduleWindowSync() {
+    if (this.windowTimer) return;
+    this.windowTimer = setTimeout(() => {
+      this.windowTimer = null;
+      if (!this.bot) return;
+      let window: WindowSnapshot;
+      try {
+        window = this.windowSnapshot();
+      } catch (err) {
+        this.log.debug("Could not read the open window", String(err));
+        return;
+      }
+      this.emit("window", { botId: this.config.id, window });
+    }, 120);
   }
 
   /** 150ms debounce: slot güncellemesi patlamalarını tek yayına toplar */
