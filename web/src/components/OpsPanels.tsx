@@ -370,6 +370,8 @@ export function ViewerCard({ botId }: { botId: string }) {
   const [busy, setBusy] = useState(false);
   const [scene, setScene] = useState("");
   const [full, setFull] = useState(false);
+  const [viewError, setViewError] = useState<string | null>(null);
+  const [viewNote, setViewNote] = useState<string | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -404,10 +406,19 @@ export function ViewerCard({ botId }: { botId: string }) {
   const start = () => {
     if (busy) return;
     setBusy(true);
+    setViewError(null);
+    setViewNote(null);
     void api
-      .post<{ url: string }>(`/api/bots/${botId}/view/start`)
-      .then((row) => setUrl(row.url))
-      .catch((err) => toast("error", errorText(err)))
+      .post<{ url: string; note?: string }>(`/api/bots/${botId}/view/start`)
+      .then((row) => {
+        setUrl(row.url);
+        setViewNote(row.note ?? null);
+      })
+      .catch((err) => {
+        // Issue #34: keep the reason on screen instead of a frozen light-blue frame.
+        setViewError(errorText(err));
+        toast("error", errorText(err));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -420,6 +431,13 @@ export function ViewerCard({ botId }: { botId: string }) {
     <div className="flex flex-col gap-3">
       <p className="text-sm leading-relaxed text-zinc-400">{t("ops.viewerHelp")}</p>
       {!online && <p className="text-xs text-amber-300/90">{t("ops.viewNeedsOnline")}</p>}
+      {viewError && (
+        <div role="alert" className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm leading-snug text-red-300">
+          <div className="font-medium">{t("ops.viewFailed")}</div>
+          <div className="mt-0.5 text-xs text-red-300/90">{viewError}</div>
+        </div>
+      )}
+      {url && viewNote && <p className="text-xs text-amber-300/90">{viewNote}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"

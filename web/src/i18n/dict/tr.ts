@@ -1510,6 +1510,7 @@ export const tr: MessageTree = {
     viewerHelp: "Bu botun 3D sayfasını yalnızca bu bilgisayarda açar. Sekmeden ayrılınca yaklaşık 20 saniye sonra kapanır. MCP oturumu bu sayfayı açmaz. Dünyayı ekran görüntüsü ve yazı tarifiyle görür.",
     viewTabHint: "Botun 3D görünümü",
     viewStart: "3D görünümü aç",
+    viewFailed: "3D görünüm açılamadı",
     viewDescribe: "Görünümü anlat",
     viewFull: "Tam ekran",
     viewExit: "Tam ekrandan çık",
