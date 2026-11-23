@@ -50,6 +50,11 @@ Open:
 4. Start the bot and open its detail page.
 5. On that page, **Login** picks a Microsoft account or a server password, **24/7** sets autostart and anti-AFK, and **Bot view** opens the local 3D page.
 
+### Newer servers and anti-cheats
+
+- **Servers newer than the bot library** (for example 26.3 while bots speak up to 26.1): the server profile's **ViaProxy** setting (Auto by default) starts [ViaProxy](https://github.com/ViaVersion/ViaProxy) on this computer and the bot joins through it, even when the server has no ViaBackwards. It needs **Java 17+**, downloads ViaProxy once, and picks up newer ViaProxy releases by itself. Offline-mode servers only.
+- **Anti-cheats on 1.21.2+** (Grim and similar): the panel sends the movement packets the game client sends (input keys, rotation, sprint, tick end), so bots are not pulled back on every step.
+
 > The server listens on `127.0.0.1` by default. This is intentional: the panel has powerful bot-control endpoints and should not be exposed publicly without an authentication layer and a reverse proxy.
 
 ### Production build
@@ -860,9 +865,10 @@ Minecraft-CaYa-Bot-Panel/
 | `npm run test:baseline` | Current-behavior contract, including chat, flat movement, the flying-squid parkour course (gap, stairs, ladder, a refused same-level 4-block jump, and an MLG), inventory, and job queues. Needs the API and `npm run testserver` |
 | `npm run test:platform` | Always-on backoff, login-plugin prompts, template validation, Discord bridge rules, window and bulk helpers, and the 26.x viewer fallback (block translation, every-block and below-y=0 renders). See `docs/always-on.md`, `docs/discord.md`, `docs/templates.md`, and `docs/viewer.md` |
 | `npm run test:security` | Secret encryption and migration, webhook URL rules, Host/Origin rules, ACL arguments, viewer limits. No server |
-| `npm run test:packaging` | Windows package config (Setup only, checksums) and that viewer, Discord, canvas and gl ship with the app. No server |
+| `npm run test:packaging` | Windows package config (Setup and portable zip, checksums, left-out Bedrock data and viewer build textures) and that viewer, Discord, canvas and gl ship with the app. No server |
+| `npm run test:protocol` | 1.21.2+ movement packets (input, rotation, sprint ids, tick end, teleports, attributes) and ViaProxy helpers. No server. The live anti-cheat check is in `test-server/README.md` |
 | `npm run test:gui` | Use held item, menu reads and clicks, and bulk actions over REST and MCP against the test server's "Server Selector" compass menu. Needs the API and `npm run testserver` |
-| `npm run test:all` | Auth, security, packaging, UI, platform, movement rules, build rules, the baseline contract, and the GUI test |
+| `npm run test:all` | Auth, security, packaging, UI, platform, movement rules, protocol, build rules, the baseline contract, and the GUI test |
 | GitHub Actions `tests` | On every push and pull request: typecheck, build, build smoke, then `test:all` against the compiled server and flying-squid |
 | `npm run test:full` / `test:grok` / `smoke` | Older scenario scripts. Not part of `test:all` |
 

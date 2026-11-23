@@ -8,14 +8,19 @@ The release after **1.0.4** is **3.0.5**. There was never a 2.x release and no 3
 
 The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation templates, the bot view and the Windows installer) was first marked 1.0.5. That tag was withdrawn before it was published, and the batch was released as 3.0.5 instead, because it changed how the panel is used far more than a patch release would suggest (sign-in, stored secrets, a desktop installer). Nothing was skipped: every change between 1.0.4 and 3.0.5 is listed under 3.0.5 below. From 3.0.5 on, versions move one step at a time again.
 
-## Unreleased
+## 3.0.8 — 2026-11-24
+
+Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
 
 ### Fixes
 - **Bots can walk on 1.21.2+ servers with an anti-cheat.** A bot joining as 26.x (or 1.21.2+) could use items and place blocks but was pulled back on every step, so follow, goto and building never moved it. mineflayer never sent `tick_end`, sent `player_input` only for sneaking, sent a yaw that lagged the direction it walked, and on 1.21.6+ sent "start sprinting" with an old id that the server reads as "start riding jump". The panel now sends the input, rotation, sprint and tick packets the way the game client does. On a Paper + ViaVersion + GrimAC test server the bot went from hundreds of Grim flags and no movement to walking, following and jumping with none. Older versions keep mineflayer's packets. Set `CAYA_PROTOCOL_COMPAT=off` to turn this off. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
 - **4-block gaps.** The sprint jump now takes off on the last tick the bot still stands on the edge, so a same-level 4-block gap is cleared instead of falling short. Goto tries a jump when there is no walking path (with Parkour max gap set to 4; the default is 3).
 - **Leaving a ladder at the top.** A bot following a player who stood on the only block next to the top of a ladder kept climbing and sliding on the last rung. Goals no longer end while the bot hangs on a ladder, and no jump is planned from a ladder, so the bot steps off onto the block.
+- **Smaller, faster install.** The installed app was 1.2 GB in about 44,000 files, which made Setup slow. Bedrock Edition data (never used by the panel) and the 3D viewer's build-time texture files are no longer shipped; the viewer still has its texture atlases, block states and mob textures.
 
 ### Features
+- **Join newer servers through ViaProxy.** When a server runs a Minecraft version the bot library does not support yet (26.3 today), the panel starts [ViaProxy](https://github.com/ViaVersion/ViaProxy) on this computer and the bot joins through it, even if the server has no ViaBackwards. Each server profile has a ViaProxy setting: Auto (default), Always or Off. It needs Java 17 or newer, downloads ViaProxy once (~47 MB, checked against its published SHA-256), and checks for a newer ViaProxy every 12 hours, so new Minecraft versions work once ViaProxy supports them, without a new panel release. Offline-mode servers only: ViaProxy cannot sign in with a Microsoft account. `CAYA_VIAPROXY_AUTO_UPDATE=off` keeps the built-in 3.4.14.
+- **Portable zip.** Besides the Setup exe, the release has a portable zip: unzip it once and run the exe inside, nothing is unpacked again on each start.
 - **Server command list.** The Chat tab shows the commands the connected server sent for that bot, grouped by command, with search. Clicking a row fills the chat box and does not send it. The list is replaced whenever a new command tree arrives. Every top-level command keeps at least one line when the list is cut (2,000 lines), and copies such as `minecraft:give` are hidden when `give` exists. The read-only MCP tool `server_commands` returns the same list, with an optional filter. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
 
 ### Tests
