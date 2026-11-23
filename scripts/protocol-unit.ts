@@ -5,6 +5,7 @@
 import { EventEmitter } from "events";
 import { Vec3 } from "vec3";
 import { compatInfoFor, installProtocolCompat } from "../server/src/core/protocolCompat";
+import { compareVersions, mineflayerSpeaks, normalizeViaProxyMode, parseJavaMajor, pickReleaseJar } from "../server/src/modules/versions/viaProxy";
 
 let failures = 0;
 const ok = (name: string) => console.log(`  ok ${name}`);
@@ -152,6 +153,32 @@ async function main() {
     ent.velocity = new Vec3(0.2, 0, 0);
     client.emit("position", { teleportId: 2, x: 0, y: 64, z: 0, dx: 0.1, dy: 0, dz: 0, yaw: 0, pitch: 0, flags: { ...flags, dx: true } });
     assert("a relative teleport velocity is added", Math.abs(ent.velocity.x - 0.3) < 1e-9, ent.velocity.toString());
+  }
+
+  // ViaProxy bridge helpers
+  {
+    assert("Java 1.8 is major 8", parseJavaMajor('openjdk version "1.8.0_402"') === 8);
+    assert("Java 17 is major 17", parseJavaMajor('openjdk version "17.0.21" 2026-10-20') === 17);
+    assert("ViaProxy versions compare numerically", compareVersions("3.4.14", "3.4.2") > 0 && compareVersions("3.4.14", "3.4.14") === 0);
+    assert("mineflayer speaks 26.1 (775)", mineflayerSpeaks(775));
+    assert("mineflayer does not speak 26.3 (777)", !mineflayerSpeaks(777));
+    assert("an unknown protocol number is left to mineflayer", mineflayerSpeaks(0));
+    const good = {
+      tag_name: "v3.5.0",
+      assets: [
+        { name: "ViaProxy-3.5.0+java8.jar", browser_download_url: "https://github.com/ViaVersion/ViaProxy/releases/download/v3.5.0/ViaProxy-3.5.0+java8.jar", digest: `sha256:${"a".repeat(64)}` },
+        { name: "ViaProxy-3.5.0.jar", browser_download_url: "https://github.com/ViaVersion/ViaProxy/releases/download/v3.5.0/ViaProxy-3.5.0.jar", digest: `sha256:${"b".repeat(64)}` }
+      ]
+    };
+    const picked = pickReleaseJar(good);
+    assert("release picks the Java 17 jar with its digest", picked?.version === "3.5.0" && picked.sha256 === "b".repeat(64) && !picked.url.includes("java8"));
+    assert("a release without a digest is not used", pickReleaseJar({ ...good, assets: [{ ...good.assets[1], digest: undefined }] }) === null);
+    assert("a prerelease is not used", pickReleaseJar({ ...good, prerelease: true }) === null);
+    assert(
+      "a jar hosted outside the ViaProxy releases is not used",
+      pickReleaseJar({ ...good, assets: [{ ...good.assets[1], browser_download_url: "https://example.com/ViaProxy-3.5.0.jar" }] }) === null
+    );
+    assert("ViaProxy modes default to auto", normalizeViaProxyMode(undefined) === "auto" && normalizeViaProxyMode("off") === "off" && normalizeViaProxyMode("x") === "auto");
   }
 
   // escape hatch

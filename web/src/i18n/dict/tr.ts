@@ -162,6 +162,12 @@ export const tr: MessageTree = {
     namePlaceholder: "Benim Sunucum",
     hostPlaceholder: "oyna.sunucum.com",
     autoVersion: "Otomatik",
+    viaProxy: "ViaProxy",
+    viaProxyAuto: "Otomatik (yeni sunucular)",
+    viaProxyAlways: "Her zaman",
+    viaProxyOff: "Kapalı",
+    viaProxyHelp:
+      "ViaProxy, sunucuda ViaBackwards olmasa bile botların panelin desteklediğinden yeni sunuculara girmesini sağlar. Bu bilgisayarda Java 17+ gerekir, bir kez indirilir (~47 MB) ve yalnızca offline-mode (premium girişsiz) sunucularda çalışır.",
     update: "Güncelle",
     addShort: "+ Ekle",
     addressLabel: "Adres",

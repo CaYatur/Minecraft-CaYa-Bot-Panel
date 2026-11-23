@@ -162,6 +162,12 @@ export const en: MessageTree = {
     namePlaceholder: "My Server",
     hostPlaceholder: "play.myserver.com",
     autoVersion: "Auto",
+    viaProxy: "ViaProxy",
+    viaProxyAuto: "Auto (newer servers)",
+    viaProxyAlways: "Always",
+    viaProxyOff: "Off",
+    viaProxyHelp:
+      "ViaProxy lets bots join servers newer than the panel supports, even without ViaBackwards on the server. It needs Java 17+ on this computer, downloads once (~47 MB), and works with offline-mode servers only.",
     update: "Update",
     addShort: "+ Add",
     addressLabel: "Address",

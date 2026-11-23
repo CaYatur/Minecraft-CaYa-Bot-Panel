@@ -7,6 +7,7 @@ export interface ServerProfile {
   port: number;
   version: string;
   note?: string;
+  viaProxy?: "auto" | "always" | "off";
 }
 
 export type BotStatus = "stopped" | "connecting" | "online" | "reconnecting" | "kicked" | "error";
