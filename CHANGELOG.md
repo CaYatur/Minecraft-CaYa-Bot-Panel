@@ -10,8 +10,16 @@ The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation
 
 ## Unreleased
 
+### Fixes
+- **Bots can walk on 1.21.2+ servers with an anti-cheat.** A bot joining as 26.x (or 1.21.2+) could use items and place blocks but was pulled back on every step, so follow, goto and building never moved it. mineflayer never sent `tick_end`, sent `player_input` only for sneaking, sent a yaw that lagged the direction it walked, and on 1.21.6+ sent "start sprinting" with an old id that the server reads as "start riding jump". The panel now sends the input, rotation, sprint and tick packets the way the game client does. On a Paper + ViaVersion + GrimAC test server the bot went from hundreds of Grim flags and no movement to walking, following and jumping with none. Older versions keep mineflayer's packets. Set `CAYA_PROTOCOL_COMPAT=off` to turn this off. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
+- **4-block gaps.** The sprint jump now takes off on the last tick the bot still stands on the edge, so a same-level 4-block gap is cleared instead of falling short. Goto tries a jump when there is no walking path (with Parkour max gap set to 4; the default is 3).
+- **Leaving a ladder at the top.** A bot following a player who stood on the only block next to the top of a ladder kept climbing and sliding on the last rung. Goals no longer end while the bot hangs on a ladder, and no jump is planned from a ladder, so the bot steps off onto the block.
+
 ### Features
-- **Server command list.** The Chat tab shows the commands the connected server sent for that bot, with search. Clicking a row fills the chat box and does not send it. The list is replaced whenever a new command tree arrives, and it is capped so argument-heavy trees stay short. The read-only MCP tool `server_commands` returns the same list, with an optional filter. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
+- **Server command list.** The Chat tab shows the commands the connected server sent for that bot, grouped by command, with search. Clicking a row fills the chat box and does not send it. The list is replaced whenever a new command tree arrives. Every top-level command keeps at least one line when the list is cut (2,000 lines), and copies such as `minecraft:give` are hidden when `give` exists. The read-only MCP tool `server_commands` returns the same list, with an optional filter. See [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
+
+### Tests
+- New `npm run test:protocol` (movement packet order, sprint ids, attributes, teleports) in `test:all`, and command-list cases in `test:platform`. `test-server/README.md` describes the Paper + ViaVersion + GrimAC check.
 
 ## 3.0.7 — 2026-11-21
 

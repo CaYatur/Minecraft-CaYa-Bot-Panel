@@ -264,6 +264,9 @@ export function installProtocolCompat(bot: Bot): ProtocolCompatHandle {
           writeOwn("player_input", { inputs });
         }
       }
+      // Yaw sync and tick_end were measured on 1.21.2+ only; older servers keep
+      // mineflayer's packets (their anti-cheats were not tested).
+      if (!info.tickEnd) return;
       // vanilla yaw is continuous: never jump a full turn against what the server last saw
       let yawDeg = toNotchianYaw(state.yaw);
       if (sentYaw !== null) yawDeg -= Math.round((yawDeg - sentYaw) / 360) * 360;

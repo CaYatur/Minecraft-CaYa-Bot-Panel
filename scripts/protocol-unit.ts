@@ -122,6 +122,15 @@ async function main() {
     await flush();
     assert("1.20.4: no tick_end or player_input", !sent.some((s) => s.name === "tick_end" || s.name === "player_input"));
     assert("1.20.4: entity_action number untouched", sent.find((s) => s.name === "entity_action")?.params.actionId === 3);
+    sent.length = 0;
+    tick({ control: control({ forward: true }), yaw: Math.PI / 2, pitch: 0, onGround: true, isCollidedHorizontally: false });
+    client.write("position_look", { x: 0, y: 64, z: 1, yaw: 12, pitch: 0, onGround: true });
+    await flush();
+    assert(
+      "1.20.4: movement packets keep mineflayer's yaw",
+      sent.length === 1 && sent[0]?.name === "position_look" && sent[0]?.params.yaw === 12,
+      JSON.stringify(sent)
+    );
   }
 
   // attributes and teleport velocity
