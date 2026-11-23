@@ -131,7 +131,7 @@ export function ProtocolNotice() {
     tone = "border-amber-700 bg-amber-950 text-amber-50";
   } else if (kind === "waiting") {
     text = t("servers.versionWaiting", vars);
-    tone = "border-amber-800 bg-amber-950/80 text-amber-100";
+    tone = "border-sky-800 bg-sky-950/80 text-sky-100";
   } else {
     text = t("servers.versionReadOnly", vars);
     tone = "border-amber-800 bg-amber-950/80 text-amber-100";

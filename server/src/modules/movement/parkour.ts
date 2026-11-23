@@ -429,7 +429,150 @@ function addTurningLadderMoves(
       }
     }
   }
+  // Spiral ladders wrap a pillar: the next rung is on the next face, one block up
+  // and diagonal. Allowed when one of the two corner cells is open to pass through.
+  for (const dir of DIAGONAL_XZ) {
+    for (const dy of [-1, 0, 1]) {
+      try {
+        const dest = m.getBlock(node, dir.x, dy, dir.z);
+        if (!dest?.climbable) continue;
+        const lo = Math.max(0, dy);
+        const open = (dx: number, dz: number) =>
+          [lo, lo + 1].every((h) => {
+            const c = m.getBlock(node, dx, h, dz);
+            return Boolean(c?.safe) && !(c as CellInfo)?.physical;
+          });
+        if (!open(dir.x, 0) && !open(0, dir.z)) continue;
+        const exists = neighbors.some((n) => {
+          const mv = n as PathNode;
+          return mv.x === node.x + dir.x && mv.y === node.y + dy && mv.z === node.z + dir.z;
+        });
+        if (exists) continue;
+        neighbors.push(new Move(node.x + dir.x, node.y + dy, node.z + dir.z, remaining, dy < 0 ? 1.3 : 1.6, [], [], false));
+      } catch {
+        /* */
+      }
+    }
+  }
   addLadderTopExits(m, node, neighbors, Move, remaining);
+}
+
+const DIAGONAL_XZ = [
+  { x: 1, z: 1 },
+  { x: 1, z: -1 },
+  { x: -1, z: 1 },
+  { x: -1, z: -1 }
+];
+
+const spiralAssisted = new WeakSet<Bot>();
+
+/**
+ * Turning/spiral ladders (issue #34): pathfinder steers by walking physics, so on a
+ * rung it either stops pushing or steps off too early and the bot drops 4 blocks.
+ * While the next path node is a rung in another column, hold climb and only push
+ * toward it once a short physics look-ahead says the bot grabs that rung.
+ */
+export function installSpiralLadderAssist(bot: Bot): void {
+  if (spiralAssisted.has(bot)) return;
+  spiralAssisted.add(bot);
+  let path: Array<{ x: number; y: number; z: number }> | null = null;
+  let committed: { x: number; y: number; z: number; until: number; startY: number } | null = null;
+  let tickNo = 0;
+  bot.on("path_update", (r: { path?: Array<{ x: number; y: number; z: number }> }) => {
+    path = r.path ?? null; // pathfinder shifts this same array as it walks
+    committed = null;
+  });
+  bot.on("goal_reached", () => {
+    path = null;
+    committed = null;
+  });
+  bot.on("physicsTick", () => {
+    tickNo++;
+    try {
+      if (!bot.entity || !path || path.length === 0) {
+        committed = null;
+        return;
+      }
+      const moving = (bot.pathfinder as unknown as { isMoving?: () => boolean }).isMoving?.();
+      if (!moving || isParkourLocked(bot)) {
+        committed = null;
+        return;
+      }
+      const p = bot.entity.position;
+      const fx = Math.floor(p.x);
+      const fy = Math.floor(p.y);
+      const fz = Math.floor(p.z);
+      if (committed) {
+        const inTarget = fx === committed.x && fz === committed.z && fy === committed.y;
+        if (inTarget || tickNo > committed.until || p.y < committed.startY - 1.2) {
+          committed = null;
+          return; // grabbed (pathfinder carries on) or missed
+        }
+        steer(committed, true);
+        return;
+      }
+      if (!isLadder(bot, fx, fy, fz)) return;
+      const n = path[0]!;
+      const cx = Math.floor(n.x);
+      const cy = Math.floor(n.y);
+      const cz = Math.floor(n.z);
+      if ((cx === fx && cz === fz) || cy < fy || Math.abs(cx - fx) > 1 || Math.abs(cz - fz) > 1) return;
+      if (!isLadder(bot, cx, cy, cz)) return;
+      const target = { x: cx, y: cy, z: cz };
+      const go = grabsRungIfPushing(bot, target);
+      if (go) committed = { ...target, until: tickNo + 16, startY: p.y };
+      steer(target, go);
+    } catch {
+      /* never break the physics loop */
+    }
+  });
+
+  function yawTo(t: { x: number; z: number }) {
+    const p = bot.entity.position;
+    return Math.atan2(-(t.x + 0.5 - p.x), -(t.z + 0.5 - p.z));
+  }
+  function steer(t: { x: number; y: number; z: number }, push: boolean) {
+    void bot.look(yawTo(t), 0, true).catch(() => undefined);
+    bot.setControlState("jump", true); // climb
+    bot.setControlState("forward", push);
+    bot.setControlState("sprint", push);
+    bot.setControlState("back", false);
+    bot.setControlState("left", false);
+    bot.setControlState("right", false);
+  }
+}
+
+/** Physics look-ahead: pushing toward the rung from now on, do we end up holding it? */
+function grabsRungIfPushing(bot: Bot, rung: { x: number; y: number; z: number }): boolean {
+  if (!playerStateCtor) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    playerStateCtor = (require(require.resolve("prismarine-physics", { paths: [require.resolve("mineflayer")] })) as {
+      PlayerState: PlayerStateCtor;
+    }).PlayerState;
+  }
+  const physics = (bot as unknown as { physics: { simulatePlayer(s: unknown, w: unknown): unknown } }).physics;
+  const state = new playerStateCtor(bot, {
+    forward: true,
+    back: false,
+    left: false,
+    right: false,
+    jump: true,
+    sprint: true,
+    sneak: false
+  }) as unknown as { pos: { x: number; y: number; z: number }; yaw: number; onGround: boolean };
+  const p = bot.entity.position;
+  state.yaw = Math.atan2(-(rung.x + 0.5 - p.x), -(rung.z + 0.5 - p.z));
+  const world = { getBlock: (pos: ReturnType<typeof v3>) => bot.blockAt(pos, false) };
+  const y0 = p.y;
+  for (let t = 0; t < 14; t++) {
+    physics.simulatePlayer(state, world);
+    const fx = Math.floor(state.pos.x);
+    const fy = Math.floor(state.pos.y);
+    const fz = Math.floor(state.pos.z);
+    if (fx === rung.x && fz === rung.z && fy === rung.y) return true;
+    if (state.pos.y < y0 - 1) return false;
+  }
+  return false;
 }
 
 type CellInfo = { climbable?: boolean; safe?: boolean; physical?: boolean };

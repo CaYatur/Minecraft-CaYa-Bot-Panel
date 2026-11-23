@@ -3,6 +3,7 @@
  * These numbers are the current fall, parkour, door, and look rules.
  */
 import { isWoodenOpenableBlock } from "../server/src/modules/movement/doors";
+import { PlayerTrail } from "../server/src/modules/movement/trail";
 import { entityLookPoint } from "../server/src/modules/movement/look";
 import {
   isLongSprintGap,
@@ -87,6 +88,23 @@ function main() {
   assert("a potato is raw food", isFood("potato") && isRawMeat("potato"));
   assert("a pie name still counts as food", isFood("pumpkin_pie") && foodScore("pumpkin_pie") === 0);
 
+  const trail = new PlayerTrail(5);
+  trail.record({ x: 0, y: 64, z: 0 }, true);
+  trail.record({ x: 0.5, y: 64, z: 0 }, true);
+  assert("trail keeps one point per ~1.2 blocks", trail.size === 1);
+  trail.record({ x: 2, y: 64, z: 0 }, false);
+  assert("trail skips points in the air", trail.size === 1);
+  trail.record({ x: 2, y: 64, z: 0 }, true);
+  trail.recordJump({ x: 3, y: 64, z: 0 }, { x: 8, y: 64, z: 0 });
+  const takeoff = trail.get(trail.end - 2);
+  assert("a gap jump marks its takeoff with the landing", Boolean(takeoff?.jumpTo) && takeoff!.jumpTo!.x === 8);
+  assert("the walk stops at a takeoff", trail.nextIndex(trail.start, 50) === trail.end - 2);
+  assert("a takeoff leads to the jump, not a walk", trail.nextIndex(trail.end - 2) === trail.end - 2);
+  for (let x = 9; x < 20; x += 1.5) trail.record({ x, y: 64, z: 0 }, true);
+  assert("old points drop past the cap but indices stay absolute", trail.size === 5 && trail.start > 0 && trail.get(trail.start) !== undefined);
+  assert("nearest point to the bot comes first", trail.get(trail.nearestIndices({ x: 19, y: 64, z: 0 }, 5)[0])!.x > 17);
+  trail.record({ x: 60, y: 64, z: 0 }, true);
+  assert("a teleport starts a new trail", trail.size === 1 && trail.get(trail.start)!.x === 60);
   console.log(failures ? `\nFAILED ${failures}` : "\nmovement unit passed");
   process.exit(failures ? 1 : 0);
 }
