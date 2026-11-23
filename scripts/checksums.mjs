@@ -13,7 +13,7 @@ if (!fs.existsSync(outDir)) {
   console.error(`No ${outDir} folder; build first.`);
   process.exit(1);
 }
-const files = fs.readdirSync(outDir).filter((name) => /setup.*\.exe$/i.test(name));
+const files = fs.readdirSync(outDir).filter((name) => /setup.*\.exe$/i.test(name) || /portable.*\.zip$/i.test(name));
 if (!files.length) {
   console.error("No Setup .exe found to checksum.");
   process.exit(1);

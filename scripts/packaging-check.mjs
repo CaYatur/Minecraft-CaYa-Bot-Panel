@@ -1,7 +1,9 @@
 /**
  * Static checks for the Windows package, runnable on any OS.
  *
- * - The release ships only the NSIS Setup exe (plus SHA256SUMS.txt).
+ * - The release ships the NSIS Setup exe and a portable zip (plus SHA256SUMS.txt).
+ *   No self-extracting "portable" exe: it unpacked ~44k files on every start.
+ * - Bedrock data and the viewer's build-time textures are left out of the package.
  * - Native modules stay outside an asar archive so canvas/gl can load.
  * - Every bare module the compiled server requires is a production
  *   dependency of the root package (directly or transitively), so
@@ -29,19 +31,31 @@ const check = (name, cond, detail) => (cond ? ok(name) : fail(name, detail));
 console.log("build config");
 const build = pkg.build ?? {};
 const targets = (build.win?.target ?? []).map((t) => (typeof t === "string" ? t : t.target));
-check("Windows target is NSIS only", targets.length === 1 && targets[0] === "nsis", JSON.stringify(targets));
+check("Windows targets are NSIS and zip", targets.length === 2 && targets.includes("nsis") && targets.includes("zip"), JSON.stringify(targets));
+check("no self-extracting portable exe", !targets.includes("portable"));
 check("no Linux or macOS targets", !build.linux && !build.mac);
 const dist = String(pkg.scripts?.["dist:win"] ?? "");
-check("dist:win builds NSIS only", /electron-builder --win nsis(\s|$)/.test(dist) && !/portable/.test(dist), dist);
+check("dist:win builds NSIS and zip", /electron-builder --win nsis zip(\s|$)/.test(dist) && !/portable/.test(dist), dist);
+const files = build.files ?? [];
+const excluded = files.filter((f) => f.startsWith("!"));
+check("bedrock version data is left out", excluded.some((f) => f.includes("minecraft-data/data/bedrock/{0,1")));
+check("bedrock common data still ships", !excluded.some((f) => /bedrock\/(\*\*|common)/.test(f)));
+check("viewer build-time textures are left out", excluded.some((f) => f.includes("prismarine-viewer/public/textures/*/{blocks")));
+check("viewer entity textures still ship", !excluded.some((f) => /entity/.test(f)));
 check("dist:win writes checksums", dist.includes("scripts/checksums.mjs"));
 check("native modules are not packed into asar", build.asar === false || (build.asarUnpack ?? []).some((p) => /canvas|gl/.test(p)));
 for (const need of ["electron/**/*", "server/dist/**/*", "web/dist/**/*"]) check(`files include ${need}`, (build.files ?? []).includes(need));
 check("versions match", ["server", "web"].every((ws) => JSON.parse(fs.readFileSync(path.join(root, ws, "package.json"), "utf8")).version === pkg.version), pkg.version);
 
 console.log("release assets");
-const keep = ["Minecraft CaYa Bot Panel Setup 3.0.6.exe", "SHA256SUMS.txt"];
+const keep = ["Minecraft CaYa Bot Panel Setup 3.0.6.exe", "caya-bot-panel-3.0.8-Portable.zip", "SHA256SUMS.txt"];
 const drop = ["Minecraft CaYa Bot Panel Setup 3.0.6.exe.blockmap", "builder-debug.yml", ".icon-ico", "win-unpacked", "builder-effective-config.yaml", "__uninstaller-nsis-caya.exe", "_release-notes-3.0.6.md"];
-check("release uploads the Setup exe and SHA256SUMS.txt", keep.every(isReleaseAsset));
+check("release uploads the Setup exe, the portable zip and SHA256SUMS.txt", keep.every(isReleaseAsset));
+const portableName = String(build.win?.artifactName ?? "")
+  .replace(/\$\{name\}/g, pkg.name)
+  .replace(/\$\{version\}/g, pkg.version)
+  .replace(/\$\{ext\}/g, "zip");
+check("portable zip name is a release asset", isReleaseAsset(portableName) && githubAssetName(portableName) === portableName, portableName);
 const artifactName = String(build.nsis?.artifactName ?? "");
 const setupName = artifactName.replace(/\$\{name\}/g, pkg.name).replace(/\$\{version\}/g, pkg.version).replace(/\$\{ext\}/g, "exe");
 check("nsis artifactName is set", artifactName.length > 0, "build.nsis.artifactName missing (default name has spaces)");
@@ -117,9 +131,16 @@ if (fs.existsSync(unpacked)) {
     "node_modules/discord.js/package.json",
     "node_modules/canvas/build/Release/canvas.node",
     "node_modules/gl/build/Release/webgl.node",
-    "node_modules/node-canvas-webgl/package.json"
+    "node_modules/node-canvas-webgl/package.json",
+    "node_modules/minecraft-data/minecraft-data/data/bedrock/common/protocolVersions.json",
+    "node_modules/prismarine-viewer/public/textures/1.21.4.png",
+    "node_modules/prismarine-viewer/public/blocksStates/1.21.4.json",
+    "node_modules/prismarine-viewer/public/textures/1.21.4/entity"
   ]) {
     check(`package contains ${rel}`, fs.existsSync(path.join(unpacked, rel)));
+  }
+  for (const rel of ["node_modules/minecraft-data/minecraft-data/data/bedrock/1.21.0", "node_modules/prismarine-viewer/public/textures/1.21.4/blocks"]) {
+    check(`package leaves out ${rel}`, !fs.existsSync(path.join(unpacked, rel)));
   }
 } else {
   console.log("  skip unpacked build checks (dist-electron/win-unpacked not found)");
