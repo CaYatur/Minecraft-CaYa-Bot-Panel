@@ -21,6 +21,7 @@ import {
   patchMovementsForTurningLadders,
   pruneObservedJumps,
   pushObservedJump,
+  tryGapJumpTowardPoint,
   tryJumpAcrossToPlayer,
   tryReplayObservedJump,
   type ObservedJump
@@ -103,6 +104,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   const bot = requireBot(instance);
   const anyBot = bot as unknown as { pathfinder?: unknown };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
+  installLadderEndGuard(bot);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
@@ -203,6 +205,63 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
     /* */
   }
   return bot;
+}
+
+// ---- ladder end guard (issue #34) ------------------------------------------------
+
+const ladderGuarded = new WeakSet<Bot>();
+const GUARDED = Symbol.for("caya.ladderEndGuard");
+
+/** Ladder and vines: a cell you hang in, not one you stand in. Scaffolding is a floor. */
+function isHangingCell(bot: Bot, x: number, y: number, z: number): boolean {
+  const name = blockNameAt(bot, x, y, z);
+  return name === "ladder" || name === "vine" || name.endsWith("_vines") || name === "weeping_vines_plant" || name === "twisting_vines_plant";
+}
+
+/**
+ * A goal must not end with the bot hanging on a ladder. Follow (range 2) "arrived"
+ * on the last rung while the player stood on the only exit block, pathfinder let
+ * go, the bot slid down, follow restarted, and it bobbed on the ladder forever.
+ * Unless the target itself is on a ladder, keep walking to a cell you can stand in.
+ */
+export function guardGoalAgainstLadderEnd(bot: Bot, goal: unknown): void {
+  const g = goal as {
+    isEnd?: (node: { x: number; y: number; z: number }) => boolean;
+    entity?: Entity;
+    x?: number;
+    y?: number;
+    z?: number;
+    [GUARDED]?: boolean;
+  } | null;
+  if (!g || typeof g.isEnd !== "function" || g[GUARDED]) return;
+  const orig = g.isEnd.bind(g);
+  const targetHangs = () => {
+    const tp = g.entity?.position;
+    if (tp) return isHangingCell(bot, tp.x, tp.y, tp.z) || isHangingCell(bot, tp.x, tp.y - 1, tp.z);
+    if (typeof g.x === "number" && typeof g.y === "number" && typeof g.z === "number") {
+      return isHangingCell(bot, g.x, g.y, g.z);
+    }
+    return false;
+  };
+  g.isEnd = (node) => {
+    if (!orig(node)) return false;
+    // on a rung, or in the air just above the top rung (pathfinder's climb ends there)
+    const hanging = isHangingCell(bot, node.x, node.y, node.z) || isHangingCell(bot, node.x, node.y - 1, node.z);
+    if (!hanging) return true;
+    return targetHangs();
+  };
+  g[GUARDED] = true;
+}
+
+function installLadderEndGuard(bot: Bot) {
+  if (ladderGuarded.has(bot)) return;
+  ladderGuarded.add(bot);
+  const pf = bot.pathfinder as unknown as { setGoal(goal: unknown, dynamic?: boolean): void };
+  const origSetGoal = pf.setGoal.bind(pf);
+  pf.setGoal = (goal: unknown, dynamic?: boolean) => {
+    guardGoalAgainstLadderEnd(bot, goal);
+    return origSetGoal(goal, dynamic);
+  };
 }
 
 // ---- merdiven atlayış asisti (takip) ----------------------------------------------
@@ -445,10 +504,37 @@ export async function runGoto(
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
 
-  await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
-    timeoutMs: options?.timeoutMs,
-    onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
-  });
+  // A* stops at 3-block gaps; on noPath try one configured sprint jump toward the
+  // target and plan again (issue #34: 4-gap goto said "noPath" and never jumped).
+  for (let jumps = 0; ; jumps++) {
+    try {
+      await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
+        timeoutMs: options?.timeoutMs,
+        onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
+      });
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const canJump = options?.parkour !== false && moveCfg(instance).allowParkour !== false;
+      if (jumps >= 3 || !canJump || isTokenAborted(token) || !/noPath|No progress/.test(msg)) throw err;
+      report({ done: 0, total: dist, label: "no walking path — trying a parkour jump" });
+      const jumped = await tryGapJumpTowardPoint(
+        instance,
+        { x: x + 0.5, y, z: z + 0.5 },
+        token,
+        (lx, ly, lz) => pathfinderGoal(instance, new goals.GoalBlock(lx, ly, lz), token, { timeoutMs: 20_000 }),
+        report
+      );
+      if (!jumped) throw err;
+      ensureMovement(instance, {
+        mode: "goto",
+        canDig: options?.canDig,
+        allowPlace: options?.allowPlace,
+        parkour: options?.parkour,
+        breakOnly: options?.breakOnly
+      });
+    }
+  }
 
   // varışta targete bak (bot artık DURUYOR — bakış serbest)
   try {

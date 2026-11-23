@@ -319,8 +319,40 @@ export function patchMovementsForTurningLadders(movements: unknown) {
   m.getNeighbors = (node: PathNode) => {
     const neighbors = orig(node);
     addTurningLadderMoves(m, node, neighbors);
+    pruneImpossibleLadderMoves(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
     return neighbors;
   };
+}
+
+/**
+ * Pathfinder climbs a ladder one node past the top rung, into the air above it, and
+ * then plans from that node as if the bot stood there. With a player on the only
+ * exit block it picked a 4-block parkour jump from mid-air (issue #34) and the bot
+ * bobbed on the top rung forever. Nothing on a ladder has ground to jump from, so
+ * parkour moves from a rung or from the air above the top rung are dropped.
+ */
+function pruneImpossibleLadderMoves(
+  m: { getBlock: (node: PathNode, dx: number, dy: number, dz: number) => CellInfo },
+  node: PathNode,
+  neighbors: unknown[]
+) {
+  let onRung = false;
+  let aboveTop = false;
+  try {
+    const here = m.getBlock(node, 0, 0, 0);
+    const below = m.getBlock(node, 0, -1, 0);
+    onRung = Boolean(here?.climbable);
+    // a ladder counts as "physical" (thin collision box), but nobody stands on it
+    aboveTop = !onRung && Boolean(below?.climbable) && Boolean(here?.safe);
+  } catch {
+    return;
+  }
+  if (!onRung && !aboveTop) return;
+  for (let i = neighbors.length - 1; i >= 0; i--) {
+    const mv = neighbors[i] as PathNode & { parkour?: boolean };
+    // no ground to sprint-jump from; spiral rungs (diagonal) and step-offs stay
+    if (mv.parkour) neighbors.splice(i, 1);
+  }
 }
 
 function addTurningLadderMoves(
@@ -395,6 +427,47 @@ function addTurningLadderMoves(
       } catch {
         /* */
       }
+    }
+  }
+  addLadderTopExits(m, node, neighbors, Move, remaining);
+}
+
+type CellInfo = { climbable?: boolean; safe?: boolean; physical?: boolean };
+
+/**
+ * Top rung → onto the block beside it, one up (issue #34). Pathfinder only climbs
+ * straight up a column, so a ladder on a 1-block wall with nothing behind it had
+ * no way off: the bot bobbed on the last rung forever. The exit is usually the
+ * block the ladder hangs on.
+ */
+function addLadderTopExits(
+  m: { getBlock: (node: PathNode, dx: number, dy: number, dz: number) => CellInfo },
+  node: PathNode,
+  neighbors: unknown[],
+  Move: new (x: number, y: number, z: number, remainingBlocks: number, cost: number, toBreak: unknown[], toPlace: unknown[], parkour?: boolean) => unknown,
+  remaining: number
+) {
+  try {
+    const above = m.getBlock(node, 0, 1, 0);
+    const above2 = m.getBlock(node, 0, 2, 0);
+    if (above?.climbable || !above?.safe || !above2?.safe) return; // not the top rung, or no head room
+  } catch {
+    return;
+  }
+  for (const dir of CARDINAL_XZ) {
+    try {
+      const floor = m.getBlock(node, dir.x, 0, dir.z);
+      const feet = m.getBlock(node, dir.x, 1, dir.z);
+      const head = m.getBlock(node, dir.x, 2, dir.z);
+      if (!floor?.physical || !feet?.safe || !head?.safe || feet.climbable) continue;
+      const exists = neighbors.some((n) => {
+        const mv = n as PathNode;
+        return mv.x === node.x + dir.x && mv.y === node.y + 1 && mv.z === node.z + dir.z;
+      });
+      if (exists) continue;
+      neighbors.push(new Move(node.x + dir.x, node.y + 1, node.z + dir.z, remaining, 1.6, [], [], false));
+    } catch {
+      /* */
     }
   }
 }
@@ -715,16 +788,54 @@ async function prepareRunUp(
 }
 
 /**
- * Hold jump until a physics tick sees onGround+jump. A 50ms pulse often misses the tick
- * and the bot walks off the block instead of jumping.
+ * Sprint toward the committed landing and jump on the last half of the takeoff block.
+ * Jumping at 0.16 is too late at sprint speed — we skip the window and walk off.
  */
-async function holdJumpUntilAirborne(bot: Bot, token: TaskToken): Promise<void> {
-  bot.setControlState("jump", true);
+async function sprintJumpAtEdge(
+  bot: Bot,
+  dir: { ux: number; uz: number },
+  gap: number,
+  token: TaskToken
+): Promise<void> {
+  const maxTicks = Math.ceil((400 + gap * 220) / 50) + 6;
   bot.setControlState("sneak", false);
-  await waitTicks(bot, 1);
-  for (let i = 0; i < 6 && !token.cancelled && bot.entity; i++) {
+  bot.setControlState("forward", true);
+  bot.setControlState("sprint", true);
+  bot.setControlState("jump", false);
+
+  // Tick-exact takeoff (issue #34): jump on the last tick the hitbox still stands on
+  // the lip. A wall-clock poll jumped ~0.6 block early and a 4-gap fell short.
+  await new Promise<void>((resolve) => {
+    let ticks = 0;
+    const done = () => {
+      bot.removeListener("physicsTick", onTick);
+      clearTimeout(safety);
+      resolve();
+    };
+    const onTick = () => {
+      ticks++;
+      if (token.cancelled || !bot.entity) return done();
+      if (!bot.entity.onGround) {
+        if (ticks > 2) return done(); // walked off already: the air phase takes over
+        return;
+      }
+      let leave: boolean;
+      try {
+        leave = wouldLeaveGroundNextTick(bot);
+      } catch {
+        leave = distToFrontEdge(bot, dir.ux, dir.uz) <= 0.3;
+      }
+      if (leave || ticks >= maxTicks) {
+        bot.setControlState("jump", true);
+        done();
+      }
+    };
+    const safety = setTimeout(done, maxTicks * 50 + 1500);
+    bot.on("physicsTick", onTick);
+  });
+  // keep jump held until a tick actually lifts us
+  for (let i = 0; i < 3 && bot.entity?.onGround && !token.cancelled; i++) {
     bot.setControlState("jump", true);
-    if (bot.entity.onGround === false) break;
     await waitTicks(bot, 1);
   }
   await waitTicks(bot, 1);
@@ -735,43 +846,29 @@ async function holdJumpUntilAirborne(bot: Bot, token: TaskToken): Promise<void> 
   }
 }
 
-/**
- * Sprint toward the committed landing and jump on the last half of the takeoff block.
- * Jumping at 0.16 is too late at sprint speed — we skip the window and walk off.
- */
-async function sprintJumpAtEdge(
-  bot: Bot,
-  dir: { ux: number; uz: number },
-  gap: number,
-  token: TaskToken
-): Promise<void> {
-  const maxMs = 400 + gap * 220;
-  const jumpAt = gap >= 6 ? 0.7 : gap >= 4 ? 0.62 : 0.55;
-  bot.setControlState("sneak", false);
-  bot.setControlState("forward", true);
-  bot.setControlState("sprint", true);
-  bot.setControlState("jump", false);
-
-  const t0 = Date.now();
-  let jumped = false;
-  while (Date.now() - t0 < maxMs && !token.cancelled && bot.entity) {
-    const onGround = bot.entity.onGround !== false;
-    const edge = distToFrontEdge(bot, dir.ux, dir.uz);
-    if (!jumped && onGround && edge <= jumpAt) {
-      jumped = true;
-      await holdJumpUntilAirborne(bot, token);
-      break;
-    }
-    if (!jumped && !onGround) {
-      jumped = true;
-      await holdJumpUntilAirborne(bot, token);
-      break;
-    }
-    await sleep(16);
+type PlayerStateCtor = new (bot: Bot, control: Record<string, boolean>) => { onGround: boolean };
+let playerStateCtor: PlayerStateCtor | null = null;
+/** Simulate one tick of sprinting forward without jumping: do we lose the ground? */
+function wouldLeaveGroundNextTick(bot: Bot): boolean {
+  if (!playerStateCtor) {
+    // the same prismarine-physics copy mineflayer runs
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    playerStateCtor = (require(require.resolve("prismarine-physics", { paths: [require.resolve("mineflayer")] })) as {
+      PlayerState: PlayerStateCtor;
+    }).PlayerState;
   }
-  if (!jumped && bot.entity) {
-    await holdJumpUntilAirborne(bot, token);
-  }
+  const physics = (bot as unknown as { physics: { simulatePlayer(s: unknown, w: unknown): unknown } }).physics;
+  const state = new playerStateCtor(bot, {
+    forward: true,
+    back: false,
+    left: false,
+    right: false,
+    jump: false,
+    sprint: true,
+    sneak: false
+  });
+  physics.simulatePlayer(state, { getBlock: (p: ReturnType<typeof v3>) => bot.blockAt(p, false) });
+  return !state.onGround;
 }
 
 /**
@@ -937,6 +1034,87 @@ export async function tryCommittedGapJumpToward(
   } finally {
     parkourLocks.delete(bot);
   }
+}
+
+/** Last cell of this platform, walking from the bot straight toward the target. */
+function findLipToward(bot: Bot, target: { x: number; z: number }): { x: number; y: number; z: number } | null {
+  if (!bot.entity) return null;
+  const pos = bot.entity.position;
+  const px = Math.floor(pos.x);
+  const py = Math.floor(pos.y);
+  const pz = Math.floor(pos.z);
+  const gdx = target.x - pos.x;
+  const gdz = target.z - pos.z;
+  const steps: Array<{ dx: number; dz: number }> = [];
+  const sx = Math.abs(gdx) >= 0.5 ? Math.sign(gdx) : 0;
+  const sz = Math.abs(gdz) >= 0.5 ? Math.sign(gdz) : 0;
+  if (Math.abs(gdx) >= Math.abs(gdz)) {
+    if (sx) steps.push({ dx: sx, dz: 0 });
+    if (sz) steps.push({ dx: 0, dz: sz });
+  } else {
+    if (sz) steps.push({ dx: 0, dz: sz });
+    if (sx) steps.push({ dx: sx, dz: 0 });
+  }
+  let best: { x: number; y: number; z: number; score: number } | null = null;
+  for (const step of steps) {
+    let last: { x: number; z: number } | null = null;
+    for (let d = 1; d <= 24; d++) {
+      const cx = px + step.dx * d;
+      const cz = pz + step.dz * d;
+      if (isOpenableCell(bot, cx, py, cz) || !isPlatformStand(bot, cx, py, cz)) break;
+      last = { x: cx, z: cz };
+    }
+    if (!last) continue;
+    // the lip must face an actual hole, not a wall
+    const nx = last.x + step.dx;
+    const nz = last.z + step.dz;
+    if (isSolid(bot, nx, py, nz) || isSolid(bot, nx, py + 1, nz)) continue;
+    const score = Math.hypot(target.x - (last.x + 0.5), target.z - (last.z + 0.5));
+    if (!best || score < best.score) best = { x: last.x, y: py, z: last.z, score };
+  }
+  return best ? { x: best.x, y: best.y, z: best.z } : null;
+}
+
+/**
+ * goto fallback when A* has no path (issue #34): pathfinder's own parkour stops at
+ * 3-block gaps, so a 4-gap target was "noPath". Walk to the lip facing the target
+ * and take one configured sprint jump. `walkTo` is the caller's pathfinder walk.
+ */
+export async function tryGapJumpTowardPoint(
+  instance: BotInstance,
+  target: { x: number; y: number; z: number },
+  token: TaskToken,
+  walkTo: (x: number, y: number, z: number) => Promise<void>,
+  report?: ProgressFn
+): Promise<boolean> {
+  const bot = instance.bot;
+  if (!bot?.entity || instance.status !== "online") return false;
+  if (parkourLocks.has(bot)) return false;
+  const cfg = parkourFromMovement(instance.config.movement);
+  if (!cfg.enabled) return false;
+  if (target.y - bot.entity.position.y > 1.2) return false; // no up-jumps into a roof
+  if (isNearOpenable(bot)) return false;
+
+  let land = findGapLanding(bot, target, cfg.maxGap);
+  if (!land) {
+    const lip = findLipToward(bot, target);
+    if (!lip) return false;
+    const here = bot.entity.position;
+    if (Math.hypot(lip.x + 0.5 - here.x, lip.z + 0.5 - here.z) > 0.8) {
+      try {
+        await walkTo(lip.x, lip.y, lip.z);
+      } catch {
+        return false;
+      }
+    }
+    if (token.cancelled || !bot.entity) return false;
+    land = findGapLanding(bot, target, cfg.maxGap);
+  }
+  if (!land || !jumpIsReachable(bot.entity.position.y, land)) return false;
+  const drop = bot.entity.position.y - land.y;
+  if (drop < 1 && land.gap > cfg.maxGap) return false;
+  instance.getLogger().info("Gap jump toward target", `gap=${land.gap} → ${land.x},${land.y},${land.z}`);
+  return executeGapJump(instance, land, land.gap, token, report);
 }
 
 /** Copy a jump the followed player already completed. Do not invent a new line. */

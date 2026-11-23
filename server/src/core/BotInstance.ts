@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
+import { installProtocolCompat, type ProtocolCompatHandle } from "./protocolCompat";
 import { ANTI_AFK_LOCK, antiAfkAllowed, antiAfkAllowsAction, antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
@@ -94,6 +95,8 @@ export class BotInstance extends EventEmitter {
   private windowTimer: NodeJS.Timeout | null = null;
   /** Son declare_commands paketi. Yeni paket listeyi bütünüyle değiştirir. */
   private serverCommandState: ServerCommandList | null = null;
+  /** Movement packet fixes for the current connection (see protocolCompat.ts). */
+  protocolCompat: ProtocolCompatHandle | null = null;
   private invTimer: NodeJS.Timeout | null = null;
   private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
@@ -1144,6 +1147,8 @@ export class BotInstance extends EventEmitter {
     }
 
     this.bot = bot;
+    // 1.21.2+ movement packets that anti-cheats expect (tick_end, full player_input, synced yaw)
+    this.protocolCompat = installProtocolCompat(bot!);
     this.hookCommandTree(bot!);
     this.hookBotEvents(bot!);
   }
