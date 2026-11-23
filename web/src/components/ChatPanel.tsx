@@ -109,11 +109,24 @@ export function ChatPanel({ botId }: { botId: string }) {
   );
 }
 
+/** Lines grouped by their first word, in list order. An op tree has thousands of lines. */
+function groupByCommand(lines: string[]): Array<[string, string[]]> {
+  const groups = new Map<string, string[]>();
+  for (const line of lines) {
+    const head = line.split(" ")[0] ?? line;
+    const rows = groups.get(head);
+    if (rows) rows.push(line);
+    else groups.set(head, [line]);
+  }
+  return [...groups.entries()];
+}
+
 /** Sunucunun declare_commands listesi. Tıklamak yalnızca sohbet kutusunu doldurur. */
 function ServerCommandList({ botId, onPick }: { botId: string; onPick: (line: string) => void }) {
   const { t } = useI18n();
   const bot = useAppStore((s) => s.bots[botId]);
   const [query, setQuery] = useState("");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const online = bot?.status === "online";
   const offline = !bot || bot.status === "stopped" || bot.status === "kicked" || bot.status === "error";
   const received = online ? bot?.serverCommands ?? null : null;
@@ -137,17 +150,43 @@ function ServerCommandList({ botId, onPick }: { botId: string; onPick: (line: st
         {online && received && needle && lines.length === 0 && (
           <p className="px-3 py-6 text-center text-xs text-zinc-600">{t("chat.commandsEmptyFilter")}</p>
         )}
-        {lines.map((line) => (
-          <button
-            key={line}
-            type="button"
-            title={t("chat.commandsFill")}
-            onClick={() => onPick(line)}
-            className="block w-full truncate px-3 py-1 text-left text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
-          >
-            /{line}
-          </button>
-        ))}
+        {needle
+          ? lines.map((line) => (
+              <button
+                key={line}
+                type="button"
+                title={t("chat.commandsFill")}
+                onClick={() => onPick(line)}
+                className="block w-full truncate px-3 py-1 text-left text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+              >
+                /{line}
+              </button>
+            ))
+          : groupByCommand(lines).map(([head, rows]) => (
+              <div key={head}>
+                <button
+                  type="button"
+                  onClick={() => setOpen((o) => ({ ...o, [head]: !o[head] }))}
+                  className="flex w-full items-center gap-1 px-3 py-1 text-left text-zinc-200 hover:bg-zinc-900"
+                >
+                  <span className="w-3 text-zinc-500">{rows.length > 1 ? (open[head] ? "▾" : "▸") : ""}</span>
+                  <span className="truncate">/{head}</span>
+                  {rows.length > 1 && <span className="ml-auto text-[10px] text-zinc-600">{rows.length}</span>}
+                </button>
+                {(rows.length === 1 || open[head]) &&
+                  rows.map((line) => (
+                    <button
+                      key={line}
+                      type="button"
+                      title={t("chat.commandsFill")}
+                      onClick={() => onPick(line)}
+                      className="block w-full truncate py-0.5 pl-7 pr-3 text-left text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                    >
+                      /{line}
+                    </button>
+                  ))}
+              </div>
+            ))}
       </div>
       {received && (
         <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-zinc-600">

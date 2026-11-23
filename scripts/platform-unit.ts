@@ -230,6 +230,27 @@ function unit() {
   const wideFlat = flattenCommandNodes(wide, 0, { maxDepth: 8, maxLines: 10 });
   assert("line limit cuts a wide tree", wideFlat.truncated && wideFlat.lines.length === 10, String(wideFlat.lines.length));
 
+  // issue #34: a big op tree must not drop whole commands such as /ob
+  const big: CommandNode[] = [{ kind: "root", children: [] }];
+  const bigRoot = big[0]!;
+  for (const name of ["aaa", "minecraft:aaa", "ob", "zzz"]) {
+    const top = big.length;
+    bigRoot.children!.push(top);
+    big.push({ kind: "literal", name, executable: false, children: [] });
+    for (let i = 0; i < 30; i++) {
+      big[top]!.children!.push(big.length);
+      big.push({ kind: "literal", name: `${name === "ob" ? "team" : "sub"}${i}`, executable: true });
+    }
+  }
+  const bigFlat = flattenCommandNodes(big, 0, { maxDepth: 8, maxLines: 6 });
+  const bigRoots = new Set(bigFlat.lines.map((line) => line.split(" ")[0]));
+  assert(
+    "every top-level command keeps a line when the list is cut",
+    bigFlat.truncated && bigFlat.lines.length === 6 && bigRoots.has("aaa") && bigRoots.has("ob") && bigRoots.has("zzz"),
+    bigFlat.lines.join(" | ")
+  );
+  assert("a namespaced copy of a plain command is hidden", !bigRoots.has("minecraft:aaa"), bigFlat.lines.join(" | "));
+
   const packet = flattenDeclarePacket({
     rootIndex: 0,
     nodes: [
@@ -240,7 +261,7 @@ function unit() {
   });
   assert("a declare_commands packet flattens to one line", packet?.lines.join(",") === "msg <message>" && packet?.truncated === false, packet?.lines.join(" | "));
   assert("a broken command packet is ignored", flattenDeclarePacket(null) === null && flattenDeclarePacket({ nodes: "nope" }) === null);
-  assert("command list defaults stay bounded", COMMAND_TREE_LIMITS.maxDepth === 8 && COMMAND_TREE_LIMITS.maxLines === 400);
+  assert("command list defaults stay bounded", COMMAND_TREE_LIMITS.maxDepth === 8 && COMMAND_TREE_LIMITS.maxLines === 2000);
 
   const replaced = flattenCommandNodes([{ kind: "root", children: [1] }, { kind: "literal", name: "later", executable: true }]);
   assert("a new tree replaces the previous lines", replaced.lines.join(",") === "later" && !replaced.lines.includes("ob"));
