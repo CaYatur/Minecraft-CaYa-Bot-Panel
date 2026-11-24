@@ -2546,13 +2546,14 @@ export function installParkourKick(instance: BotInstance): void {
       const sx = Math.sign(Math.floor(n.x) - Math.floor(bot.entity.position.x));
       const sz = Math.sign(Math.floor(n.z) - Math.floor(bot.entity.position.z));
       const narrowLanding = !isPlatformStand(bot, Math.floor(n.x) + sx, Math.floor(n.y), Math.floor(n.z) + sz);
-      if (!narrowLanding && Math.hypot(v.x, v.z) > 0.03) {
+      const takeOver = narrowLanding;
+      if (!takeOver && Math.hypot(v.x, v.z) > 0.03) {
         still = 0;
         return;
       }
       const nodeKey = `${Math.floor(n.x)},${Math.floor(n.y)},${Math.floor(n.z)}`;
       if (declined && declined.key === nodeKey && Date.now() < declined.until) return;
-      if (++still < (narrowLanding ? 1 : 12)) return;
+      if (++still < (takeOver ? 1 : 12)) return;
       still = 0;
       const goal = bot.pathfinder.goal as (goals.Goal & { entity?: unknown }) | null;
       if (!goal) return;

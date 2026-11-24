@@ -77,6 +77,27 @@ export function setSearchBudget(bot: Bot, level: number): void {
 }
 const LADDER_HOP_COOLDOWN_MS = 5_000;
 
+/**
+ * Run `fn` once the bot stands on something. pathfinder.setGoal releases every key at
+ * once; done in mid-air it cut a jump short and the bot fell into the gap (a follow
+ * re-plan while the followed player moved on).
+ */
+function whenGrounded(bot: Bot, fn: () => void, maxTicks = 40): void {
+  if (!bot.entity || bot.entity.onGround) {
+    fn();
+    return;
+  }
+  let n = 0;
+  const onTick = () => {
+    n++;
+    if (!bot.entity || bot.entity.onGround || n >= maxTicks) {
+      bot.removeListener("physicsTick", onTick);
+      fn();
+    }
+  };
+  bot.on("physicsTick", onTick);
+}
+
 /** Emitted on the bot after a server teleport moved it this far (blocks). */
 export const TELEPORT_EVENT = "caya_teleported";
 const TELEPORT_MIN_JUMP = 4;
@@ -528,14 +549,16 @@ function pathfinderGoal(
         if (result.path) result.path.length = 0;
         budget++;
         setSearchBudget(bot, budget);
-        setImmediate(() => {
-          if (settled) return;
-          try {
-            bot.pathfinder.setGoal(goal);
-          } catch {
-            /* */
-          }
-        });
+        setImmediate(() =>
+          whenGrounded(bot, () => {
+            if (settled) return;
+            try {
+              bot.pathfinder.setGoal(goal);
+            } catch {
+              /* */
+            }
+          })
+        );
         return;
       }
       if (result.status === "noPath") {
@@ -998,6 +1021,17 @@ export async function runFollow(
       let approach: { x: number; y: number; z: number } | null = null;
 
       const applyFollowGoal = (ent: Entity, forceApproach = false) => {
+        // never re-aim in mid-jump: setGoal lets go of every key and the jump fell short
+        const e = bot.entity as (typeof bot.entity & { isInWater?: boolean }) | undefined;
+        if (e && !e.onGround && !e.isInWater && !onLadderNow(bot)) {
+          whenGrounded(bot, () => {
+            if (bot.entity?.onGround) applyFollowGoalNow(ent, forceApproach);
+          });
+          return;
+        }
+        applyFollowGoalNow(ent, forceApproach);
+      };
+      const applyFollowGoalNow = (ent: Entity, forceApproach = false) => {
         const botPos = bot.entity?.position;
         const botY = botPos?.y ?? 0;
         const dy = ent.position.y - botY;
@@ -1064,15 +1098,17 @@ export async function runFollow(
           if (result.path) result.path.length = 0;
           budget++;
           setSearchBudget(bot, budget);
-          setImmediate(() => {
-            const g = bot.pathfinder.goal;
-            if (!g || isParkourLocked(bot)) return;
-            try {
-              bot.pathfinder.setGoal(g, g instanceof GoalFollowAtHeight);
-            } catch {
-              /* */
-            }
-          });
+          setImmediate(() =>
+            whenGrounded(bot, () => {
+              const g = bot.pathfinder.goal;
+              if (!g || isParkourLocked(bot)) return;
+              try {
+                bot.pathfinder.setGoal(g, g instanceof GoalFollowAtHeight);
+              } catch {
+                /* */
+              }
+            })
+          );
           return;
         }
         if (isParkourLocked(bot)) return;
