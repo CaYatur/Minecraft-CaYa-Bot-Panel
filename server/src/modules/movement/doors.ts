@@ -679,6 +679,35 @@ export async function tryOpenNearbyDoor(instance: BotInstance, radius = 2.8): Pr
   return tryPassNearbyDoor(instance, radius);
 }
 
+const ironControlCache = new WeakMap<Bot, Map<string, { has: boolean; at: number }>>();
+
+/** A button, lever or pressure plate within reach of this iron door (the same area the door assist presses). */
+function ironDoorHasControl(bot: Bot, door: { position?: Vec3 }): boolean {
+  const p = door.position;
+  if (!p) return false;
+  let cache = ironControlCache.get(bot);
+  if (!cache) {
+    cache = new Map();
+    ironControlCache.set(bot, cache);
+  }
+  const key = `${p.x},${p.y},${p.z}`;
+  const now = Date.now();
+  const hit = cache.get(key);
+  if (hit && now - hit.at < 3000) return hit.has;
+  let has = false;
+  for (let dx = -3; dx <= 3 && !has; dx++) {
+    for (let dz = -3; dz <= 3 && !has; dz++) {
+      for (let dy = -2; dy <= 2 && !has; dy++) {
+        if (Math.abs(dx) + Math.abs(dz) + Math.abs(dy) > 5) continue;
+        if (isDoorControlBlock(bot.blockAt(new Vec3(p.x + dx, p.y + dy, p.z + dz)))) has = true;
+      }
+    }
+  }
+  if (cache.size > 256) cache.clear();
+  cache.set(key, { has, at: now });
+  return has;
+}
+
 /** Apply A* walkability for wooden doors/gates on a Movements instance. */
 export function patchMovementsForDoors(bot: Bot, movements: object): void {
   const m = movements as {
@@ -699,8 +728,10 @@ export function patchMovementsForDoors(bot: Bot, movements: object): void {
     const trap = name.endsWith("_trapdoor");
     if (!doorOrGate && !trap) return b;
     const open = propsOf(b as { getProperties?: () => unknown }).open === true;
-    // An iron door opens only by redstone: a closed one is a wall (the bot pushed into one forever)
-    if (name.includes("iron_") && !open) return b;
+    // An iron door opens only by redstone. With a button, lever or pressure plate next to it the
+    // bot presses that on the way (door assist); with none a closed one is a wall (the bot pushed
+    // into one forever).
+    if (name.includes("iron_") && !open && !ironDoorHasControl(bot, b as { position?: Vec3 })) return b;
     // Closed doors/gates must still be pathable or a 1-wide doorway is a wall.
     // Open trapdoors are air; closed trapdoors stay solid (floor/ceiling).
     if (doorOrGate || (trap && open)) {
@@ -710,5 +741,4 @@ export function patchMovementsForDoors(bot: Bot, movements: object): void {
     }
     return b;
   };
-  void bot;
 }
