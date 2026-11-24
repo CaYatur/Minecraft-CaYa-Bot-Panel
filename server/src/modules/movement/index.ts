@@ -17,6 +17,7 @@ import {
   findReplayJump,
   GoalFollowAtHeight,
   isParkourLocked,
+  installParkourKick,
   installSpiralLadderAssist,
   isTurningLadder,
   patchMovementsForTurningLadders,
@@ -28,7 +29,7 @@ import {
   type ObservedJump
 } from "./parkour";
 import { installWaterMovementAssist } from "./water";
-import { PlayerTrail, type Vec as TrailVec } from "./trail";
+import { cutPathAtDrop, PlayerTrail, type Vec as TrailVec } from "./trail";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
 
@@ -135,6 +136,7 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   installLadderEndGuard(bot);
   installSpiralLadderAssist(bot);
+  installParkourKick(instance);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
@@ -426,7 +428,12 @@ function pathfinderGoal(
     const onReached = () => finish(resolve);
     let budget = 0;
     setSearchBudget(bot, budget);
-    const onPath = (result: { status: string }) => {
+    const onPath = (result: { status: string; path?: Array<{ y: number }> }) => {
+      if (result.status !== "success" && result.path && bot.entity) {
+        // best-effort path while no route is known: never step down into a pit
+        const gy = (goal as unknown as { y?: number }).y;
+        cutPathAtDrop(result.path, Math.min(bot.entity.position.y, typeof gy === "number" ? gy : bot.entity.position.y) - 1.5);
+      }
       if ((result.status === "noPath" || result.status === "timeout") && budget < SEARCH_BUDGETS.length - 1) {
         // nothing fits this detour budget: widen and plan again
         budget++;
@@ -761,6 +768,9 @@ export async function runFollow(
   let wantTrail = false;
   let trailActive = false;
   let lastTrailAt = 0;
+  let lastCutLogAt = 0;
+  let lastGoalRefreshAt = 0;
+  let lastPathStatus = "";
 
   const walkTrail = async (): Promise<boolean> => {
     const bot = requireBot(instance);
@@ -783,8 +793,11 @@ export async function runFollow(
     const here = () => bot.entity.position;
     try {
       let i = -1;
+      const player0 = bot.players[playerName]?.entity?.position;
       for (const cand of trail.nearestIndices(here(), 64, 4)) {
         const c = trail.get(cand)!;
+        // a crumb no closer than the player itself is just the same unreachable goal
+        if (player0 && here().distanceTo(new Vec3(c.x, c.y, c.z)) > here().distanceTo(player0) - 3) continue;
         if (here().distanceTo(new Vec3(c.x, c.y, c.z)) < 1.6 || (await go(c))) {
           i = cand;
           break;
@@ -895,7 +908,19 @@ export async function runFollow(
       }
 
       const onPath = (result: { status: string; path?: unknown[]; time?: number; visitedNodes?: number }) => {
+        lastPathStatus = result.status;
         if (trailActive) return;
+        if (process.env.CAYA_DEBUG_JUMP) { const pp = result.path ?? []; const l = pp[pp.length - 1] as { x: number; y: number; z: number } | undefined; console.log(`[follow-path] ${result.status} len=${pp.length} end=${l ? l.x + "," + l.y + "," + l.z : "-"} moving=${pfIsMoving(bot)}`); }
+        if (result.status !== "success" && result.path && bot.entity) {
+          // no full route: never walk a best-effort path down into a place we cannot leave
+          const live0 = bot.players[playerName]?.entity;
+          const floorY = Math.min(bot.entity.position.y, live0?.position.y ?? bot.entity.position.y) - 1.5;
+          const before = result.path.length;
+          if (cutPathAtDrop(result.path as Array<{ y: number }>, floorY) < before && Date.now() - lastCutLogAt > 5000) {
+            lastCutLogAt = Date.now();
+            instance.getLogger().debug("Follow path", `partial path cut before a drop (${before} → ${result.path.length})`);
+          }
+        }
         if (result.status !== "success" && result.status !== "partial") {
           instance.getLogger().debug("Follow path", `${result.status} nodes=${result.visitedNodes ?? "?"} t=${Math.round(result.time ?? 0)}ms len=${result.path?.length ?? 0}`);
         }
@@ -1082,6 +1107,21 @@ export async function runFollow(
               await sleep(FOLLOW_TICK_MS);
               continue;
             }
+          }
+
+          // The follow goal only moves when the player moved 4+ blocks (so long detours
+          // are not restarted). Standing still short of a player who stopped 3 blocks
+          // further on waited for the 10 s stuck watchdog: re-aim at where they are now.
+          if (
+            bot.entity.onGround &&
+            !pfIsMoving(bot) &&
+            d > holdDist + 1 &&
+            Date.now() - lastGoalRefreshAt > 1000 &&
+            lastPathStatus === "success" &&
+            !isParkourLocked(bot)
+          ) {
+            lastGoalRefreshAt = Date.now();
+            applyFollowGoal(cur, true);
           }
 
           if (pos.distanceTo(lastPos) > 0.35) {

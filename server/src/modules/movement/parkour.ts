@@ -941,9 +941,18 @@ async function sprintJumpAtEdge(
   token: TaskToken
 ): Promise<void> {
   const maxTicks = Math.ceil((400 + gap * 220) / 50) + 6;
+  // Where the last tick on the lip falls depends on where the run starts: from one
+  // spot it is 0.01 past the support edge, from another 0.16, and a 4-gap needs the
+  // far one. Pick how many ticks to walk before sprinting so it lands at the far end.
+  let sprintDelay = 0;
+  try {
+    sprintDelay = planSprintDelay(bot, dir);
+  } catch {
+    sprintDelay = 0;
+  }
   bot.setControlState("sneak", false);
   bot.setControlState("forward", true);
-  bot.setControlState("sprint", true);
+  bot.setControlState("sprint", sprintDelay === 0);
   bot.setControlState("jump", false);
 
   // Tick-exact takeoff (issue #34): jump on the last tick the hitbox still stands on
@@ -958,17 +967,20 @@ async function sprintJumpAtEdge(
     const onTick = () => {
       ticks++;
       if (token.cancelled || !bot.entity) return done();
+      if (process.env.CAYA_DEBUG_JUMP) console.log(`[jump-t] ${ticks} x=${bot.entity.position.x.toFixed(3)} vx=${bot.entity.velocity.x.toFixed(3)} g=${bot.entity.onGround}`);
       if (!bot.entity.onGround) {
         if (ticks > 2) return done(); // walked off already: the air phase takes over
         return;
       }
+      bot.setControlState("sprint", ticks >= sprintDelay);
       let leave: boolean;
       try {
-        leave = wouldLeaveGroundNextTick(bot);
+        leave = wouldLeaveGroundNextTick(bot, ticks >= sprintDelay);
       } catch {
         leave = distToFrontEdge(bot, dir.ux, dir.uz) <= 0.3;
       }
       if (leave || ticks >= maxTicks) {
+        if (process.env.CAYA_DEBUG_JUMP) console.log(`[jump] tick=${ticks} x=${bot.entity.position.x.toFixed(3)} z=${bot.entity.position.z.toFixed(3)} vx=${bot.entity.velocity.x.toFixed(3)} leave=${leave} ground=${bot.entity.onGround} sprint=${bot.getControlState("sprint")}`);
         bot.setControlState("jump", true);
         done();
       }
@@ -992,7 +1004,7 @@ async function sprintJumpAtEdge(
 type PlayerStateCtor = new (bot: Bot, control: Record<string, boolean>) => { onGround: boolean };
 let playerStateCtor: PlayerStateCtor | null = null;
 /** Simulate one tick of sprinting forward without jumping: do we lose the ground? */
-function wouldLeaveGroundNextTick(bot: Bot): boolean {
+function wouldLeaveGroundNextTick(bot: Bot, sprint = true): boolean {
   if (!playerStateCtor) {
     // the same prismarine-physics copy mineflayer runs
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1007,11 +1019,47 @@ function wouldLeaveGroundNextTick(bot: Bot): boolean {
     left: false,
     right: false,
     jump: false,
-    sprint: true,
+    sprint,
     sneak: false
   });
   physics.simulatePlayer(state, { getBlock: (p: ReturnType<typeof v3>) => bot.blockAt(p, false) });
   return !state.onGround;
+}
+
+/**
+ * Simulate the run to the lip for each sprint delay (walk k ticks, then sprint) and
+ * return the k whose last tick on the ground is farthest along the jump direction,
+ * at full sprint speed. Same physics copy as mineflayer, so the plan matches the run.
+ */
+export function planSprintDelay(bot: Bot, dir: { ux: number; uz: number }, maxDelay = 8): number {
+  if (!playerStateCtor) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    playerStateCtor = (require(require.resolve("prismarine-physics", { paths: [require.resolve("mineflayer")] })) as {
+      PlayerState: PlayerStateCtor;
+    }).PlayerState;
+  }
+  const physics = (bot as unknown as { physics: { simulatePlayer(s: unknown, w: unknown): unknown } }).physics;
+  const world = { getBlock: (p: ReturnType<typeof v3>) => bot.blockAt(p, false) };
+  const p0 = bot.entity.position;
+  let best = { k: 0, reach: -Infinity };
+  for (let k = 0; k <= maxDelay; k++) {
+    const control = { forward: true, back: false, left: false, right: false, jump: false, sprint: k === 0, sneak: false };
+    const state = new playerStateCtor(bot, control) as unknown as { pos: { x: number; y: number; z: number }; onGround: boolean; control: typeof control };
+    let last: { x: number; z: number } | null = null;
+    let step = 0;
+    for (let t = 0; t < 60; t++) {
+      const before = { x: state.pos.x, z: state.pos.z };
+      state.control.sprint = t >= k;
+      physics.simulatePlayer(state, world);
+      if (!state.onGround) break;
+      step = Math.hypot(state.pos.x - before.x, state.pos.z - before.z);
+      last = { x: state.pos.x, z: state.pos.z };
+    }
+    if (!last || step < 0.26) continue; // must leave at full sprint speed
+    const reach = (last.x - p0.x) * dir.ux + (last.z - p0.z) * dir.uz;
+    if (reach > best.reach + 0.01) best = { k, reach };
+  }
+  return best.k;
 }
 
 /**
@@ -1054,6 +1102,11 @@ export async function executeGapJump(
     // Look toward landing XZ at takeoff eye height — staring down kills sprint distance.
     await alignManualLookAt(bot, v3(lx, pos0.y + 0.3, lz));
     await sprintJumpAtEdge(bot, dir, g, token);
+    {
+      const tp = bot.entity.position;
+      const tv = bot.entity.velocity;
+      instance.getLogger().debug("Parkour takeoff", `at ${tp.x.toFixed(2)},${tp.y.toFixed(2)},${tp.z.toFixed(2)} v=${Math.hypot(tv.x, tv.z).toFixed(3)} vy=${tv.y.toFixed(2)} sprint=${bot.getControlState("sprint")} yaw=${bot.entity.yaw.toFixed(2)} want=${Math.atan2(-(lx - tp.x), -(lz - tp.z)).toFixed(2)} toLand=${Math.hypot(lx - tp.x, lz - tp.z).toFixed(2)}`);
+    }
     if (token.cancelled) {
       clearControls(bot);
       throw new Error(token.reason ?? "cancelled");
@@ -2013,6 +2066,71 @@ async function runPathOnce(
     } catch (e) {
       cleanup();
       reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
+}
+
+const parkourKicked = new WeakSet<Bot>();
+
+/**
+ * Pathfinder plans 2–3 block parkour moves but cannot back up for a run-up. When the
+ * bot already stands on the lip (follow brought it there), its own physics check says
+ * the jump fails from a standstill and it waits until a watchdog fires (~10 s). When
+ * the next node is a parkour move and the bot has not moved for 0.6 s, take that
+ * jump with the run-up and tick-planned takeoff, then hand the goal back.
+ */
+export function installParkourKick(instance: BotInstance): void {
+  const bot = instance.bot;
+  if (!bot || parkourKicked.has(bot)) return;
+  parkourKicked.add(bot);
+  let path: Array<{ x: number; y: number; z: number; parkour?: boolean }> | null = null;
+  let still = 0;
+  let busy = false;
+  bot.on("path_update", (r: { path?: Array<{ x: number; y: number; z: number; parkour?: boolean }> }) => {
+    path = r.path ?? null;
+    still = 0;
+  });
+  bot.on("goal_reached", () => {
+    path = null;
+  });
+  bot.on("physicsTick", () => {
+    try {
+      if (busy || !path || path.length === 0 || !bot.entity || parkourLocks.has(bot)) {
+        still = 0;
+        return;
+      }
+      const n = path[0]!;
+      const v = bot.entity.velocity;
+      if (process.env.CAYA_DEBUG_JUMP && bot.time?.age && Number(bot.time.age) % 10 === 0) console.log(`[kick] n=${n.x},${n.y},${n.z} pk=${n.parkour} len=${path.length} p=${bot.entity.position.x.toFixed(2)},${bot.entity.position.z.toFixed(2)} v=${Math.hypot(v.x, v.z).toFixed(3)} g=${bot.entity.onGround} fwd=${bot.getControlState("forward")} jmp=${bot.getControlState("jump")}`);
+      if (!n.parkour || !bot.entity.onGround || Math.hypot(v.x, v.z) > 0.03) {
+        still = 0;
+        return;
+      }
+      if (++still < 12) return;
+      still = 0;
+      const goal = bot.pathfinder.goal as (goals.Goal & { entity?: unknown }) | null;
+      if (!goal) return;
+      const dynamic = goal.entity !== undefined;
+      const p = bot.entity.position;
+      const d = Math.hypot(n.x - p.x, n.z - p.z);
+      if (d < 1.8) return;
+      const landing = { x: Math.floor(n.x), y: Math.floor(n.y), z: Math.floor(n.z) };
+      const gap = Math.max(2, Math.round(d) - 1);
+      busy = true;
+      instance.getLogger().info("Parkour assist", `pathfinder stopped at a ${gap}-gap lip — taking the jump with a run-up`);
+      void executeGapJump(instance, landing, gap, { cancelled: false })
+        .catch(() => false)
+        .finally(() => {
+          busy = false;
+          path = null;
+          try {
+            if (!bot.pathfinder.goal) bot.pathfinder.setGoal(goal, dynamic);
+          } catch {
+            /* */
+          }
+        });
+    } catch {
+      /* never break the physics loop */
     }
   });
 }

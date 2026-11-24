@@ -98,3 +98,14 @@ export class PlayerTrail {
     return k;
   }
 }
+
+/**
+ * A partial path (no route found yet) walks toward A*'s best node. Inside a build
+ * that often means stepping off a beam into a pit the bot cannot leave. Cut the
+ * path, in place, before the first node below `minY`. Returns the new length.
+ */
+export function cutPathAtDrop(path: Array<{ y: number }>, minY: number): number {
+  const i = path.findIndex((n) => n.y < minY);
+  if (i >= 0) path.length = i;
+  return path.length;
+}
