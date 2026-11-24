@@ -261,12 +261,19 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   if (vine) movements.climbables.add(vine.id);
   // Magma burns a walking player: go round it when a few blocks of detour do (the fire guard
   // otherwise pulled the bot off its route).
-  const magma = registry.blocksByName.magma_block;
-  if (magma) {
+  // (state id lookup: called for every cell the search looks at, a Block object each time was slow)
+  const magma = registry.blocksByName.magma_block as { minStateId?: number; maxStateId?: number } | undefined;
+  const world = bot.world as unknown as { getBlockStateId?(p: Vec3): number | undefined };
+  if (magma?.minStateId !== undefined && typeof world.getBlockStateId === "function") {
+    const lo = magma.minStateId;
+    const hi = magma.maxStateId ?? lo;
+    const below = new Vec3(0, 0, 0);
     movements.exclusionAreasStep.push((b: { position?: Vec3 }) => {
-      if (!b.position) return 0;
-      const below = bot.blockAt(b.position.offset(0, -1, 0), false);
-      return below?.type === magma.id ? 6 : 0;
+      const p = b.position;
+      if (!p) return 0;
+      below.set(p.x, p.y - 1, p.z);
+      const id = world.getBlockStateId!(below);
+      return id !== undefined && id >= lo && id <= hi ? 6 : 0;
     });
   }
   // Pathfinder treats a cobweb as a wall; a player wades through it slowly. Allow it at a high
