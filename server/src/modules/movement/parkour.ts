@@ -1134,8 +1134,11 @@ async function sprintJumpAtEdge(
   bot.setControlState("jump", false);
   let setback = false;
   let aborted = false;
+  let teleported = false;
   const onSetback = () => {
     setback = true;
+    // a real teleport (a /tp, a stop and move elsewhere) ends the jump outright
+    if (bot.entity && bot.entity.position.distanceTo(runStart) >= 4) teleported = true;
   };
   bot.on("forcedMove", onSetback);
 
@@ -1176,14 +1179,14 @@ async function sprintJumpAtEdge(
     bot.on("physicsTick", onTick);
   });
   bot.removeListener("forcedMove", onSetback);
-  if (aborted && (attempt >= 2 || token.cancelled)) gaveUp = true;
-  if (!aborted || attempt >= 2 || token.cancelled) break;
+  if (aborted && (attempt >= 2 || token.cancelled || teleported)) gaveUp = true;
+  if (!aborted || attempt >= 2 || token.cancelled || teleported) break;
   bot.setControlState("forward", false);
   bot.setControlState("sprint", false);
   await waitTicks(bot, 12);
   }
-  if (gaveUp) {
-    clearControls(bot);
+  if (gaveUp || token.cancelled) {
+    clearControls(bot); // stopped or teleported: no jump at all
     return;
   }
   // keep jump held until a tick actually lifts us
@@ -1399,11 +1402,28 @@ export async function executeGapJump(
   instance: BotInstance,
   landing: { x: number; y: number; z: number },
   gap: number,
-  token: TaskToken,
+  outerToken: TaskToken,
   report?: ProgressFn
 ): Promise<boolean> {
   const bot = instance.bot;
   if (!bot?.entity || instance.status !== "online") return false;
+  // A stop (new control epoch) or a teleport ends this jump: it was planned for the
+  // old spot. It kept running after a stop and a /tp and jumped toward the old target.
+  const epoch = instance.controlEpoch;
+  let teleported = false;
+  const onTeleport = () => {
+    teleported = true;
+  };
+  bot.on("caya_teleported" as never, onTeleport as never);
+  const token = {
+    get cancelled() {
+      return outerToken.cancelled || teleported || instance.controlEpoch !== epoch;
+    },
+    get reason() {
+      return outerToken.reason ?? (teleported ? "teleported" : "stopped");
+    },
+    abort: outerToken.abort
+  } as TaskToken;
   const ownsLock = !parkourLocks.has(bot);
   if (ownsLock) parkourLocks.add(bot);
 
@@ -1419,6 +1439,11 @@ export async function executeGapJump(
     const ly = landing.y;
     const lz = landing.z + 0.5;
     const pos0 = bot.entity.position;
+    // a landing far out of reach was planned from somewhere else (stop, teleport)
+    if (Math.hypot(lx - pos0.x, lz - pos0.z) > g + 4.5) {
+      instance.getLogger().debug("Parkour jump skipped", `landing ${landing.x},${landing.y},${landing.z} is ${Math.hypot(lx - pos0.x, lz - pos0.z).toFixed(1)} away`);
+      return false;
+    }
     const drop = Math.max(0, pos0.y - ly);
     const dx = lx - pos0.x;
     const dz = lz - pos0.z;
@@ -1461,6 +1486,10 @@ export async function executeGapJump(
       return false;
     }
     await sprintJumpAtEdge(bot, dir, g, token, sprintMode);
+    if (token.cancelled) {
+      clearControls(bot);
+      throw new Error(token.reason ?? "cancelled");
+    }
     {
       const tp = bot.entity.position;
       const tv = bot.entity.velocity;
@@ -1537,6 +1566,7 @@ export async function executeGapJump(
     return landed;
   } finally {
     if (ownsLock) parkourLocks.delete(bot);
+    bot.removeListener("caya_teleported" as never, onTeleport as never);
   }
 }
 
@@ -2478,6 +2508,10 @@ export function installParkourKick(instance: BotInstance): void {
   let path: Array<{ x: number; y: number; z: number; parkour?: boolean }> | null = null;
   let still = 0;
   let busy = false;
+  let teleportCount = 0;
+  bot.on("caya_teleported" as never, (() => {
+    teleportCount++;
+  }) as never);
   // a jump the rehearsal turned down: leave it to pathfinder for a while (no retry loop)
   let declined: { key: string; until: number } | null = null;
   bot.on("path_update", (r: { path?: Array<{ x: number; y: number; z: number; parkour?: boolean }> }) => {
@@ -2534,6 +2568,8 @@ export function installParkourKick(instance: BotInstance): void {
       const maxGap = parkourFromMovement(instance.config.movement).maxGap;
       if (gap > maxGap || Math.abs(n.y - p.y) > 1.6) return;
       busy = true;
+      const kickEpoch = instance.controlEpoch;
+      const kickTeleports = teleportCount;
       instance.getLogger().info("Parkour assist", `pathfinder stopped at a ${gap}-gap lip — taking the jump with a run-up`);
       void executeGapJump(instance, landing, gap, { cancelled: false })
         .catch(() => false)
@@ -2544,7 +2580,10 @@ export function installParkourKick(instance: BotInstance): void {
           busy = false;
           path = null;
           try {
-            if (!bot.pathfinder.goal) bot.pathfinder.setGoal(goal, dynamic);
+            // a stop or a teleport meanwhile: the old goal is not ours to restore
+            if (!bot.pathfinder.goal && instance.controlEpoch === kickEpoch && teleportCount === kickTeleports) {
+              bot.pathfinder.setGoal(goal, dynamic);
+            }
           } catch {
             /* */
           }
