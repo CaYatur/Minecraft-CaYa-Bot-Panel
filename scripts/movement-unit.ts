@@ -73,6 +73,11 @@ function main() {
     assert("a 1-block gap at the same height is left to walking", findGapLanding(walk, { x: 8.5, y: 100, z: 0.5 }, 4) === null);
     const far = fakeBot([...pad, ...row(10, 13, 99, 0)], [4.5, 100, 0.5]);
     assert("a 5-gap is not offered with max gap 4", findGapLanding(far, { x: 12.5, y: 100, z: 0.5 }, 4) === null);
+    const corner = fakeBot([...pad, ...row(9, 12, 99, 4)], [4.5, 100, 0.5]);
+    assert(
+      "a same-level corner jump longer than 4 is never offered, even to the jump-to-player check (max 10)",
+      findGapLanding(corner, { x: 10.5, y: 100, z: 4.5 }, 10) === null
+    );
   }
 
   assert("fall of 3 blocks is safe", fallDamageHp(3) === 0);

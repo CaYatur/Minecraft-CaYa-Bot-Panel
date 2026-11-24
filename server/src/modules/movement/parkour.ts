@@ -792,7 +792,7 @@ function scanGapFan(
   const px = Math.floor(origin.x);
   const py = Math.floor(origin.y);
   const pz = Math.floor(origin.z);
-  const R = maxGap + 3;
+  const R = Math.min(maxGap, 4) + 3;
   const fromHere = Math.hypot(goal.x - origin.x, goal.z - origin.z);
   let best: GapLanding | null = null;
   for (let cx = px - R; cx <= px + R; cx++) {
@@ -837,7 +837,8 @@ function scanGapFan(
       if (!ok || lip < 0 || land < 0) continue;
       const air = land - lip; // centre line; the hitbox reaches 0.3 further on both ends
       const edge = air - 0.6;
-      const limit = drop >= 1 ? maxAirForDrop(drop, maxGap) : sy > py ? Math.min(maxGap, 3) : maxGap;
+      // same caps as the straight scan: 4 at the same height (any maxGap), 3 going up
+      const limit = sy > py ? Math.min(maxGap, 3) : maxAirForDrop(Math.max(0, drop), maxGap);
       if (edge < 1 || edge > limit + 0.2) continue;
       const gap = Math.max(2, Math.round(edge));
       const cand: GapLanding = { x: cx, y: sy, z: cz, gap, score: toGoal + edge * 0.15 };
