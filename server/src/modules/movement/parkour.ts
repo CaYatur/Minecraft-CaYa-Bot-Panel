@@ -319,6 +319,7 @@ export function patchMovementsForTurningLadders(movements: unknown) {
   m.getNeighbors = (node: PathNode) => {
     const neighbors = orig(node);
     addTurningLadderMoves(m, node, neighbors);
+    addWaterExits(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo & { liquid?: boolean; name?: string } }, node, neighbors);
     pruneImpossibleLadderMoves(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
     pruneParkourWithoutRunUp(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
     return neighbors;
@@ -654,6 +655,49 @@ function addLadderTopExits(
       });
       if (exists) continue;
       neighbors.push(new Move(node.x + dir.x, node.y + 1, node.z + dir.z, remaining, 1.6, [], [], false));
+    } catch {
+      /* */
+    }
+  }
+}
+
+/**
+ * Out of water onto a bank one block up. Pathfinder never plans a jump from water,
+ * so a pool two blocks deep with a ledge at the far side had no way across: the bot
+ * swam back to where it came in. Swimming up against the ledge lifts a player out.
+ */
+function addWaterExits(
+  m: { getBlock: (node: PathNode, dx: number, dy: number, dz: number) => CellInfo & { liquid?: boolean; name?: string } },
+  node: PathNode,
+  neighbors: unknown[]
+) {
+  let inWater = false;
+  try {
+    const here = m.getBlock(node, 0, 0, 0);
+    const up = m.getBlock(node, 0, 1, 0);
+    inWater = Boolean(here?.liquid) && !String(here?.name ?? "").includes("lava") && Boolean(up?.safe) && !up?.liquid;
+  } catch {
+    return;
+  }
+  if (!inWater) return;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Move = require("mineflayer-pathfinder/lib/move") as new (
+    x: number, y: number, z: number, remainingBlocks: number, cost: number, toBreak: unknown[], toPlace: unknown[], parkour?: boolean
+  ) => unknown;
+  const remaining = (node as { remainingBlocks?: number }).remainingBlocks ?? 0;
+  for (const dir of CARDINAL_XZ) {
+    try {
+      const bank = m.getBlock(node, dir.x, 0, dir.z);
+      const feet = m.getBlock(node, dir.x, 1, dir.z);
+      const head = m.getBlock(node, dir.x, 2, dir.z);
+      const over = m.getBlock(node, 0, 2, 0);
+      if (!bank?.physical || bank.liquid || !feet?.safe || feet.liquid || !head?.safe || !over?.safe) continue;
+      const exists = neighbors.some((n) => {
+        const mv = n as PathNode;
+        return mv.x === node.x + dir.x && mv.y === node.y + 1 && mv.z === node.z + dir.z;
+      });
+      if (exists) continue;
+      neighbors.push(new Move(node.x + dir.x, node.y + 1, node.z + dir.z, remaining, 2.5, [], [], false));
     } catch {
       /* */
     }
