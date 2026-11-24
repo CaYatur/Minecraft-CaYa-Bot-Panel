@@ -38,7 +38,7 @@ Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-
 - New `npm run test:protocol` (movement packet order, sprint ids, attributes, teleports and setbacks) in `test:all`, command-list cases in `test:platform`, and player-trail and gap-landing cases in `test:movement`. `test-server/README.md` describes the Paper + ViaVersion + GrimAC check.
 
 ### Known limitations
-- On a server with GrimAC, a few moves can still be set back (no flags are raised) and fail: step-up jumps from 1x1 block to 1x1 block, and a jump up from the wall beside a ladder top. The spiral-ladder climb was tested on vanilla Paper only.
+- On a server with GrimAC, a few moves can still be set back (no flags are raised) and fail: step-up jumps from 1x1 block to 1x1 block, a jump up from the wall beside a ladder top, and now and then a jump up right after a turn. The spiral-ladder climb was tested on vanilla Paper only.
 - Not attempted: neo jumps (around a wall), head-hitter jumps under a 2-block ceiling, and spirals with one rung per side around a 2x2 core.
 
 ## 3.0.7 — 2026-11-21

@@ -2477,6 +2477,8 @@ export function installParkourKick(instance: BotInstance): void {
   let path: Array<{ x: number; y: number; z: number; parkour?: boolean }> | null = null;
   let still = 0;
   let busy = false;
+  // a jump the rehearsal turned down: leave it to pathfinder for a while (no retry loop)
+  let declined: { key: string; until: number } | null = null;
   bot.on("path_update", (r: { path?: Array<{ x: number; y: number; z: number; parkour?: boolean }> }) => {
     path = r.path ?? null;
     still = 0;
@@ -2513,6 +2515,8 @@ export function installParkourKick(instance: BotInstance): void {
         still = 0;
         return;
       }
+      const nodeKey = `${Math.floor(n.x)},${Math.floor(n.y)},${Math.floor(n.z)}`;
+      if (declined && declined.key === nodeKey && Date.now() < declined.until) return;
       if (++still < (narrowLanding ? 1 : 12)) return;
       still = 0;
       const goal = bot.pathfinder.goal as (goals.Goal & { entity?: unknown }) | null;
@@ -2532,6 +2536,9 @@ export function installParkourKick(instance: BotInstance): void {
       instance.getLogger().info("Parkour assist", `pathfinder stopped at a ${gap}-gap lip — taking the jump with a run-up`);
       void executeGapJump(instance, landing, gap, { cancelled: false })
         .catch(() => false)
+        .then((ok) => {
+          if (!ok) declined = { key: nodeKey, until: Date.now() + 5000 };
+        })
         .finally(() => {
           busy = false;
           path = null;
