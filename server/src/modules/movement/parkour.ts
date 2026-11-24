@@ -346,6 +346,12 @@ function pruneParkourWithoutRunUp(
     // A standing jump clears 2 blocks at the same height or lower (beam to beam
     // sideways); 3+, or 2 up, needs a run-up.
     if (gap < 2 || (gap === 2 && mv.y <= node.y)) continue;
+    // 3 across and 1 up is a pro jump that pathfinder's own takeoff missed again and
+    // again (the bot fell between platforms); the rehearsed gap jump takes it instead.
+    if (gap >= 3 && mv.y > node.y) {
+      neighbors.splice(i, 1);
+      continue;
+    }
     const sx = Math.sign(dx);
     const sz = Math.sign(dz);
     try {
