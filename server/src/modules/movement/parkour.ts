@@ -320,8 +320,41 @@ export function patchMovementsForTurningLadders(movements: unknown) {
     const neighbors = orig(node);
     addTurningLadderMoves(m, node, neighbors);
     pruneImpossibleLadderMoves(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
+    pruneParkourWithoutRunUp(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
     return neighbors;
   };
+}
+
+/**
+ * A 2+ block parkour jump needs a run-up. Off the end of a 1-wide beam, sideways,
+ * there is none: the bot jumped from a standstill and fell (issue #34). Keep such a
+ * move only when the cell behind the takeoff can be stood on; the takeoff planner
+ * backs into it for speed.
+ */
+function pruneParkourWithoutRunUp(
+  m: { getBlock: (node: PathNode, dx: number, dy: number, dz: number) => CellInfo },
+  node: PathNode,
+  neighbors: unknown[]
+) {
+  for (let i = neighbors.length - 1; i >= 0; i--) {
+    const mv = neighbors[i] as PathNode & { parkour?: boolean };
+    if (!mv.parkour) continue;
+    const dx = mv.x - node.x;
+    const dz = mv.z - node.z;
+    if (Math.max(Math.abs(dx), Math.abs(dz)) - 1 < 2) continue;
+    const sx = Math.sign(dx);
+    const sz = Math.sign(dz);
+    try {
+      const floor = m.getBlock(node, -sx, -1, -sz);
+      const feet = m.getBlock(node, -sx, 0, -sz);
+      const head = m.getBlock(node, -sx, 1, -sz);
+      if (floor?.physical && feet?.safe && head?.safe) continue;
+    } catch {
+      /* unknown cells: keep the move */
+      continue;
+    }
+    neighbors.splice(i, 1);
+  }
 }
 
 /**
@@ -967,7 +1000,6 @@ async function sprintJumpAtEdge(
     const onTick = () => {
       ticks++;
       if (token.cancelled || !bot.entity) return done();
-      if (process.env.CAYA_DEBUG_JUMP) console.log(`[jump-t] ${ticks} x=${bot.entity.position.x.toFixed(3)} vx=${bot.entity.velocity.x.toFixed(3)} g=${bot.entity.onGround}`);
       if (!bot.entity.onGround) {
         if (ticks > 2) return done(); // walked off already: the air phase takes over
         return;
@@ -980,7 +1012,6 @@ async function sprintJumpAtEdge(
         leave = distToFrontEdge(bot, dir.ux, dir.uz) <= 0.3;
       }
       if (leave || ticks >= maxTicks) {
-        if (process.env.CAYA_DEBUG_JUMP) console.log(`[jump] tick=${ticks} x=${bot.entity.position.x.toFixed(3)} z=${bot.entity.position.z.toFixed(3)} vx=${bot.entity.velocity.x.toFixed(3)} leave=${leave} ground=${bot.entity.onGround} sprint=${bot.getControlState("sprint")}`);
         bot.setControlState("jump", true);
         done();
       }
@@ -2101,7 +2132,6 @@ export function installParkourKick(instance: BotInstance): void {
       }
       const n = path[0]!;
       const v = bot.entity.velocity;
-      if (process.env.CAYA_DEBUG_JUMP && bot.time?.age && Number(bot.time.age) % 10 === 0) console.log(`[kick] n=${n.x},${n.y},${n.z} pk=${n.parkour} len=${path.length} p=${bot.entity.position.x.toFixed(2)},${bot.entity.position.z.toFixed(2)} v=${Math.hypot(v.x, v.z).toFixed(3)} g=${bot.entity.onGround} fwd=${bot.getControlState("forward")} jmp=${bot.getControlState("jump")}`);
       if (!n.parkour || !bot.entity.onGround || Math.hypot(v.x, v.z) > 0.03) {
         still = 0;
         return;

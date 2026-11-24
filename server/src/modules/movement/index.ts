@@ -435,7 +435,8 @@ function pathfinderGoal(
         cutPathAtDrop(result.path, Math.min(bot.entity.position.y, typeof gy === "number" ? gy : bot.entity.position.y) - 1.5);
       }
       if ((result.status === "noPath" || result.status === "timeout") && budget < SEARCH_BUDGETS.length - 1) {
-        // nothing fits this detour budget: widen and plan again
+        // nothing fits this detour budget: widen and plan again (stand still meanwhile)
+        if (result.path) result.path.length = 0;
         budget++;
         setSearchBudget(bot, budget);
         setImmediate(() => {
@@ -910,15 +911,17 @@ export async function runFollow(
       const onPath = (result: { status: string; path?: unknown[]; time?: number; visitedNodes?: number }) => {
         lastPathStatus = result.status;
         if (trailActive) return;
-        if (process.env.CAYA_DEBUG_JUMP) { const pp = result.path ?? []; const l = pp[pp.length - 1] as { x: number; y: number; z: number } | undefined; console.log(`[follow-path] ${result.status} len=${pp.length} end=${l ? l.x + "," + l.y + "," + l.z : "-"} moving=${pfIsMoving(bot)}`); }
         if (result.status !== "success" && result.path && bot.entity) {
           // no full route: never walk a best-effort path down into a place we cannot leave
           const live0 = bot.players[playerName]?.entity;
-          const floorY = Math.min(bot.entity.position.y, live0?.position.y ?? bot.entity.position.y) - 1.5;
+          const by = bot.entity.position.y;
+          const py = live0?.position.y ?? by;
+          // only go down without a known route when the player is down there
+          const floorY = py < by - 1 ? py - 1.5 : by - 0.5;
           const before = result.path.length;
           if (cutPathAtDrop(result.path as Array<{ y: number }>, floorY) < before && Date.now() - lastCutLogAt > 5000) {
             lastCutLogAt = Date.now();
-            instance.getLogger().debug("Follow path", `partial path cut before a drop (${before} → ${result.path.length})`);
+            instance.getLogger().debug("Follow path", `partial path cut before a drop (${before} → ${result.path.length}) ${(result.path as Array<{ x: number; y: number; z: number; parkour?: boolean }>).map((n) => `${n.x},${n.y},${n.z}${n.parkour ? "P" : ""}`).join(" ")}`);
           }
         }
         if (result.status !== "success" && result.status !== "partial") {
@@ -926,7 +929,9 @@ export async function runFollow(
         }
         if (result.status !== "noPath" && result.status !== "timeout") return;
         if (budget < SEARCH_BUDGETS.length - 1) {
-          // nothing within this detour budget: widen and plan the same goal again
+          // nothing within this detour budget: widen and plan the same goal again;
+          // do not walk the best-effort path meanwhile (it stepped off a beam)
+          if (result.path) result.path.length = 0;
           budget++;
           setSearchBudget(bot, budget);
           setImmediate(() => {
