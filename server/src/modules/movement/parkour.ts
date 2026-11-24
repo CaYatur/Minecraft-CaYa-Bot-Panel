@@ -5,6 +5,7 @@ import type { BotInstance } from "../../core/BotInstance";
 import type { ProgressFn, TaskToken } from "../../core/TaskQueue";
 import type { MovementConfig } from "../../types";
 import { v3 } from "../build/vec3util";
+import { Vec3 } from "vec3";
 
 /**
  * Gelişmiş parkur:
@@ -322,8 +323,39 @@ export function patchMovementsForTurningLadders(movements: unknown) {
     addWaterExits(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo & { liquid?: boolean; name?: string } }, node, neighbors);
     pruneImpossibleLadderMoves(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
     pruneParkourWithoutRunUp(m as unknown as { getBlock: (n: PathNode, dx: number, dy: number, dz: number) => CellInfo }, node, neighbors);
+    if (m.bot) pruneJumpsThroughWebs(m.bot, node, neighbors);
     return neighbors;
   };
+}
+
+/**
+ * A cobweb is walkable now (slowly), so pathfinder may plan a jump straight through a web
+ * hanging in a gap; the web stops the bot in mid-air over the drop. No jump through a web.
+ */
+function pruneJumpsThroughWebs(bot: Bot, node: PathNode, neighbors: unknown[]) {
+  const web = bot.registry.blocksByName.cobweb as { minStateId?: number; maxStateId?: number } | undefined;
+  const world = bot.world as unknown as { getBlockStateId?(p: Vec3): number | undefined };
+  if (web?.minStateId === undefined || typeof world.getBlockStateId !== "function") return;
+  const lo = web.minStateId;
+  const hi = web.maxStateId ?? lo;
+  const at = new Vec3(0, 0, 0);
+  for (let i = neighbors.length - 1; i >= 0; i--) {
+    const mv = neighbors[i] as PathNode & { parkour?: boolean };
+    if (!mv.parkour) continue;
+    const dx = mv.x - node.x;
+    const dz = mv.z - node.z;
+    const steps = Math.max(Math.abs(dx), Math.abs(dz));
+    let blocked = false;
+    for (let k = 0; k <= steps && !blocked; k++) {
+      const x = Math.floor(node.x + (dx * k) / steps);
+      const z = Math.floor(node.z + (dz * k) / steps);
+      for (let dy = 0; dy <= 2 && !blocked; dy++) {
+        const id = world.getBlockStateId(at.set(x, Math.floor(node.y) + dy, z));
+        if (id !== undefined && id >= lo && id <= hi) blocked = true;
+      }
+    }
+    if (blocked) neighbors.splice(i, 1);
+  }
 }
 
 /**
