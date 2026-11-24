@@ -130,6 +130,11 @@ function main() {
     assert("an open iron door is walkable", (mv.getBlock() as { safe: boolean }).safe);
     next = cell("oak_door", false);
     assert("a closed wooden door is walkable (opened on the way)", (mv.getBlock() as { safe: boolean }).safe);
+    // with a button beside it the door assist presses it on the way: walkable again
+    const withButton = { blockAt: (v: Vec3) => (v.x === 11 && v.y === 65 && v.z === 4 ? { name: "stone_button" } : { name: "stone" }) };
+    const mv2 = { getBlock: () => ({ ...cell("iron_door", false), position: new Vec3(10, 64, 5) }) };
+    patchMovementsForDoors(withButton as never, mv2);
+    assert("a closed iron door with a button beside it is walkable", (mv2.getBlock() as { safe: boolean }).safe);
   }
   {
     // a leader that moves while the follower is mid-jump: no re-plan until it stands again
