@@ -77,6 +77,79 @@ export function setSearchBudget(bot: Bot, level: number): void {
 }
 const LADDER_HOP_COOLDOWN_MS = 5_000;
 
+/** Emitted on the bot after a server teleport moved it this far (blocks). */
+export const TELEPORT_EVENT = "caya_teleported";
+const TELEPORT_MIN_JUMP = 4;
+const teleportWatched = new WeakSet<Bot>();
+
+/**
+ * A teleport (/tp, a plugin, a setback across a gap) left pathfinder walking the
+ * path planned from the old spot: the bot kept heading back toward it for a while.
+ * Re-plan the same goal from where the bot is now.
+ */
+/**
+ * Several server setbacks in a row (an anti-cheat that rejected a step) kept coming
+ * for as long as the bot kept pushing: it stood in place sprinting into each one
+ * (GrimAC, issue #34). Let go of every key for a few ticks so the server's idea of
+ * the player settles, as a player who rubber-bands does.
+ */
+const setbackCalmed = new WeakSet<Bot>();
+function installSetbackCalm(bot: Bot): void {
+  if (setbackCalmed.has(bot)) return;
+  setbackCalmed.add(bot);
+  const recent: number[] = [];
+  let calmTicks = 0;
+  let lastPos: Vec3 | null = null;
+  bot.on("physicsTick", () => {
+    if (bot.entity) lastPos = bot.entity.position.clone();
+    if (calmTicks <= 0) return;
+    calmTicks--;
+    for (const c of ["forward", "back", "left", "right", "jump", "sprint"] as const) bot.setControlState(c, false);
+  });
+  bot.on("forcedMove", () => {
+    const p = bot.entity?.position;
+    if (!p) return;
+    const jump = lastPos ? p.distanceTo(lastPos) : 99;
+    if (jump >= TELEPORT_MIN_JUMP) return; // a real teleport, not a setback
+    const now = Date.now();
+    recent.push(now);
+    while (recent.length && now - recent[0]! > 1000) recent.shift();
+    if (recent.length >= 3 && calmTicks <= 0) {
+      calmTicks = 8;
+      recent.length = 0;
+      (bot as unknown as { emit(e: string): void }).emit(SETBACK_STORM_EVENT);
+    }
+  });
+}
+export const SETBACK_STORM_EVENT = "caya_setback_storm";
+
+function installTeleportReset(bot: Bot): void {
+  if (teleportWatched.has(bot)) return;
+  teleportWatched.add(bot);
+  let last: Vec3 | null = null;
+  bot.on("physicsTick", () => {
+    if (bot.entity) last = bot.entity.position.clone();
+  });
+  bot.on("forcedMove", () => {
+    const p = bot.entity?.position;
+    if (!p) return;
+    const jump = last ? p.distanceTo(last) : 0;
+    last = p.clone();
+    if (jump < TELEPORT_MIN_JUMP) return;
+    try {
+      (bot as unknown as { emit(e: string, d: number): void }).emit(TELEPORT_EVENT, jump);
+    } catch {
+      /* */
+    }
+    try {
+      const pf = bot.pathfinder as unknown as { goal?: unknown; movements?: unknown; setMovements?(m: unknown): void };
+      if (pf.goal && pf.movements && !isParkourLocked(bot)) pf.setMovements?.(pf.movements); // resets the path, keeps the goal
+    } catch {
+      /* */
+    }
+  });
+}
+
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
   if (!bot || instance.status !== "online") throw new Error("Bot offline — cannot run movement task.");
@@ -135,6 +208,8 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   const anyBot = bot as unknown as { pathfinder?: unknown };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
   installLadderEndGuard(bot);
+  installTeleportReset(bot);
+  installSetbackCalm(bot);
   installSpiralLadderAssist(bot);
   installParkourKick(instance);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
@@ -393,10 +468,11 @@ function pathfinderGoal(
   instance: BotInstance,
   goal: goals.Goal,
   token: TaskToken,
-  opts?: { timeoutMs?: number; onStuckRetry?: () => void }
+  opts?: { timeoutMs?: number; onStuckRetry?: () => void; maxBudget?: number }
 ): Promise<void> {
   const bot = requireBot(instance);
   const timeoutMs = opts?.timeoutMs ?? GOTO_TIMEOUT_MS;
+  const lastBudget = Math.min(SEARCH_BUDGETS.length - 1, opts?.maxBudget ?? SEARCH_BUDGETS.length - 1);
   const epoch = instance.controlEpoch;
 
   return new Promise<void>((resolve, reject) => {
@@ -418,6 +494,7 @@ function pathfinderGoal(
       clearTimeout(deadline);
       bot.removeListener("goal_reached", onReached);
       bot.removeListener("path_update", onPath);
+      bot.removeListener(TELEPORT_EVENT as never, onTeleport as never);
     };
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -428,13 +505,25 @@ function pathfinderGoal(
     const onReached = () => finish(resolve);
     let budget = 0;
     setSearchBudget(bot, budget);
-    const onPath = (result: { status: string; path?: Array<{ y: number }> }) => {
+    const onTeleport = () => {
+      budget = 0;
+      setSearchBudget(bot, 0);
+      lastPos = bot.entity?.position?.clone?.() ?? null;
+      lastMoveAt = Date.now();
+    };
+    bot.on(TELEPORT_EVENT as never, onTeleport as never);
+    let lastPathLogAt = 0;
+    const onPath = (result: { status: string; path?: Array<{ y: number }>; time?: number; visitedNodes?: number }) => {
+      if (result.status !== "partial" && Date.now() - lastPathLogAt > 1500) {
+        lastPathLogAt = Date.now();
+        instance.getLogger().debug("Path", `${result.status} budget=${SEARCH_BUDGETS[budget]} nodes=${result.visitedNodes ?? "?"} t=${Math.round(result.time ?? 0)}ms len=${result.path?.length ?? 0}`);
+      }
       if (result.status !== "success" && result.path && bot.entity) {
         // best-effort path while no route is known: never step down into a pit
         const gy = (goal as unknown as { y?: number }).y;
         cutPathAtDrop(result.path, Math.min(bot.entity.position.y, typeof gy === "number" ? gy : bot.entity.position.y) - 1.5);
       }
-      if ((result.status === "noPath" || result.status === "timeout") && budget < SEARCH_BUDGETS.length - 1) {
+      if ((result.status === "noPath" || result.status === "timeout") && budget < lastBudget) {
         // nothing fits this detour budget: widen and plan again (stand still meanwhile)
         if (result.path) result.path.length = 0;
         budget++;
@@ -561,17 +650,28 @@ export async function runGoto(
 
   // A* stops at 3-block gaps; on noPath try one configured sprint jump toward the
   // target and plan again (issue #34: 4-gap goto said "noPath" and never jumped).
+  // Bounded searches first: when nothing walkable is near, a jump toward the target
+  // comes before an unbounded search (that timed out in a big build and the jump
+  // was never tried). Only then search everything.
+  let bounded = true;
   for (let jumps = 0; ; jumps++) {
     try {
       await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
         timeoutMs: options?.timeoutMs,
+        maxBudget: bounded ? SEARCH_BUDGETS.length - 2 : undefined,
         onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
       });
       break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const canJump = options?.parkour !== false && moveCfg(instance).allowParkour !== false;
-      if (jumps >= 3 || !canJump || isTokenAborted(token) || !/noPath|No progress/.test(msg)) throw err;
+      const searchFailed = /noPath|No progress|timed out/.test(msg);
+      if (isTokenAborted(token) || !searchFailed) throw err;
+      if (jumps >= 3 || !canJump) {
+        if (!bounded) throw err;
+        bounded = false;
+        continue;
+      }
       report({ done: 0, total: dist, label: "no walking path — trying a parkour jump" });
       const jumped = await tryGapJumpTowardPoint(
         instance,
@@ -580,7 +680,11 @@ export async function runGoto(
         (lx, ly, lz) => pathfinderGoal(instance, new goals.GoalBlock(lx, ly, lz), token, { timeoutMs: 20_000 }),
         report
       );
-      if (!jumped) throw err;
+      if (!jumped) {
+        if (!bounded) throw err;
+        bounded = false; // no jump to make: now search the whole area
+        continue;
+      }
       ensureMovement(instance, {
         mode: "goto",
         canDig: options?.canDig,
@@ -773,10 +877,22 @@ export async function runFollow(
   let lastGoalRefreshAt = 0;
   let lastPathStatus = "";
 
+  // Set when the bot is teleported: a trail walk planned from the old spot stops.
+  let trailAbort = false;
+  const trailToken = {
+    get cancelled() {
+      return token.cancelled || trailAbort;
+    },
+    get reason() {
+      return trailAbort ? "teleported" : token.reason;
+    },
+    abort: token.abort
+  } as TaskToken;
   const walkTrail = async (): Promise<boolean> => {
     const bot = requireBot(instance);
     if (!bot.entity || trail.size === 0) return false;
     trailActive = true;
+    trailAbort = false;
     clearGoal(bot);
     throttledReport(`follow: ${playerName} · following your route`);
     instance.getLogger().info("Follow trail", `${trail.size} points`);
@@ -785,7 +901,7 @@ export async function runFollow(
         ? new goals.GoalBlock(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z))
         : new goals.GoalNear(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z), 1);
       try {
-        await pathfinderGoal(instance, g, token, { timeoutMs: 12_000 });
+        await pathfinderGoal(instance, g, trailToken, { timeoutMs: 12_000 });
         return true;
       } catch {
         return false;
@@ -803,10 +919,10 @@ export async function runFollow(
           i = cand;
           break;
         }
-        if (isTokenAborted(token)) return false;
+        if (isTokenAborted(trailToken)) return false;
       }
       if (i < 0) return false;
-      for (let steps = 0; steps < 300 && !isTokenAborted(token) && instance.status === "online"; steps++) {
+      for (let steps = 0; steps < 300 && !isTokenAborted(trailToken) && instance.status === "online"; steps++) {
         const p = bot.players[playerName]?.entity;
         if (!p || !bot.entity) return false;
         if (here().distanceTo(p.position) <= holdDist + 1.5) return true;
@@ -817,7 +933,7 @@ export async function runFollow(
           const jumped = await tryReplayObservedJump(
             instance,
             { from: c, to: c.jumpTo, at: Date.now() },
-            token,
+            trailToken,
             (pr) => throttledReport(pr.label ?? "parkour")
           );
           if (!jumped) return false;
@@ -843,6 +959,18 @@ export async function runFollow(
   };
   let jumpTakeoff: { x: number; y: number; z: number } | null = null;
   let prevPlayerGround = true;
+  let teleportedAt = 0;
+  let teleportHandled = 0;
+  const onTeleport = () => {
+    teleportedAt = Date.now();
+    if (trailActive) trailAbort = true;
+    wantTrail = false;
+    lastTrailAt = 0;
+    budget = 0;
+    if (instance.bot) setSearchBudget(instance.bot, 0);
+  };
+  const tpBot = instance.bot;
+  tpBot?.on(TELEPORT_EVENT as never, onTeleport as never);
 
   try {
     while (!token.cancelled) {
@@ -1045,6 +1173,17 @@ export async function runFollow(
             playerGround || isClimbable(blockNameAt(bot, cur.position.x, cur.position.y, cur.position.z))
           );
 
+          if (teleportedAt > teleportHandled) {
+            // plan from the new spot; old stuck timers and approach points are stale
+            teleportHandled = teleportedAt;
+            approach = null;
+            consecutiveStucks = 0;
+            lastMoveAt = Date.now();
+            lastPos = bot.entity.position.clone();
+            lastPathStatus = "";
+            applyFollowGoal(cur, true);
+          }
+
           if (wantTrail && !trailActive) {
             wantTrail = false;
             lastTrailAt = Date.now();
@@ -1205,6 +1344,7 @@ export async function runFollow(
       if (instance.status !== "online") throw new Error("Connection lost — follow ended.");
     }
   } finally {
+    tpBot?.removeListener(TELEPORT_EVENT as never, onTeleport as never);
     const b = instance.bot;
     if (b) {
       clearGoal(b);

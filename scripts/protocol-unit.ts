@@ -153,6 +153,20 @@ async function main() {
     ent.velocity = new Vec3(0.2, 0, 0);
     client.emit("position", { teleportId: 2, x: 0, y: 64, z: 0, dx: 0.1, dy: 0, dz: 0, yaw: 0, pitch: 0, flags: { ...flags, dx: true } });
     assert("a relative teleport velocity is added", Math.abs(ent.velocity.x - 0.3) < 1e-9, ent.velocity.toString());
+
+    // mineflayer marks the bot airborne on every teleport; the game keeps the ground state
+    const g = bot.entity as unknown as { onGround: boolean };
+    const ls = client.listeners("position") as Array<(p: unknown) => void>;
+    client.removeAllListeners("position");
+    client.on("position", ls[0]!); // compat: remembers the state before the teleport
+    client.on("position", () => (g.onGround = false)); // mineflayer's handler
+    for (const l of ls.slice(1)) client.on("position", l);
+    g.onGround = true;
+    client.emit("position", { teleportId: 3, x: 0, y: 64, z: 0, dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, flags });
+    assert("a setback keeps the bot on the ground (no air-speed step that is set back again)", g.onGround === true);
+    g.onGround = false;
+    client.emit("position", { teleportId: 4, x: 0, y: 80, z: 0, dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, flags });
+    assert("a teleport while airborne stays airborne", g.onGround === false);
   }
 
   // ViaProxy bridge helpers

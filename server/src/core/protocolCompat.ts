@@ -282,15 +282,20 @@ export function installProtocolCompat(bot: Bot): ProtocolCompatHandle {
   };
 
   // clientbound teleport (setback): 1.21.2+ carries velocity + its own relative flags
-  let before: { vx: number; vy: number; vz: number; yaw: number } | null = null;
+  let before: { vx: number; vy: number; vz: number; yaw: number; onGround: boolean } | null = null;
   client.prependListener("position", () => {
     const e = bot.entity;
-    before = e ? { vx: e.velocity.x, vy: e.velocity.y, vz: e.velocity.z, yaw: e.yaw } : null;
+    before = e ? { vx: e.velocity.x, vy: e.velocity.y, vz: e.velocity.z, yaw: e.yaw, onGround: Boolean(e.onGround) } : null;
   });
   client.on("position", (p: Params) => {
     handle.stats.setbacks++;
     handle.stats.lastSetbackAt = Date.now();
     inTick = false; // the confirm went out mid-cycle; next tick starts clean
+    // mineflayer marks the bot airborne on every teleport. The game keeps the ground
+    // state (the next move re-checks it), and an anti-cheat predicts from that: with
+    // air speed the next step missed again, and GrimAC set the bot back every tick
+    // for as long as it kept pressing forward (it stood at a jump lip, issue #34).
+    if (info?.tickEnd && before && bot.entity) bot.entity.onGround = before.onGround;
     const f = p.flags as Record<string, boolean> | undefined;
     if (!before || !bot.entity || typeof p.dx !== "number" || !f || typeof f !== "object") return;
     let vx = before.vx;

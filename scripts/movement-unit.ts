@@ -5,7 +5,9 @@
 import { isWoodenOpenableBlock } from "../server/src/modules/movement/doors";
 import { PlayerTrail } from "../server/src/modules/movement/trail";
 import { entityLookPoint } from "../server/src/modules/movement/look";
+import { Vec3 } from "vec3";
 import {
+  findGapLanding,
   isLongSprintGap,
   parkourFromMovement,
   pruneObservedJumps,
@@ -33,8 +35,45 @@ const move = (patch: Partial<MovementConfig> = {}): MovementConfig =>
     ...patch
   }) as MovementConfig;
 
+/** A bot standing in a world of solid blocks given as "x,y,z" keys. */
+function fakeBot(solid: string[], at: [number, number, number]) {
+  const set = new Set(solid);
+  return {
+    health: 20,
+    entity: { position: new Vec3(at[0], at[1], at[2]) },
+    blockAt: (p: { x: number; y: number; z: number }) => {
+      const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+      return set.has(k) ? { name: "stone", boundingBox: "block" } : { name: "air", boundingBox: "empty" };
+    }
+  } as unknown as Parameters<typeof findGapLanding>[0];
+}
+const row = (x0: number, x1: number, y: number, z: number) => {
+  const out: string[] = [];
+  for (let x = x0; x <= x1; x++) out.push(`${x},${y},${z}`);
+  return out;
+};
+
 function main() {
   console.log("— movement unit —\n");
+
+
+  // gap landings (issue #34)
+  {
+    const pad = row(0, 4, 99, 0);
+    const down2 = fakeBot([...pad, ...row(8, 11, 97, 0)], [4.5, 100, 0.5]);
+    const l = findGapLanding(down2, { x: 10.5, y: 98, z: 0.5 }, 4);
+    assert("3-gap down 2 lands on the first cell past the gap, not a farther one", l?.x === 8 && l?.gap === 3, JSON.stringify(l));
+    const diag = fakeBot([...pad, ...row(7, 10, 99, 1)], [4.5, 100, 0.5]);
+    const d = findGapLanding(diag, { x: 9.5, y: 100, z: 1.5 }, 4);
+    assert("a pad one block to the side is found (diagonal jump)", d !== null && d.z === 1 && d.x >= 7, JSON.stringify(d));
+    const hop = fakeBot([...pad, ...row(6, 9, 96, 0)], [4.5, 100, 0.5]);
+    const h = findGapLanding(hop, { x: 8.5, y: 97, z: 0.5 }, 4);
+    assert("a 1-block gap with a 3-block drop is a hop onto the first cell", h?.x === 6 && h?.y === 97 && h?.gap === 1, JSON.stringify(h));
+    const walk = fakeBot([...pad, ...row(6, 9, 99, 0)], [4.5, 100, 0.5]);
+    assert("a 1-block gap at the same height is left to walking", findGapLanding(walk, { x: 8.5, y: 100, z: 0.5 }, 4) === null);
+    const far = fakeBot([...pad, ...row(10, 13, 99, 0)], [4.5, 100, 0.5]);
+    assert("a 5-gap is not offered with max gap 4", findGapLanding(far, { x: 12.5, y: 100, z: 0.5 }, 4) === null);
+  }
 
   assert("fall of 3 blocks is safe", fallDamageHp(3) === 0);
   assert("fall of 4 blocks is 1 HP", fallDamageHp(4) === 1);
