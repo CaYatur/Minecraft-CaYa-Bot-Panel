@@ -567,7 +567,7 @@ export class FallGuardService {
       this.emit();
       if (lethal && Date.now() - this.lastWarnAt > 3000) {
         this.lastWarnAt = Date.now();
-        this.log().warn("Lethal fall — no MLG material", `~${predictedDamage} HP · ${bestFall.toFixed(1)} blok`);
+        this.log().warn("Lethal fall — no MLG material", `fall ≈ ${round1(predictedDamage)} damage, health ${round1(bot.health ?? 0)} · ${bestFall.toFixed(1)} blocks`);
       }
       return;
     }

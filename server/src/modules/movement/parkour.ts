@@ -976,16 +976,23 @@ async function sprintJumpAtEdge(
   const maxTicks = Math.ceil((400 + gap * 220) / 50) + 6;
   // Where the last tick on the lip falls depends on where the run starts: from one
   // spot it is 0.01 past the support edge, from another 0.16, and a 4-gap needs the
-  // far one. Pick how many ticks to walk before sprinting so it lands at the far end.
-  let sprintDelay = 0;
-  try {
-    sprintDelay = planSprintDelay(bot, dir);
-  } catch {
-    sprintDelay = 0;
+  // far one. Shift the start back a little (sneaking, before the run) so it lands at
+  // the far end. Sprint is not toggled during the run: anti-cheats flag that.
+  if (gap >= 3) {
+    try {
+      for (let round = 0; round < 3 && !token.cancelled; round++) {
+      const shift = planBackShift(bot, dir);
+      if (shift < 0.05) break;
+      await sneakBack(bot, dir, shift, token);
+      }
+    } catch {
+      /* run from here */
+    }
   }
   bot.setControlState("sneak", false);
+  bot.setControlState("back", false);
   bot.setControlState("forward", true);
-  bot.setControlState("sprint", sprintDelay === 0);
+  bot.setControlState("sprint", true);
   bot.setControlState("jump", false);
 
   // Tick-exact takeoff (issue #34): jump on the last tick the hitbox still stands on
@@ -1004,10 +1011,9 @@ async function sprintJumpAtEdge(
         if (ticks > 2) return done(); // walked off already: the air phase takes over
         return;
       }
-      bot.setControlState("sprint", ticks >= sprintDelay);
       let leave: boolean;
       try {
-        leave = wouldLeaveGroundNextTick(bot, ticks >= sprintDelay);
+        leave = wouldLeaveGroundNextTick(bot);
       } catch {
         leave = distToFrontEdge(bot, dir.ux, dir.uz) <= 0.3;
       }
@@ -1057,12 +1063,8 @@ function wouldLeaveGroundNextTick(bot: Bot, sprint = true): boolean {
   return !state.onGround;
 }
 
-/**
- * Simulate the run to the lip for each sprint delay (walk k ticks, then sprint) and
- * return the k whose last tick on the ground is farthest along the jump direction,
- * at full sprint speed. Same physics copy as mineflayer, so the plan matches the run.
- */
-export function planSprintDelay(bot: Bot, dir: { ux: number; uz: number }, maxDelay = 8): number {
+/** Sprint-run from `shift` blocks behind here: how far along `dir` is the last tick on the ground? */
+function lastGroundReach(bot: Bot, dir: { ux: number; uz: number }, shift: number): number | null {
   if (!playerStateCtor) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     playerStateCtor = (require(require.resolve("prismarine-physics", { paths: [require.resolve("mineflayer")] })) as {
@@ -1072,25 +1074,67 @@ export function planSprintDelay(bot: Bot, dir: { ux: number; uz: number }, maxDe
   const physics = (bot as unknown as { physics: { simulatePlayer(s: unknown, w: unknown): unknown } }).physics;
   const world = { getBlock: (p: ReturnType<typeof v3>) => bot.blockAt(p, false) };
   const p0 = bot.entity.position;
-  let best = { k: 0, reach: -Infinity };
-  for (let k = 0; k <= maxDelay; k++) {
-    const control = { forward: true, back: false, left: false, right: false, jump: false, sprint: k === 0, sneak: false };
-    const state = new playerStateCtor(bot, control) as unknown as { pos: { x: number; y: number; z: number }; onGround: boolean; control: typeof control };
-    let last: { x: number; z: number } | null = null;
-    let step = 0;
-    for (let t = 0; t < 60; t++) {
-      const before = { x: state.pos.x, z: state.pos.z };
-      state.control.sprint = t >= k;
-      physics.simulatePlayer(state, world);
-      if (!state.onGround) break;
-      step = Math.hypot(state.pos.x - before.x, state.pos.z - before.z);
-      last = { x: state.pos.x, z: state.pos.z };
-    }
-    if (!last || step < 0.26) continue; // must leave at full sprint speed
-    const reach = (last.x - p0.x) * dir.ux + (last.z - p0.z) * dir.uz;
-    if (reach > best.reach + 0.01) best = { k, reach };
+  const state = new playerStateCtor(bot, {
+    forward: true,
+    back: false,
+    left: false,
+    right: false,
+    jump: false,
+    sprint: true,
+    sneak: false
+  }) as unknown as { pos: { x: number; y: number; z: number }; vel: { x: number; z: number }; onGround: boolean };
+  state.pos.x -= dir.ux * shift;
+  state.pos.z -= dir.uz * shift;
+  state.vel.x = 0;
+  state.vel.z = 0;
+  let last: { x: number; z: number } | null = null;
+  let step = 0;
+  for (let t = 0; t < 60; t++) {
+    const before = { x: state.pos.x, z: state.pos.z };
+    physics.simulatePlayer(state, world);
+    if (!state.onGround) break;
+    step = Math.hypot(state.pos.x - before.x, state.pos.z - before.z);
+    last = { x: state.pos.x, z: state.pos.z };
   }
-  return best.k;
+  if (!last || step < 0.26) return null; // must leave the lip at full sprint speed
+  return (last.x - p0.x) * dir.ux + (last.z - p0.z) * dir.uz;
+}
+
+/**
+ * How far to step back before the run so the last tick on the lip is as far out as
+ * possible (searched in 0.02 steps over one sprint stride). 0 when here is best.
+ */
+export function planBackShift(bot: Bot, dir: { ux: number; uz: number }): number {
+  const here = lastGroundReach(bot, dir, 0);
+  let best = { shift: 0, reach: here ?? -Infinity };
+  // a sneak step cannot move less than ~0.05, so search what it can actually do
+  for (let shift = 0.06; shift <= 0.3401; shift += 0.02) {
+    const r = lastGroundReach(bot, dir, shift);
+    if (r !== null && r > best.reach + 0.02) best = { shift, reach: r };
+  }
+  return best.shift;
+}
+
+/** Sneak straight back (still facing the jump) by about `dist` blocks. */
+async function sneakBack(bot: Bot, dir: { ux: number; uz: number }, dist: number, token: TaskToken): Promise<void> {
+  const p0 = bot.entity.position.clone();
+  bot.setControlState("sprint", false);
+  bot.setControlState("forward", false);
+  bot.setControlState("sneak", true);
+  bot.setControlState("back", true);
+  for (let t = 0; t < 30 && !token.cancelled && bot.entity; t++) {
+    await waitTicks(bot, 1);
+    const p = bot.entity.position;
+    const moved = -((p.x - p0.x) * dir.ux + (p.z - p0.z) * dir.uz);
+    if (moved >= dist - 0.015) break;
+    if (distToFrontEdge(bot, -dir.ux, -dir.uz) < 0.2) break;
+  }
+  bot.setControlState("back", false);
+  // let the sneak step come to rest so the run starts from standstill
+  for (let t = 0; t < 6 && bot.entity && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) > 0.003; t++) {
+    await waitTicks(bot, 1);
+  }
+  bot.setControlState("sneak", false);
 }
 
 /**
@@ -1124,6 +1168,10 @@ export async function executeGapJump(
     const len = Math.hypot(dx, dz) || 1;
     const dir = { ux: dx / len, uz: dz / len };
 
+    // past the near edge of the landing cell, measured from the takeoff side
+    const startProj = pos0.x * dir.ux + pos0.z * dir.uz;
+    const landProj = lx * dir.ux + lz * dir.uz;
+    const crossed = (p: { x: number; z: number }) => p.x * dir.ux + p.z * dir.uz >= landProj - 0.8 && landProj > startProj;
     await prepareRunUp(bot, dir, g, token);
     if (token.cancelled) {
       clearControls(bot);
@@ -1167,6 +1215,8 @@ export async function executeGapJump(
       }
       const d = Math.hypot(pos.x - lx, pos.z - lz);
       if (ent.onGround && d < 2.1 && Math.abs(pos.y - ly) < Math.max(1.8, drop + 1)) break;
+      // touched down on the far side at the landing height: stop running on
+      if (ent.onGround && Date.now() > jumpHoldUntil && crossed(pos) && Math.abs(pos.y - ly) < 0.6) break;
       if (ent.onGround && Date.now() > airDeadline - 400) break;
       await sleep(30);
     }
@@ -1183,7 +1233,7 @@ export async function executeGapJump(
     const pos = bot.entity.position;
     const landed =
       Boolean(bot.entity.onGround) &&
-      Math.hypot(pos.x - lx, pos.z - lz) < 2.2 &&
+      (Math.hypot(pos.x - lx, pos.z - lz) < 2.2 || crossed(pos)) &&
       Math.abs(pos.y - ly) < Math.max(1.8, drop + 1.2);
 
     if (landed) {
