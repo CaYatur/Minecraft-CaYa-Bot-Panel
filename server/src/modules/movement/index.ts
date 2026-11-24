@@ -256,6 +256,25 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
   // Take the short drop if it will not kill; walk around only when lethal.
   movements.maxDropDown = smartMaxDropDown(bot, cfg);
+  // Pathfinder only climbs ladders; vines climb the same way in the game (and in the physics)
+  const vine = registry.blocksByName.vine;
+  if (vine) movements.climbables.add(vine.id);
+  // Magma burns a walking player: go round it when a few blocks of detour do (the fire guard
+  // otherwise pulled the bot off its route).
+  const magma = registry.blocksByName.magma_block;
+  if (magma) {
+    movements.exclusionAreasStep.push((b: { position?: Vec3 }) => {
+      if (!b.position) return 0;
+      const below = bot.blockAt(b.position.offset(0, -1, 0), false);
+      return below?.type === magma.id ? 6 : 0;
+    });
+  }
+  // Pathfinder treats a cobweb as a wall; a player wades through it slowly. Allow it at a high
+  // cost, so a web is only crossed when there is no other way (a webbed corridor or door).
+  const web = registry.blocksByName.cobweb ?? registry.blocksByName.web;
+  if (web && movements.blocksToAvoid.delete(web.id)) {
+    movements.exclusionAreasStep.push((b: { type?: number }) => (b.type === web.id ? 20 : 0));
+  }
   const canOpenDoors = opts?.canOpenDoors !== false;
   if ("canOpenDoors" in movements) {
     (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = canOpenDoors;
@@ -523,7 +542,22 @@ function pathfinderGoal(
       cleanup();
       fn();
     };
-    const onReached = () => finish(resolve);
+    const onReached = (reached?: unknown) => {
+      // Another module (the fire/lava/magma guard fleeing) can set its own goal for a moment;
+      // reaching that one is not arriving here: aim at ours again.
+      if (reached && reached !== goal) {
+        setTimeout(() => {
+          if (settled || bot.pathfinder.goal) return;
+          try {
+            bot.pathfinder.setGoal(goal);
+          } catch {
+            /* */
+          }
+        }, 300);
+        return;
+      }
+      finish(resolve);
+    };
     let budget = 0;
     setSearchBudget(bot, budget);
     const onTeleport = () => {
@@ -1050,7 +1084,7 @@ export async function runFollow(
             const yAp = Math.abs((bot.entity?.position.y ?? 0) - approach.y);
             if (dAp < 1.7 && yAp < 1.6) {
               approach = null;
-              bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+              bot.pathfinder.setGoal(followGoal(ent, holdDist, bot), true);
               return;
             }
             bot.pathfinder.setGoal(new goals.GoalNear(approach.x, approach.y, approach.z, 1), false);
@@ -1061,7 +1095,7 @@ export async function runFollow(
         }
         const curGoal = bot.pathfinder.goal as GoalFollowAtHeight | { entity?: Entity } | undefined;
         if (!forceApproach && curGoal instanceof GoalFollowAtHeight && curGoal.entity === ent) return;
-        bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+        bot.pathfinder.setGoal(followGoal(ent, holdDist, bot), true);
       };
 
       try {
@@ -1463,8 +1497,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function followGoal(entity: Entity, range: number) {
-  return new GoalFollowAtHeight(entity, range);
+function followGoal(entity: Entity, range: number, bot?: Bot) {
+  if (!bot) return new GoalFollowAtHeight(entity, range);
+  return new GoalFollowAtHeight(entity, range, () => {
+    const e = bot.entity as (typeof bot.entity & { isInWater?: boolean }) | undefined;
+    return !e || e.onGround || Boolean(e.isInWater) || onLadderNow(bot);
+  });
 }
 
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";

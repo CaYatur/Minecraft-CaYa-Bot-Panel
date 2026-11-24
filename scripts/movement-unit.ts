@@ -2,12 +2,13 @@
  * Pure movement and MLG decisions. No Minecraft server.
  * These numbers are the current fall, parkour, door, and look rules.
  */
-import { isWoodenOpenableBlock } from "../server/src/modules/movement/doors";
+import { isWoodenOpenableBlock, patchMovementsForDoors } from "../server/src/modules/movement/doors";
 import { PlayerTrail } from "../server/src/modules/movement/trail";
 import { entityLookPoint } from "../server/src/modules/movement/look";
 import { Vec3 } from "vec3";
 import {
   findGapLanding,
+  GoalFollowAtHeight,
   isLongSprintGap,
   parkourFromMovement,
   pruneObservedJumps,
@@ -117,6 +118,30 @@ function main() {
   assert("fence gates can be opened", isWoodenOpenableBlock({ name: "oak_fence_gate" }));
   assert("wooden trapdoors can be opened", isWoodenOpenableBlock({ name: "oak_trapdoor" }));
   assert("iron doors are not opened by hand", !isWoodenOpenableBlock({ name: "iron_door" }));
+  {
+    // closed iron door: stays a wall for A* (the bot pushed into one forever); open wooden door: walkable
+    const cell = (name: string, open: boolean) => ({ name, safe: false, physical: true, height: 65, getProperties: () => ({ open }) });
+    let next = cell("iron_door", false);
+    const mv = { getBlock: () => next };
+    patchMovementsForDoors({} as never, mv);
+    const iron = mv.getBlock() as { safe: boolean; physical: boolean };
+    assert("a closed iron door is not walkable", !iron.safe && iron.physical);
+    next = cell("iron_door", true);
+    assert("an open iron door is walkable", (mv.getBlock() as { safe: boolean }).safe);
+    next = cell("oak_door", false);
+    assert("a closed wooden door is walkable (opened on the way)", (mv.getBlock() as { safe: boolean }).safe);
+  }
+  {
+    // a leader that moves while the follower is mid-jump: no re-plan until it stands again
+    const leader = { position: new Vec3(0.5, 64, 0.5) };
+    let grounded = false;
+    const g = new GoalFollowAtHeight(leader as never, 2, () => grounded);
+    leader.position = new Vec3(8.5, 64, 0.5);
+    assert("follow goal holds still while the bot is in the air", !g.hasChanged());
+    grounded = true;
+    assert("follow goal re-plans once the bot stands", g.hasChanged());
+    assert("and only once for the same move", !g.hasChanged());
+  }
   assert("iron trapdoors are not opened by hand", !isWoodenOpenableBlock({ name: "iron_trapdoor" }));
   assert("solid blocks are not doors", !isWoodenOpenableBlock({ name: "stone" }));
   assert("a missing block is not a door", !isWoodenOpenableBlock(null));

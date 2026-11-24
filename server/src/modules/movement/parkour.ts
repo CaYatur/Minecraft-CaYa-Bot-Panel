@@ -912,9 +912,13 @@ export class GoalFollowAtHeight extends goals.Goal {
   y: number;
   z: number;
 
-  constructor(entity: Entity, range: number) {
+  /** false while the bot itself is mid-jump: a re-plan then starts from the block behind it and turns it round in the air */
+  canReplan?: () => boolean;
+
+  constructor(entity: Entity, range: number, canReplan?: () => boolean) {
     super();
     this.entity = entity;
+    this.canReplan = canReplan;
     this.rangeSq = range * range;
     const p = entity.position;
     this.x = Math.floor(p.x);
@@ -948,6 +952,7 @@ export class GoalFollowAtHeight extends goals.Goal {
     const dy = Math.abs(this.y - p.y);
     // Ignore jump-bob and small steps so a long detour is not aborted.
     if (dx * dx + dz * dz > 16 || dy > 2.2) {
+      if (this.canReplan && !this.canReplan()) return false;
       this.x = p.x;
       this.y = p.y;
       this.z = p.z;
@@ -1564,6 +1569,11 @@ export async function executeGapJump(
       Math.abs(pos.y - ly) < Math.max(1.8, drop + 1.2);
 
     if (landed) {
+      // Braked or slid onto the edge of the landing: pathfinder plans from the floored position,
+      // and a block past a 1-wide strip is air there. Step back onto the landing block first.
+      if ((Math.floor(pos.x) !== landing.x || Math.floor(pos.z) !== landing.z) && Math.abs(pos.y - ly) < 0.6) {
+        await settleOnBlock(bot, lx, lz, token);
+      }
       report?.({ done: 1, total: 1, label: `parkur ${g} OK` });
       instance.getLogger().info(`Parkour jump succeeded`, `${g} blok → ${landing.x},${landing.y},${landing.z}`);
     } else {
@@ -1573,6 +1583,26 @@ export async function executeGapJump(
   } finally {
     if (ownsLock) parkourLocks.delete(bot);
     bot.removeListener("caya_teleported" as never, onTeleport as never);
+  }
+}
+
+/** Sneak-walk to a block centre (cannot step off an edge), at most ~0.6 s. */
+async function settleOnBlock(bot: Bot, cx: number, cz: number, token: TaskToken): Promise<void> {
+  try {
+    bot.setControlState("sneak", true);
+    for (let i = 0; i < 20 && !token.cancelled && bot.entity; i++) {
+      const p = bot.entity.position;
+      const dx = cx - p.x;
+      const dz = cz - p.z;
+      if (Math.hypot(dx, dz) < 0.2) break;
+      await bot.look(Math.atan2(-dx, -dz), bot.entity.pitch, true);
+      bot.setControlState("forward", true);
+      await sleep(30);
+    }
+  } catch {
+    /* */
+  } finally {
+    clearControls(bot);
   }
 }
 
@@ -2520,8 +2550,11 @@ export function installParkourKick(instance: BotInstance): void {
   }) as never);
   // a jump the rehearsal turned down: leave it to pathfinder for a while (no retry loop)
   let declined: { key: string; until: number } | null = null;
-  bot.on("path_update", (r: { path?: Array<{ x: number; y: number; z: number; parkour?: boolean }> }) => {
+  // a full route, or only pathfinder's best guess (still searching / no route found)
+  let pathComplete = false;
+  bot.on("path_update", (r: { status?: string; path?: Array<{ x: number; y: number; z: number; parkour?: boolean }> }) => {
     path = r.path ?? null;
+    pathComplete = r.status === "success";
     still = 0;
   });
   bot.on("goal_reached", () => {
@@ -2552,7 +2585,12 @@ export function installParkourKick(instance: BotInstance): void {
       const sx = Math.sign(Math.floor(n.x) - Math.floor(bot.entity.position.x));
       const sz = Math.sign(Math.floor(n.z) - Math.floor(bot.entity.position.z));
       const narrowLanding = !isPlatformStand(bot, Math.floor(n.x) + sx, Math.floor(n.y), Math.floor(n.z) + sz);
-      const takeOver = narrowLanding;
+      // ...unless pathfinder is already running into it and the route goes on from the landing
+      // (stairs, a turn along a strip, the next pillar): its own running jump carries it on, where
+      // the braked run-up took 5 s each time and left it at the edge of a 1-wide strip. From a
+      // standstill (a pillar or ladder top) it cannot jump at all.
+      const running = Math.hypot(v.x, v.z) > 0.06;
+      const takeOver = narrowLanding && (!running || !path[1]);
       if (!takeOver && Math.hypot(v.x, v.z) > 0.03) {
         still = 0;
         return;
@@ -2567,6 +2605,10 @@ export function installParkourKick(instance: BotInstance): void {
       const p = bot.entity.position;
       const d = Math.hypot(n.x - p.x, n.z - p.z);
       if (d < 1.8) return;
+      // Landed past the node (pathfinder shifts it only within 0.35): it is behind the bot now,
+      // and jumping "to" it went backwards off a row of pillars.
+      const nx = path[1];
+      if (nx && Math.hypot(nx.x - p.x, nx.z - p.z) < Math.hypot(nx.x - n.x, nx.z - n.z) - 0.3) return;
       const moving = (bot.pathfinder as unknown as { isMoving?: () => boolean }).isMoving?.();
       if (!moving) return;
       const landing = { x: Math.floor(n.x), y: Math.floor(n.y), z: Math.floor(n.z) };
@@ -2574,6 +2616,12 @@ export function installParkourKick(instance: BotInstance): void {
       // only a jump pathfinder could have planned from here: never a stale or far node
       const maxGap = parkourFromMovement(instance.config.movement).maxGap;
       if (gap > maxGap || Math.abs(n.y - p.y) > 1.6) return;
+      // On a best-guess path only a jump that gets nearer the goal: it once leapt away from the
+      // player onto a ledge with no way on, again and again.
+      if (!pathComplete && typeof goal.heuristic === "function") {
+        const here = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+        if (goal.heuristic(landing as never) > goal.heuristic(here as never) - 1) return;
+      }
       busy = true;
       const kickEpoch = instance.controlEpoch;
       const kickTeleports = teleportCount;
