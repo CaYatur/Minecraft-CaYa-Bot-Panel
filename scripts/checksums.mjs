@@ -13,7 +13,12 @@ if (!fs.existsSync(outDir)) {
   console.error(`No ${outDir} folder; build first.`);
   process.exit(1);
 }
-const files = fs.readdirSync(outDir).filter((name) => /setup.*\.exe$/i.test(name) || /portable.*\.zip$/i.test(name));
+// only this version: an older Setup left in the folder must not end up in SHA256SUMS
+const version = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")).version;
+const files = fs
+  .readdirSync(outDir)
+  .filter((name) => /setup.*\.exe$/i.test(name) || /portable.*\.zip$/i.test(name))
+  .filter((name) => name.includes(version));
 if (!files.length) {
   console.error("No Setup .exe found to checksum.");
   process.exit(1);

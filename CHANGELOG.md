@@ -33,7 +33,7 @@ Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-
 - New `npm run test:protocol` (movement packet order, sprint ids, attributes, teleports) in `test:all`, command-list cases in `test:platform`, and player-trail cases in `test:movement`. `test-server/README.md` describes the Paper + ViaVersion + GrimAC check.
 
 ### Known limitations
-- Parkour jumps on a server with GrimAC can still raise a few Simulation flags at takeoff and landing (walking, following and ladders do not); the jump itself is not set back.
+- Parkour jumps on a server with GrimAC can still raise a few Simulation flags at takeoff and landing (walking and following do not); the jump itself is not set back. The spiral-ladder climb was tested on vanilla Paper only.
 
 ## 3.0.7 — 2026-11-21
 

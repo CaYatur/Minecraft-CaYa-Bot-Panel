@@ -43,6 +43,10 @@ check("bedrock common data still ships", !excluded.some((f) => /bedrock\/(\*\*|c
 check("viewer build-time textures are left out", excluded.some((f) => f.includes("prismarine-viewer/public/textures/*/{blocks")));
 check("viewer entity textures still ship", !excluded.some((f) => /entity/.test(f)));
 check("dist:win writes checksums", dist.includes("scripts/checksums.mjs"));
+check(
+  "checksums list only this version's files (an old Setup in dist-electron was listed)",
+  /\.includes\(version\)/.test(fs.readFileSync(path.join(root, "scripts", "checksums.mjs"), "utf8"))
+);
 check("native modules are not packed into asar", build.asar === false || (build.asarUnpack ?? []).some((p) => /canvas|gl/.test(p)));
 for (const need of ["electron/**/*", "server/dist/**/*", "web/dist/**/*"]) check(`files include ${need}`, (build.files ?? []).includes(need));
 check("versions match", ["server", "web"].every((ws) => JSON.parse(fs.readFileSync(path.join(root, ws, "package.json"), "utf8")).version === pkg.version), pkg.version);

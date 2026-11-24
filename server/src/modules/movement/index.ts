@@ -916,8 +916,10 @@ export async function runFollow(
           const live0 = bot.players[playerName]?.entity;
           const by = bot.entity.position.y;
           const py = live0?.position.y ?? by;
-          // only go down without a known route when the player is down there
-          const floorY = py < by - 1 ? py - 1.5 : by - 0.5;
+          // While a long search is still running ("partial") only an irreversible drop is cut;
+          // once no route exists, do not go down at all unless the player is down there.
+          const floorY =
+            result.status === "partial" ? Math.min(by, py) - 1.5 : py < by - 1 ? py - 1.5 : by - 0.5;
           const before = result.path.length;
           if (cutPathAtDrop(result.path as Array<{ y: number }>, floorY) < before && Date.now() - lastCutLogAt > 5000) {
             lastCutLogAt = Date.now();
