@@ -8,6 +8,11 @@ export interface ServerProfile {
   /** minecraft version, e.g. "1.20.4", or "auto" for mineflayer auto-detect */
   version: string;
   note?: string;
+  /**
+   * ViaProxy bridge (issue #34). "auto" (default): used when the server's version is
+   * newer than mineflayer speaks. "always": every connection. "off": never.
+   */
+  viaProxy?: "auto" | "always" | "off";
 }
 
 export type BotStatus =

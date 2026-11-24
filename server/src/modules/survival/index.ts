@@ -342,14 +342,24 @@ export class SurvivalService {
   }
 
   /** low food → queue acquire if idle-ish */
+  /** when no food can be found nearby, ask again later and less often (15 s → 10 min) */
+  private foodRetryAt = 0;
+  private foodRetryMs = 15_000;
+
   tickFoodWatch() {
     const bot = this.bot;
     if (!bot || !this.cfg().autoEat) return;
-    if ((bot.food ?? 20) > 6) return;
     const hasFood = bot.inventory.items().some((i) => isFood(i.name) && !(this.cfg().foodBlacklist ?? []).includes(i.name));
-    if (hasFood) return;
+    if ((bot.food ?? 20) > 6 || hasFood) {
+      this.foodRetryMs = 15_000; // fed again: back to normal
+      this.foodRetryAt = 0;
+      return;
+    }
     const cur = this.instance.tasks.currentSummary;
     if (cur && (cur.type === "acquire-food" || cur.type === "hunt" || cur.type === "cook")) return;
+    if (Date.now() < this.foodRetryAt) return;
+    this.foodRetryAt = Date.now() + this.foodRetryMs;
+    this.foodRetryMs = Math.min(600_000, this.foodRetryMs * 2);
     this.log().info("No food and low hunger — acquire-food task queued");
     try {
       this.enqueueAcquireFood();

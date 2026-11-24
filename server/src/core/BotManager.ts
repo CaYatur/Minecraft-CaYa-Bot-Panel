@@ -1,4 +1,5 @@
 import { secretStatus } from "../security/secretBox";
+import { normalizeViaProxyMode } from "../modules/versions/viaProxy";
 import { EventEmitter } from "events";
 import { accounts } from "../modules/auth/accounts";
 import { bridgeFromMinecraft, connectDiscord, disconnectDiscord, noteHealth, notifyDiscord, setDiscordControl } from "../modules/discord/hub";
@@ -114,7 +115,8 @@ export class BotManager extends EventEmitter {
       host: String(input.host || "").trim(),
       port: clampPort(input.port),
       version: normalizeVersion(input.version),
-      note: input.note
+      note: input.note,
+      viaProxy: normalizeViaProxyMode(input.viaProxy)
     };
     if (!profile.host) throw new PanelError("Server host cannot be empty.");
     this.servers.push(profile);
@@ -136,6 +138,7 @@ export class BotManager extends EventEmitter {
     if (patch.version !== undefined) profile.version = normalizeVersion(patch.version);
     if (patch.name !== undefined) profile.name = String(patch.name).trim() || profile.name;
     if (patch.note !== undefined) profile.note = patch.note;
+    if (patch.viaProxy !== undefined) profile.viaProxy = normalizeViaProxyMode(patch.viaProxy);
     void saveJson(SERVERS_FILE, this.servers);
     this.emit("changed");
     return profile;

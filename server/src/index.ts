@@ -1,4 +1,5 @@
 import express from "express";
+import { stopAllViaProxies } from "./modules/versions/viaProxy";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
@@ -108,6 +109,7 @@ async function main() {
     log.info("Shutting down — stopping all bots…");
     agents.shutdown();
     manager.shutdown();
+    stopAllViaProxies();
     setTimeout(() => process.exit(0), 500);
   };
   process.on("SIGINT", shutdown);

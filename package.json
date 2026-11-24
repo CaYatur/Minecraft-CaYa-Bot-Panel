@@ -1,6 +1,6 @@
 {
   "name": "caya-bot-panel",
-  "version": "3.0.7",
+  "version": "3.0.8",
   "private": true,
   "license": "MIT",
   "author": "ÇAĞAN TURGUT (CaYatur)",
@@ -24,6 +24,7 @@
     "test:auth": "tsx scripts/auth-unit.ts",
     "test:platform": "tsx scripts/platform-unit.ts",
     "test:movement": "tsx scripts/movement-unit.ts",
+    "test:protocol": "tsx scripts/protocol-unit.ts",
     "test:build-rules": "tsx scripts/build-unit.ts",
     "test:security": "tsx scripts/security-unit.ts",
     "test:packaging": "node scripts/packaging-check.mjs",
@@ -31,9 +32,9 @@
     "test:build": "node scripts/build-smoke.mjs",
     "test:baseline": "tsx scripts/baseline.mjs",
     "test:gui": "node scripts/gui-test.mjs",
-    "test:all": "npm run test:auth && npm run test:security && npm run test:packaging && npm run test:ui && npm run test:platform && npm run test:movement && npm run test:build-rules && npm run test:baseline && npm run test:gui",
+    "test:all": "npm run test:auth && npm run test:security && npm run test:packaging && npm run test:ui && npm run test:platform && npm run test:movement && npm run test:protocol && npm run test:build-rules && npm run test:baseline && npm run test:gui",
     "electron:dev": "electron .",
-    "dist:win": "npm run build && node scripts/patch-nan-msvc.mjs && npx --no-install electron-rebuild -f --only canvas,gl && electron-builder --win nsis && node scripts/checksums.mjs && npm rebuild canvas && npm rebuild gl"
+    "dist:win": "npm run build && node scripts/patch-nan-msvc.mjs && npx --no-install electron-rebuild -f --only canvas,gl && electron-builder --win nsis zip && node scripts/checksums.mjs && npm rebuild canvas && npm rebuild gl"
   },
   "dependencies": {
     "canvas": "3.2.3",
@@ -72,7 +73,11 @@
       "server/dist/**/*",
       "web/dist/**/*",
       "build/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/minecraft-data/minecraft-data/data/bedrock/{0,1,2,3,4,5,6,7,8,9}*/**",
+      "!**/node_modules/minecraft-data/minecraft-data/data/bedrock/latest/**",
+      "!**/node_modules/prismarine-viewer/public/textures/*/{blocks,items,gui,particle,painting,map,misc,mob_effect,trims,font,environment,effect,colormap}/**",
+      "!**/node_modules/prismarine-viewer/public/textures/*/*.json"
     ],
     "extraMetadata": {
       "main": "electron/main.cjs"
@@ -85,8 +90,15 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
         }
-      ]
+      ],
+      "artifactName": "${name}-${version}-Portable.${ext}"
     },
     "nsis": {
       "oneClick": false,

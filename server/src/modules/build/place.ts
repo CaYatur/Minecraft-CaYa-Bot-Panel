@@ -4,7 +4,8 @@ import type { Vec3 } from "vec3";
 import { goals } from "mineflayer-pathfinder";
 import type { BotInstance } from "../../core/BotInstance";
 import { isTokenAborted, type TaskToken } from "../../core/TaskQueue";
-import { ensureMovement, type EnsureMovementOpts } from "../movement";
+import { ensureMovement, resetSearchBudget, SEARCH_BUDGETS, setSearchBudget, type EnsureMovementOpts } from "../movement";
+import { cutPathAtDrop } from "../movement/trail";
 import {
   dist3,
   facesLikeStairs,
@@ -226,14 +227,32 @@ export async function pathNear(
   if (token.cancelled) throw new Error(token.reason ?? "cancelled");
   if (dist3(bot, x, y, z) <= range + 0.5) return;
 
-  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
+  const goal = new goals.GoalNear(x, y, z, range);
+  // small detour budget first, widen only when nothing fits (same as goto/follow)
+  let budget = 0;
+  setSearchBudget(bot, budget);
+  bot.pathfinder.setGoal(goal);
   const t0 = Date.now();
   const timeout = opts?.timeoutMs ?? PATH_TIMEOUT_MS;
   let noPath = false;
   let lastBest = dist3(bot, x, y, z);
   let lastProgressAt = Date.now();
-  const onPath = (r: { status?: string }) => {
-    if (r?.status === "noPath" || r?.status === "timeout") noPath = true;
+  const onPath = (r: { status?: string; path?: Array<{ y: number }> }) => {
+    if (r?.status !== "success" && r?.path && bot.entity) {
+      cutPathAtDrop(r.path, Math.min(bot.entity.position.y, y) - 1.5);
+    }
+    if (r?.status === "noPath" || r?.status === "timeout") {
+      if (budget < SEARCH_BUDGETS.length - 1) {
+        if (r.path) r.path.length = 0;
+        budget++;
+        setSearchBudget(bot, budget);
+        setImmediate(() => {
+          if (!token.cancelled && bot.pathfinder.goal === goal) bot.pathfinder.setGoal(goal);
+        });
+        return;
+      }
+      noPath = true;
+    }
   };
   bot.on("path_update", onPath);
   try {
@@ -266,6 +285,7 @@ export async function pathNear(
     }
   } finally {
     bot.removeListener("path_update", onPath);
+    resetSearchBudget(bot);
     if (opts?.clearGoal !== false || token.cancelled) {
       forceStopPath(bot);
     }

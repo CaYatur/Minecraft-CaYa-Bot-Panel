@@ -699,6 +699,8 @@ export function patchMovementsForDoors(bot: Bot, movements: object): void {
     const trap = name.endsWith("_trapdoor");
     if (!doorOrGate && !trap) return b;
     const open = propsOf(b as { getProperties?: () => unknown }).open === true;
+    // An iron door opens only by redstone: a closed one is a wall (the bot pushed into one forever)
+    if (name.includes("iron_") && !open) return b;
     // Closed doors/gates must still be pathable or a 1-wide doorway is a wall.
     // Open trapdoors are air; closed trapdoors stay solid (floor/ceiling).
     if (doorOrGate || (trap && open)) {

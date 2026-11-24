@@ -3,6 +3,22 @@ import * as fs from "fs";
 import * as path from "path";
 import { createBot, type Bot } from "mineflayer";
 import { CHAT_LOGS_DIR } from "../config/paths";
+import { installProtocolCompat, type ProtocolCompatHandle } from "./protocolCompat";
+import {
+  acquireViaProxy,
+  mineflayerSpeaks,
+  newestClientVersion,
+  normalizeViaProxyMode,
+  pingServer,
+  VIAPROXY,
+  type ProxyLease,
+  type ViaProxyMode
+} from "../modules/versions/viaProxy";
+
+interface ViaRoute {
+  lease: ProxyLease;
+  version: string;
+}
 import { ANTI_AFK_LOCK, antiAfkAllowed, antiAfkAllowsAction, antiAfkMode, clampAntiAfkHold, clampAntiAfkInterval, pickAntiAfkAction } from "../modules/alwaysOn/antiAfk";
 
 import { classifyDisconnect } from "../modules/alwaysOn/classify";
@@ -94,6 +110,12 @@ export class BotInstance extends EventEmitter {
   private windowTimer: NodeJS.Timeout | null = null;
   /** Son declare_commands paketi. Yeni paket listeyi bütünüyle değiştirir. */
   private serverCommandState: ServerCommandList | null = null;
+  /** Movement packet fixes for the current connection (see protocolCompat.ts). */
+  protocolCompat: ProtocolCompatHandle | null = null;
+  /** ViaProxy in use by the current connection (newer server than mineflayer speaks). */
+  private viaLease: ProxyLease | null = null;
+  /** Bumped by every connect/stop so a slow ping or ViaProxy start cannot reconnect a stopped bot. */
+  private connectSeq = 0;
   private invTimer: NodeJS.Timeout | null = null;
   private invWasFull = false;
   private readonly limiter: ChatRateLimiter;
@@ -293,6 +315,7 @@ export class BotInstance extends EventEmitter {
 
   stop() {
     this.wantsRunning = false;
+    this.connectSeq++;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1070,18 +1093,77 @@ export class BotInstance extends EventEmitter {
       this.setStatus("error");
       return;
     }
+    const mode = normalizeViaProxyMode(server.viaProxy);
+    if (mode === "off") {
+      this.openConnection(server, null);
+      return;
+    }
+    const attempt = ++this.connectSeq;
+    this.setStatus("connecting");
+    void this.resolveRoute(server, mode).then(
+      (route) => {
+        if (attempt !== this.connectSeq || !this.wantsRunning || this.bot) {
+          route?.lease.release();
+          return;
+        }
+        this.openConnection(server, route);
+      },
+      (err: unknown) => {
+        if (attempt !== this.connectSeq || !this.wantsRunning) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.runtime.lastError = msg;
+        this.log.error("ViaProxy", msg);
+        this.setStatus("error");
+        // a missing Java or a Microsoft account will not fix itself
+        if (/needs Java|Microsoft/.test(msg)) this.wantsRunning = false;
+        else this.scheduleReconnect();
+      }
+    );
+  }
+
+  /**
+   * Newer server than mineflayer speaks (or ViaProxy forced on): run ViaProxy and
+   * join it with the newest version mineflayer knows. null = connect directly.
+   */
+  private async resolveRoute(server: ServerProfile, mode: ViaProxyMode): Promise<ViaRoute | null> {
+    let reason: string;
+    if (mode === "always") {
+      reason = "ViaProxy is set to always for this server";
+    } else {
+      const ping = await pingServer(server.host, server.port);
+      if (!ping || mineflayerSpeaks(ping.protocol)) return null;
+      reason = `server runs ${ping.name || "?"} (protocol ${ping.protocol}), newer than mineflayer supports`;
+    }
+    if (this.config.auth === "microsoft") {
+      throw new Error(
+        `${reason}. ViaProxy can only bridge offline-mode servers; it cannot sign in with a Microsoft account.`
+      );
+    }
+    const version = newestClientVersion();
+    this.log.info(`Using ViaProxy ${VIAPROXY.version}: ${reason}. The bot joins as ${version}.`);
+    const lease = await acquireViaProxy(server.host, server.port);
+    return { lease, version };
+  }
+
+  private openConnection(server: ServerProfile, route: ViaRoute | null) {
+    this.viaLease?.release();
+    this.viaLease = route?.lease ?? null;
 
     this.setStatus("connecting");
-    this.log.info(`Connecting: ${server.host}:${server.port} (version: ${server.version})`);
+    this.log.info(
+      route
+        ? `Connecting: ${server.host}:${server.port} through ViaProxy (127.0.0.1:${route.lease.port}, bot version ${route.version})`
+        : `Connecting: ${server.host}:${server.port} (version: ${server.version})`
+    );
 
     let bot: Bot | null = null;
     const auth = this.config.auth === "microsoft" ? "microsoft" : "offline";
     const options: Record<string, unknown> = {
-      host: server.host,
-      port: server.port,
+      host: route ? route.lease.host : server.host,
+      port: route ? route.lease.port : server.port,
       username: this.config.username,
       auth,
-      version: server.version === "auto" ? undefined : server.version,
+      version: route ? route.version : server.version === "auto" ? undefined : server.version,
       checkTimeoutInterval: 60_000,
       hideErrors: true // we surface errors ourselves via the panel log
     };
@@ -1144,6 +1226,8 @@ export class BotInstance extends EventEmitter {
     }
 
     this.bot = bot;
+    // 1.21.2+ movement packets that anti-cheats expect (tick_end, full player_input, synced yaw)
+    this.protocolCompat = installProtocolCompat(bot!);
     this.hookCommandTree(bot!);
     this.hookBotEvents(bot!);
   }
@@ -1285,6 +1369,8 @@ export class BotInstance extends EventEmitter {
     });
 
     bot.on("end", (reason: unknown) => {
+      this.viaLease?.release();
+      this.viaLease = null;
       const closed = chatComponentToText(reason) || (typeof reason === "string" ? reason : "") || this.runtime.kickReason || "closed";
       this.log.info(`Connection closed (${closed})`);
       if (this.tasks.currentSummary) {

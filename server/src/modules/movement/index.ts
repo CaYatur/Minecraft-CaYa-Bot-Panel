@@ -17,15 +17,19 @@ import {
   findReplayJump,
   GoalFollowAtHeight,
   isParkourLocked,
+  installParkourKick,
+  installSpiralLadderAssist,
   isTurningLadder,
   patchMovementsForTurningLadders,
   pruneObservedJumps,
   pushObservedJump,
+  tryGapJumpTowardPoint,
   tryJumpAcrossToPlayer,
   tryReplayObservedJump,
   type ObservedJump
 } from "./parkour";
 import { installWaterMovementAssist } from "./water";
+import { cutPathAtDrop, PlayerTrail, type Vec as TrailVec } from "./trail";
 
 export { tryOpenNearbyDoor, tryPassNearbyDoor } from "./doors";
 
@@ -44,7 +48,128 @@ const STUCK_WINDOW_MS = 10_000; // if no position change: repath once then give 
 const FOLLOW_TICK_MS = 150;
 const FOLLOW_REPORT_MS = 1500; // panel report at most this often (no 10Hz spam)
 const FOLLOW_STUCK_MS = 5_000; // follow stuck watchdog: repath to current player pos
+
+/**
+ * A* detour budgets (pathfinder `searchRadius` is maxCost = h(start) + budget).
+ * Inside a build the unbounded search dropped off the edge and flooded the
+ * terrain below: 25k+ nodes, 4 s timeout, bot parked under the player. A small
+ * budget prunes those branches; if no path fits we widen and search again, so a
+ * route that exists is still found (and the shortest one within the budget).
+ */
+export const SEARCH_BUDGETS = [40, 120, -1] as const;
+
+/** Back to pathfinder's default (unbounded) for code that sets goals directly. */
+export function resetSearchBudget(bot: Bot): void {
+  try {
+    (bot.pathfinder as unknown as { searchRadius: number }).searchRadius = -1;
+  } catch {
+    /* */
+  }
+}
+
+export function setSearchBudget(bot: Bot, level: number): void {
+  try {
+    (bot.pathfinder as unknown as { searchRadius: number }).searchRadius =
+      SEARCH_BUDGETS[Math.max(0, Math.min(SEARCH_BUDGETS.length - 1, level))];
+  } catch {
+    /* */
+  }
+}
 const LADDER_HOP_COOLDOWN_MS = 5_000;
+
+/**
+ * Run `fn` once the bot stands on something. pathfinder.setGoal releases every key at
+ * once; done in mid-air it cut a jump short and the bot fell into the gap (a follow
+ * re-plan while the followed player moved on).
+ */
+function whenGrounded(bot: Bot, fn: () => void, maxTicks = 40): void {
+  if (!bot.entity || bot.entity.onGround) {
+    fn();
+    return;
+  }
+  let n = 0;
+  const onTick = () => {
+    n++;
+    if (!bot.entity || bot.entity.onGround || n >= maxTicks) {
+      bot.removeListener("physicsTick", onTick);
+      fn();
+    }
+  };
+  bot.on("physicsTick", onTick);
+}
+
+/** Emitted on the bot after a server teleport moved it this far (blocks). */
+export const TELEPORT_EVENT = "caya_teleported";
+const TELEPORT_MIN_JUMP = 4;
+const teleportWatched = new WeakSet<Bot>();
+
+/**
+ * A teleport (/tp, a plugin, a setback across a gap) left pathfinder walking the
+ * path planned from the old spot: the bot kept heading back toward it for a while.
+ * Re-plan the same goal from where the bot is now.
+ */
+/**
+ * Several server setbacks in a row (an anti-cheat that rejected a step) kept coming
+ * for as long as the bot kept pushing: it stood in place sprinting into each one
+ * (GrimAC, issue #34). Let go of every key for a few ticks so the server's idea of
+ * the player settles, as a player who rubber-bands does.
+ */
+const setbackCalmed = new WeakSet<Bot>();
+function installSetbackCalm(bot: Bot): void {
+  if (setbackCalmed.has(bot)) return;
+  setbackCalmed.add(bot);
+  const recent: number[] = [];
+  let calmTicks = 0;
+  let lastPos: Vec3 | null = null;
+  bot.on("physicsTick", () => {
+    if (bot.entity) lastPos = bot.entity.position.clone();
+    if (calmTicks <= 0) return;
+    calmTicks--;
+    for (const c of ["forward", "back", "left", "right", "jump", "sprint"] as const) bot.setControlState(c, false);
+  });
+  bot.on("forcedMove", () => {
+    const p = bot.entity?.position;
+    if (!p) return;
+    const jump = lastPos ? p.distanceTo(lastPos) : 99;
+    if (jump >= TELEPORT_MIN_JUMP) return; // a real teleport, not a setback
+    const now = Date.now();
+    recent.push(now);
+    while (recent.length && now - recent[0]! > 1000) recent.shift();
+    if (recent.length >= 3 && calmTicks <= 0) {
+      calmTicks = 8;
+      recent.length = 0;
+      (bot as unknown as { emit(e: string): void }).emit(SETBACK_STORM_EVENT);
+    }
+  });
+}
+export const SETBACK_STORM_EVENT = "caya_setback_storm";
+
+function installTeleportReset(bot: Bot): void {
+  if (teleportWatched.has(bot)) return;
+  teleportWatched.add(bot);
+  let last: Vec3 | null = null;
+  bot.on("physicsTick", () => {
+    if (bot.entity) last = bot.entity.position.clone();
+  });
+  bot.on("forcedMove", () => {
+    const p = bot.entity?.position;
+    if (!p) return;
+    const jump = last ? p.distanceTo(last) : 0;
+    last = p.clone();
+    if (jump < TELEPORT_MIN_JUMP) return;
+    try {
+      (bot as unknown as { emit(e: string, d: number): void }).emit(TELEPORT_EVENT, jump);
+    } catch {
+      /* */
+    }
+    try {
+      const pf = bot.pathfinder as unknown as { goal?: unknown; movements?: unknown; setMovements?(m: unknown): void };
+      if (pf.goal && pf.movements && !isParkourLocked(bot)) pf.setMovements?.(pf.movements); // resets the path, keeps the goal
+    } catch {
+      /* */
+    }
+  });
+}
 
 function requireBot(instance: BotInstance): Bot {
   const bot = instance.bot;
@@ -103,6 +228,11 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   const bot = requireBot(instance);
   const anyBot = bot as unknown as { pathfinder?: unknown };
   if (!anyBot.pathfinder) bot.loadPlugin(pathfinder);
+  installLadderEndGuard(bot);
+  installTeleportReset(bot);
+  installSetbackCalm(bot);
+  installSpiralLadderAssist(bot);
+  installParkourKick(instance);
   // caya-water-movement-stability-v1: akıntı, yüzey ve kıyıya çıkış stabilizasyonu.
   installWaterMovementAssist(bot);
   installDoorMovementAssist(bot);
@@ -126,6 +256,32 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
   // Vanilla: first 3 blocks of fall are free, then 1 HP per extra block.
   // Take the short drop if it will not kill; walk around only when lethal.
   movements.maxDropDown = smartMaxDropDown(bot, cfg);
+  // Pathfinder only climbs ladders; vines climb the same way in the game (and in the physics)
+  const vine = registry.blocksByName.vine;
+  if (vine) movements.climbables.add(vine.id);
+  // Magma burns a walking player: go round it when a few blocks of detour do (the fire guard
+  // otherwise pulled the bot off its route).
+  // (state id lookup: called for every cell the search looks at, a Block object each time was slow)
+  const magma = registry.blocksByName.magma_block as { minStateId?: number; maxStateId?: number } | undefined;
+  const world = bot.world as unknown as { getBlockStateId?(p: Vec3): number | undefined };
+  if (magma?.minStateId !== undefined && typeof world.getBlockStateId === "function") {
+    const lo = magma.minStateId;
+    const hi = magma.maxStateId ?? lo;
+    const below = new Vec3(0, 0, 0);
+    movements.exclusionAreasStep.push((b: { position?: Vec3 }) => {
+      const p = b.position;
+      if (!p) return 0;
+      below.set(p.x, p.y - 1, p.z);
+      const id = world.getBlockStateId!(below);
+      return id !== undefined && id >= lo && id <= hi ? 6 : 0;
+    });
+  }
+  // Pathfinder treats a cobweb as a wall; a player wades through it slowly. Allow it at a high
+  // cost, so a web is only crossed when there is no other way (a webbed corridor or door).
+  const web = registry.blocksByName.cobweb ?? registry.blocksByName.web;
+  if (web && movements.blocksToAvoid.delete(web.id)) {
+    movements.exclusionAreasStep.push((b: { type?: number }) => (b.type === web.id ? 20 : 0));
+  }
   const canOpenDoors = opts?.canOpenDoors !== false;
   if ("canOpenDoors" in movements) {
     (movements as unknown as { canOpenDoors: boolean }).canOpenDoors = canOpenDoors;
@@ -203,6 +359,63 @@ export function ensureMovement(instance: BotInstance, opts?: EnsureMovementOpts)
     /* */
   }
   return bot;
+}
+
+// ---- ladder end guard (issue #34) ------------------------------------------------
+
+const ladderGuarded = new WeakSet<Bot>();
+const GUARDED = Symbol.for("caya.ladderEndGuard");
+
+/** Ladder and vines: a cell you hang in, not one you stand in. Scaffolding is a floor. */
+function isHangingCell(bot: Bot, x: number, y: number, z: number): boolean {
+  const name = blockNameAt(bot, x, y, z);
+  return name === "ladder" || name === "vine" || name.endsWith("_vines") || name === "weeping_vines_plant" || name === "twisting_vines_plant";
+}
+
+/**
+ * A goal must not end with the bot hanging on a ladder. Follow (range 2) "arrived"
+ * on the last rung while the player stood on the only exit block, pathfinder let
+ * go, the bot slid down, follow restarted, and it bobbed on the ladder forever.
+ * Unless the target itself is on a ladder, keep walking to a cell you can stand in.
+ */
+export function guardGoalAgainstLadderEnd(bot: Bot, goal: unknown): void {
+  const g = goal as {
+    isEnd?: (node: { x: number; y: number; z: number }) => boolean;
+    entity?: Entity;
+    x?: number;
+    y?: number;
+    z?: number;
+    [GUARDED]?: boolean;
+  } | null;
+  if (!g || typeof g.isEnd !== "function" || g[GUARDED]) return;
+  const orig = g.isEnd.bind(g);
+  const targetHangs = () => {
+    const tp = g.entity?.position;
+    if (tp) return isHangingCell(bot, tp.x, tp.y, tp.z) || isHangingCell(bot, tp.x, tp.y - 1, tp.z);
+    if (typeof g.x === "number" && typeof g.y === "number" && typeof g.z === "number") {
+      return isHangingCell(bot, g.x, g.y, g.z);
+    }
+    return false;
+  };
+  g.isEnd = (node) => {
+    if (!orig(node)) return false;
+    // on a rung, or in the air just above the top rung (pathfinder's climb ends there)
+    const hanging = isHangingCell(bot, node.x, node.y, node.z) || isHangingCell(bot, node.x, node.y - 1, node.z);
+    if (!hanging) return true;
+    return targetHangs();
+  };
+  g[GUARDED] = true;
+}
+
+function installLadderEndGuard(bot: Bot) {
+  if (ladderGuarded.has(bot)) return;
+  ladderGuarded.add(bot);
+  const pf = bot.pathfinder as unknown as { setGoal(goal: unknown, dynamic?: boolean): void };
+  const origSetGoal = pf.setGoal.bind(pf);
+  pf.setGoal = (goal: unknown, dynamic?: boolean) => {
+    guardGoalAgainstLadderEnd(bot, goal);
+    return origSetGoal(goal, dynamic);
+  };
 }
 
 // ---- merdiven atlayış asisti (takip) ----------------------------------------------
@@ -302,10 +515,11 @@ function pathfinderGoal(
   instance: BotInstance,
   goal: goals.Goal,
   token: TaskToken,
-  opts?: { timeoutMs?: number; onStuckRetry?: () => void }
+  opts?: { timeoutMs?: number; onStuckRetry?: () => void; maxBudget?: number }
 ): Promise<void> {
   const bot = requireBot(instance);
   const timeoutMs = opts?.timeoutMs ?? GOTO_TIMEOUT_MS;
+  const lastBudget = Math.min(SEARCH_BUDGETS.length - 1, opts?.maxBudget ?? SEARCH_BUDGETS.length - 1);
   const epoch = instance.controlEpoch;
 
   return new Promise<void>((resolve, reject) => {
@@ -322,10 +536,12 @@ function pathfinderGoal(
       }
     };
     const cleanup = () => {
+      resetSearchBudget(bot);
       clearInterval(watch);
       clearTimeout(deadline);
       bot.removeListener("goal_reached", onReached);
       bot.removeListener("path_update", onPath);
+      bot.removeListener(TELEPORT_EVENT as never, onTeleport as never);
     };
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -333,8 +549,59 @@ function pathfinderGoal(
       cleanup();
       fn();
     };
-    const onReached = () => finish(resolve);
-    const onPath = (result: { status: string }) => {
+    const onReached = (reached?: unknown) => {
+      // Another module (the fire/lava/magma guard fleeing) can set its own goal for a moment;
+      // reaching that one is not arriving here: aim at ours again.
+      if (reached && reached !== goal) {
+        setTimeout(() => {
+          if (settled || bot.pathfinder.goal) return;
+          try {
+            bot.pathfinder.setGoal(goal);
+          } catch {
+            /* */
+          }
+        }, 300);
+        return;
+      }
+      finish(resolve);
+    };
+    let budget = 0;
+    setSearchBudget(bot, budget);
+    const onTeleport = () => {
+      budget = 0;
+      setSearchBudget(bot, 0);
+      lastPos = bot.entity?.position?.clone?.() ?? null;
+      lastMoveAt = Date.now();
+    };
+    bot.on(TELEPORT_EVENT as never, onTeleport as never);
+    let lastPathLogAt = 0;
+    const onPath = (result: { status: string; path?: Array<{ y: number }>; time?: number; visitedNodes?: number }) => {
+      if (result.status !== "partial" && Date.now() - lastPathLogAt > 1500) {
+        lastPathLogAt = Date.now();
+        instance.getLogger().debug("Path", `${result.status} budget=${SEARCH_BUDGETS[budget]} nodes=${result.visitedNodes ?? "?"} t=${Math.round(result.time ?? 0)}ms len=${result.path?.length ?? 0}`);
+      }
+      if (result.status !== "success" && result.path && bot.entity) {
+        // best-effort path while no route is known: never step down into a pit
+        const gy = (goal as unknown as { y?: number }).y;
+        cutPathAtDrop(result.path, Math.min(bot.entity.position.y, typeof gy === "number" ? gy : bot.entity.position.y) - 1.5);
+      }
+      if ((result.status === "noPath" || result.status === "timeout") && budget < lastBudget) {
+        // nothing fits this detour budget: widen and plan again (stand still meanwhile)
+        if (result.path) result.path.length = 0;
+        budget++;
+        setSearchBudget(bot, budget);
+        setImmediate(() =>
+          whenGrounded(bot, () => {
+            if (settled) return;
+            try {
+              bot.pathfinder.setGoal(goal);
+            } catch {
+              /* */
+            }
+          })
+        );
+        return;
+      }
       if (result.status === "noPath") {
         finish(() => {
           stopGoal();
@@ -445,10 +712,52 @@ export async function runGoto(
   if (moveCfg(instance).humanize !== false) await sleep(60 + Math.floor(Math.random() * 120)); // insanî tepki
   if (token.cancelled) throw new Error(token.reason ?? "Task cancelled.");
 
-  await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
-    timeoutMs: options?.timeoutMs,
-    onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
-  });
+  // A* stops at 3-block gaps; on noPath try one configured sprint jump toward the
+  // target and plan again (issue #34: 4-gap goto said "noPath" and never jumped).
+  // Bounded searches first: when nothing walkable is near, a jump toward the target
+  // comes before an unbounded search (that timed out in a big build and the jump
+  // was never tried). Only then search everything.
+  let bounded = true;
+  for (let jumps = 0; ; jumps++) {
+    try {
+      await pathfinderGoal(instance, new goals.GoalNear(x, y, z, Math.max(1, range)), token, {
+        timeoutMs: options?.timeoutMs,
+        maxBudget: bounded ? SEARCH_BUDGETS.length - 2 : undefined,
+        onStuckRetry: () => report({ done: 0, total: dist, label: "stuck — recalculating path" })
+      });
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const canJump = options?.parkour !== false && moveCfg(instance).allowParkour !== false;
+      const searchFailed = /noPath|No progress|timed out/.test(msg);
+      if (isTokenAborted(token) || !searchFailed) throw err;
+      if (jumps >= 3 || !canJump) {
+        if (!bounded) throw err;
+        bounded = false;
+        continue;
+      }
+      report({ done: 0, total: dist, label: "no walking path — trying a parkour jump" });
+      const jumped = await tryGapJumpTowardPoint(
+        instance,
+        { x: x + 0.5, y, z: z + 0.5 },
+        token,
+        (lx, ly, lz) => pathfinderGoal(instance, new goals.GoalBlock(lx, ly, lz), token, { timeoutMs: 20_000 }),
+        report
+      );
+      if (!jumped) {
+        if (!bounded) throw err;
+        bounded = false; // no jump to make: now search the whole area
+        continue;
+      }
+      ensureMovement(instance, {
+        mode: "goto",
+        canDig: options?.canDig,
+        allowPlace: options?.allowPlace,
+        parkour: options?.parkour,
+        breakOnly: options?.breakOnly
+      });
+    }
+  }
 
   // varışta targete bak (bot artık DURUYOR — bakış serbest)
   try {
@@ -587,6 +896,7 @@ export async function runFollow(
     allowPlace: movementPolicy?.allowPlace ?? false
   });
   followMovesOn = true;
+  if (instance.bot) setSearchBudget(instance.bot, 0);
 
   /** Takılınca / noPath: pathfinder'a geçici scaffold ver (config scaffoldBlocks) */
   const enableScaffoldForStuck = (bot: Bot) => {
@@ -621,8 +931,110 @@ export async function runFollow(
   };
 
   const observedJumps: ObservedJump[] = [];
+  let budget = 0;
+  // The player's own route: walked in short legs when no route to them is found.
+  const trail = new PlayerTrail();
+  let wantTrail = false;
+  let trailActive = false;
+  let lastTrailAt = 0;
+  let lastCutLogAt = 0;
+  let lastGoalRefreshAt = 0;
+  let lastPathStatus = "";
+
+  // Set when the bot is teleported: a trail walk planned from the old spot stops.
+  let trailAbort = false;
+  const trailToken = {
+    get cancelled() {
+      return token.cancelled || trailAbort;
+    },
+    get reason() {
+      return trailAbort ? "teleported" : token.reason;
+    },
+    abort: token.abort
+  } as TaskToken;
+  const walkTrail = async (): Promise<boolean> => {
+    const bot = requireBot(instance);
+    if (!bot.entity || trail.size === 0) return false;
+    trailActive = true;
+    trailAbort = false;
+    clearGoal(bot);
+    throttledReport(`follow: ${playerName} · following your route`);
+    instance.getLogger().info("Follow trail", `${trail.size} points`);
+    const go = async (c: TrailVec, exact = false): Promise<boolean> => {
+      const g = exact
+        ? new goals.GoalBlock(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z))
+        : new goals.GoalNear(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z), 1);
+      try {
+        await pathfinderGoal(instance, g, trailToken, { timeoutMs: 12_000 });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const here = () => bot.entity.position;
+    try {
+      let i = -1;
+      const player0 = bot.players[playerName]?.entity?.position;
+      for (const cand of trail.nearestIndices(here(), 64, 4)) {
+        const c = trail.get(cand)!;
+        // a crumb no closer than the player itself is just the same unreachable goal
+        if (player0 && here().distanceTo(new Vec3(c.x, c.y, c.z)) > here().distanceTo(player0) - 3) continue;
+        if (here().distanceTo(new Vec3(c.x, c.y, c.z)) < 1.6 || (await go(c))) {
+          i = cand;
+          break;
+        }
+        if (isTokenAborted(trailToken)) return false;
+      }
+      if (i < 0) return false;
+      for (let steps = 0; steps < 300 && !isTokenAborted(trailToken) && instance.status === "online"; steps++) {
+        const p = bot.players[playerName]?.entity;
+        if (!p || !bot.entity) return false;
+        if (here().distanceTo(p.position) <= holdDist + 1.5) return true;
+        const c = trail.get(i);
+        if (!c) return false;
+        if (c.jumpTo) {
+          if (Math.hypot(here().x - c.x, here().z - c.z) > 0.9) await go(c, true);
+          const jumped = await tryReplayObservedJump(
+            instance,
+            { from: c, to: c.jumpTo, at: Date.now() },
+            trailToken,
+            (pr) => throttledReport(pr.label ?? "parkour")
+          );
+          if (!jumped) return false;
+          i++;
+          continue;
+        }
+        const k = trail.nextIndex(i, 6);
+        if (k === i) return true; // end of the route: normal follow takes over
+        if (await go(trail.get(k)!)) {
+          i = k;
+          continue;
+        }
+        if (k > i + 1 && (await go(trail.get(i + 1)!))) {
+          i++;
+          continue;
+        }
+        return false;
+      }
+      return false;
+    } finally {
+      trailActive = false;
+    }
+  };
   let jumpTakeoff: { x: number; y: number; z: number } | null = null;
   let prevPlayerGround = true;
+  let teleportedAt = 0;
+  let teleportHandled = 0;
+  const onTeleport = () => {
+    teleportedAt = Date.now();
+    if (trailActive) trailAbort = true;
+    wantTrail = false;
+    lastTrailAt = 0;
+    budget = 0;
+    if (instance.bot) setSearchBudget(instance.bot, 0);
+  };
+  const tpBot = instance.bot;
+  tpBot?.on(TELEPORT_EVENT as never, onTeleport as never);
 
   try {
     while (!token.cancelled) {
@@ -650,6 +1062,17 @@ export async function runFollow(
       let approach: { x: number; y: number; z: number } | null = null;
 
       const applyFollowGoal = (ent: Entity, forceApproach = false) => {
+        // never re-aim in mid-jump: setGoal lets go of every key and the jump fell short
+        const e = bot.entity as (typeof bot.entity & { isInWater?: boolean }) | undefined;
+        if (e && !e.onGround && !e.isInWater && !onLadderNow(bot)) {
+          whenGrounded(bot, () => {
+            if (bot.entity?.onGround) applyFollowGoalNow(ent, forceApproach);
+          });
+          return;
+        }
+        applyFollowGoalNow(ent, forceApproach);
+      };
+      const applyFollowGoalNow = (ent: Entity, forceApproach = false) => {
         const botPos = bot.entity?.position;
         const botY = botPos?.y ?? 0;
         const dy = ent.position.y - botY;
@@ -658,6 +1081,7 @@ export async function runFollow(
           if (forceApproach || !approach || Date.now() - lastApproachScan > 10_000) {
             lastApproachScan = Date.now();
             approach = findElevatedApproach(bot, ent.position);
+            instance.getLogger().debug("Follow approach", approach ? `${approach.x},${approach.y},${approach.z}` : "none");
           }
           if (approach) {
             const dAp = Math.hypot(
@@ -667,7 +1091,7 @@ export async function runFollow(
             const yAp = Math.abs((bot.entity?.position.y ?? 0) - approach.y);
             if (dAp < 1.7 && yAp < 1.6) {
               approach = null;
-              bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+              bot.pathfinder.setGoal(followGoal(ent, holdDist, bot), true);
               return;
             }
             bot.pathfinder.setGoal(new goals.GoalNear(approach.x, approach.y, approach.z, 1), false);
@@ -678,7 +1102,7 @@ export async function runFollow(
         }
         const curGoal = bot.pathfinder.goal as GoalFollowAtHeight | { entity?: Entity } | undefined;
         if (!forceApproach && curGoal instanceof GoalFollowAtHeight && curGoal.entity === ent) return;
-        bot.pathfinder.setGoal(followGoal(ent, holdDist), true);
+        bot.pathfinder.setGoal(followGoal(ent, holdDist, bot), true);
       };
 
       try {
@@ -687,9 +1111,52 @@ export async function runFollow(
         /* */
       }
 
-      const onPath = (result: { status: string }) => {
-        if (result.status !== "noPath") return;
+      const onPath = (result: { status: string; path?: unknown[]; time?: number; visitedNodes?: number }) => {
+        lastPathStatus = result.status;
+        if (trailActive) return;
+        if (result.status !== "success" && result.path && bot.entity) {
+          // no full route: never walk a best-effort path down into a place we cannot leave
+          const live0 = bot.players[playerName]?.entity;
+          const by = bot.entity.position.y;
+          const py = live0?.position.y ?? by;
+          // While a long search is still running ("partial") only an irreversible drop is cut;
+          // once no route exists, do not go down at all unless the player is down there.
+          const floorY =
+            result.status === "partial" ? Math.min(by, py) - 1.5 : py < by - 1 ? py - 1.5 : by - 0.5;
+          const before = result.path.length;
+          if (cutPathAtDrop(result.path as Array<{ y: number }>, floorY) < before && Date.now() - lastCutLogAt > 5000) {
+            lastCutLogAt = Date.now();
+            instance.getLogger().debug("Follow path", `partial path cut before a drop (${before} → ${result.path.length}) ${(result.path as Array<{ x: number; y: number; z: number; parkour?: boolean }>).map((n) => `${n.x},${n.y},${n.z}${n.parkour ? "P" : ""}`).join(" ")}`);
+          }
+        }
+        if (result.status !== "success" && result.status !== "partial") {
+          instance.getLogger().debug("Follow path", `${result.status} nodes=${result.visitedNodes ?? "?"} t=${Math.round(result.time ?? 0)}ms len=${result.path?.length ?? 0}`);
+        }
+        if (result.status !== "noPath" && result.status !== "timeout") return;
+        if (budget < SEARCH_BUDGETS.length - 1) {
+          // nothing within this detour budget: widen and plan the same goal again;
+          // do not walk the best-effort path meanwhile (it stepped off a beam)
+          if (result.path) result.path.length = 0;
+          budget++;
+          setSearchBudget(bot, budget);
+          setImmediate(() =>
+            whenGrounded(bot, () => {
+              const g = bot.pathfinder.goal;
+              if (!g || isParkourLocked(bot)) return;
+              try {
+                bot.pathfinder.setGoal(g, g instanceof GoalFollowAtHeight);
+              } catch {
+                /* */
+              }
+            })
+          );
+          return;
+        }
         if (isParkourLocked(bot)) return;
+        if (trail.size > 0 && Date.now() - lastTrailAt > 6000) {
+          wantTrail = true; // best option first: the route the player used
+          return;
+        }
         if (Date.now() - lastNoPathAt < 4000) return;
         lastNoPathAt = Date.now();
         const live = bot.players[playerName]?.entity;
@@ -715,6 +1182,21 @@ export async function runFollow(
           lastGapAttemptAt = Date.now();
           if (await tryJumpAcrossToPlayer(instance, live, token, (p) => throttledReport(p.label ?? "parkour"), { force: true })) {
             throttledReport(`follow: ${playerName} · jump to player`);
+            restoreFollowMovement();
+            applyFollowGoal(live);
+            return;
+          }
+          // walk to the lip facing the player and take one configured gap jump
+          if (
+            await tryGapJumpTowardPoint(
+              instance,
+              { x: live.position.x, y: live.position.y, z: live.position.z },
+              token,
+              (lx, ly, lz) => pathfinderGoal(instance, new goals.GoalBlock(lx, ly, lz), token, { timeoutMs: 12_000 }),
+              (p) => throttledReport(p.label ?? "parkour")
+            )
+          ) {
+            throttledReport(`follow: ${playerName} · gap jump`);
             restoreFollowMovement();
             applyFollowGoal(live);
             return;
@@ -757,14 +1239,44 @@ export async function runFollow(
           if (prevPlayerGround && !playerGround) {
             jumpTakeoff = { x: cur.position.x, y: cur.position.y, z: cur.position.z };
           } else if (!prevPlayerGround && playerGround && jumpTakeoff) {
-            pushObservedJump(observedJumps, jumpTakeoff, {
-              x: cur.position.x,
-              y: cur.position.y,
-              z: cur.position.z
-            });
+            const landing = { x: cur.position.x, y: cur.position.y, z: cur.position.z };
+            pushObservedJump(observedJumps, jumpTakeoff, landing);
+            if (Math.hypot(landing.x - jumpTakeoff.x, landing.z - jumpTakeoff.z) >= 1.7) trail.recordJump(jumpTakeoff, landing);
             jumpTakeoff = null;
           }
           prevPlayerGround = playerGround;
+          trail.record(
+            cur.position,
+            playerGround || isClimbable(blockNameAt(bot, cur.position.x, cur.position.y, cur.position.z))
+          );
+
+          if (teleportedAt > teleportHandled) {
+            // plan from the new spot; old stuck timers and approach points are stale
+            teleportHandled = teleportedAt;
+            approach = null;
+            consecutiveStucks = 0;
+            lastMoveAt = Date.now();
+            lastPos = bot.entity.position.clone();
+            lastPathStatus = "";
+            applyFollowGoal(cur, true);
+          }
+
+          if (wantTrail && !trailActive) {
+            wantTrail = false;
+            lastTrailAt = Date.now();
+            const walked = await walkTrail();
+            if (walked) consecutiveStucks = 0;
+            // a route that did not work: let the other fallbacks have a turn first
+            else lastTrailAt = Date.now() + 24_000;
+            budget = 0;
+            setSearchBudget(bot, 0);
+            ensureMovement(instance, { mode: "follow", canDig: movementPolicy?.canDig ?? false, canOpenDoors: true, allowPlace: movementPolicy?.allowPlace ?? false });
+            applyFollowGoal(cur, true);
+            lastMoveAt = Date.now();
+            lastPos = bot.entity.position.clone();
+            await sleep(FOLLOW_TICK_MS);
+            continue;
+          }
 
           if (!pfIsMoving(bot) && bot.entity.onGround) {
             try {
@@ -776,6 +1288,10 @@ export async function runFollow(
 
           const d = bot.entity.position.distanceTo(cur.position);
           const pos = bot.entity.position;
+          if (budget > 0 && d <= holdDist + 1.5) {
+            budget = 0;
+            setSearchBudget(bot, 0);
+          }
 
           if (bot.entity.onGround && Date.now() - lastGapAttemptAt > 700) {
             const replay = findReplayJump(bot, observedJumps);
@@ -816,6 +1332,21 @@ export async function runFollow(
             }
           }
 
+          // The follow goal only moves when the player moved 4+ blocks (so long detours
+          // are not restarted). Standing still short of a player who stopped 3 blocks
+          // further on waited for the 10 s stuck watchdog: re-aim at where they are now.
+          if (
+            bot.entity.onGround &&
+            !pfIsMoving(bot) &&
+            d > holdDist + 1 &&
+            Date.now() - lastGoalRefreshAt > 1000 &&
+            lastPathStatus === "success" &&
+            !isParkourLocked(bot)
+          ) {
+            lastGoalRefreshAt = Date.now();
+            applyFollowGoal(cur, true);
+          }
+
           if (pos.distanceTo(lastPos) > 0.35) {
             lastPos = pos.clone();
             lastMoveAt = Date.now();
@@ -846,6 +1377,8 @@ export async function runFollow(
               } catch {
                 /* */
               }
+            } else if (consecutiveStucks >= 2 && trail.size > 0 && Date.now() - lastTrailAt > 6000) {
+              wantTrail = true;
             } else if (consecutiveStucks >= 2 && !onLadderNow(bot) && !isParkourLocked(bot)) {
               const openedDoor = await tryPassNearbyDoor(instance);
               if (openedDoor) {
@@ -888,8 +1421,12 @@ export async function runFollow(
       if (instance.status !== "online") throw new Error("Connection lost — follow ended.");
     }
   } finally {
+    tpBot?.removeListener(TELEPORT_EVENT as never, onTeleport as never);
     const b = instance.bot;
-    if (b) clearGoal(b);
+    if (b) {
+      clearGoal(b);
+      resetSearchBudget(b);
+    }
   }
 }
 
@@ -967,8 +1504,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function followGoal(entity: Entity, range: number) {
-  return new GoalFollowAtHeight(entity, range);
+function followGoal(entity: Entity, range: number, bot?: Bot) {
+  if (!bot) return new GoalFollowAtHeight(entity, range);
+  return new GoalFollowAtHeight(entity, range, () => {
+    const e = bot.entity as (typeof bot.entity & { isInWater?: boolean }) | undefined;
+    return !e || e.onGround || Boolean(e.isInWater) || onLadderNow(bot);
+  });
 }
 
 export { runParkourGoto, executeGapJump, climbLadderParkour, findGapLanding } from "./parkour";

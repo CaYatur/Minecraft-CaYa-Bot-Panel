@@ -4,7 +4,7 @@
  * redirect en fazla bir kez takip edilir. Derinlik ve satır sayısı sınırlıdır.
  */
 
-export const COMMAND_TREE_LIMITS = { maxDepth: 8, maxLines: 400 };
+export const COMMAND_TREE_LIMITS = { maxDepth: 8, maxLines: 2000 };
 
 export interface CommandNode {
   kind: "root" | "literal" | "argument";
@@ -48,6 +48,11 @@ function childIndexes(node: CommandNode, count: number, seen: Set<number>): numb
 /**
  * Çalıştırılabilir yolları düzleştirir. `root` genelde 0'dır.
  * Sınır aşılırsa `truncated` true olur ve eldeki satırlar döner.
+ *
+ * Satır bütçesi kök komutlara sırayla dağıtılır: op yetkili bir Paper botunda ağaç
+ * 17 binden fazla satıra açılıyor ve tek bir BFS sınırı 209 kök komutun 81'ini
+ * listeden tamamen düşürüyordu. Artık her kök en az bir satırla görünür.
+ * `minecraft:give` gibi ad alanlı kopyalar, düz `give` varsa gizlenir.
  */
 export function flattenCommandNodes(
   nodes: CommandNode[],
@@ -56,6 +61,49 @@ export function flattenCommandNodes(
 ): CommandTreeFlat {
   const maxDepth = limits?.maxDepth ?? COMMAND_TREE_LIMITS.maxDepth;
   const maxLines = limits?.maxLines ?? COMMAND_TREE_LIMITS.maxLines;
+  const start = nodes[root];
+  if (!start || start.kind !== "root") return walkFrom(nodes, root, maxDepth, maxLines);
+
+  // top-level commands, with namespaced duplicates of a plain command dropped
+  const tops = childIndexes(start, nodes.length, new Set([root]));
+  const plain = new Set(tops.map((i) => nodes[i]?.name).filter((n): n is string => Boolean(n) && !n!.includes(":")));
+  const kept = tops.filter((i) => {
+    const name = nodes[i]?.name ?? "";
+    const colon = name.indexOf(":");
+    return colon < 0 || !plain.has(name.slice(colon + 1));
+  });
+
+  const perTop = kept.map((i) => walkFrom(nodes, i, maxDepth, maxLines, new Set([root])));
+  let truncated = perTop.some((t) => t.truncated);
+  const lines: string[] = [];
+  const known = new Set<string>();
+  // round-robin: shortest lines of every command first, then deeper ones
+  for (let round = 0; lines.length < maxLines; round++) {
+    let added = false;
+    for (const t of perTop) {
+      const line = t.lines[round];
+      if (line === undefined) continue;
+      added = true;
+      if (known.has(line)) continue;
+      if (lines.length >= maxLines) break;
+      known.add(line);
+      lines.push(line);
+    }
+    if (!added) break;
+  }
+  if (perTop.some((t) => t.lines.some((line) => !known.has(line)))) truncated = true;
+  lines.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { lines, truncated };
+}
+
+/** BFS from one node; lines come back in visit order (short paths first). */
+function walkFrom(
+  nodes: CommandNode[],
+  root: number,
+  maxDepth: number,
+  maxLines: number,
+  initialSeen: Set<number> = new Set()
+): CommandTreeFlat {
   const lines: string[] = [];
   const known = new Set<string>();
   let truncated = false;
@@ -77,7 +125,7 @@ export function flattenCommandNodes(
     lines.push(line);
   };
 
-  const queue: Frame[] = [{ index: root, parts: [], redirectsLeft: 1, seen: new Set(), skipToken: false }];
+  const queue: Frame[] = [{ index: root, parts: [], redirectsLeft: 1, seen: new Set(initialSeen), skipToken: false }];
   let cursor = 0;
 
   while (cursor < queue.length) {
@@ -149,7 +197,6 @@ export function flattenCommandNodes(
     }
   }
 
-  lines.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return { lines, truncated };
 }
 

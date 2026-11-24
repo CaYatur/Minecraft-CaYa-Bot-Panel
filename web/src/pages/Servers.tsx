@@ -12,7 +12,7 @@ export function Servers() {
   const toast = useAppStore((s) => s.toast);
   const { t } = useI18n();
 
-  const empty = { name: "", host: "", port: "25565", version: "auto" };
+  const empty = { name: "", host: "", port: "25565", version: "auto", viaProxy: "auto" as "auto" | "always" | "off" };
   const [form, setForm] = useState<typeof empty>(empty);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -107,6 +107,18 @@ export function Servers() {
             ))}
           </select>
         </label>
+        <label className="flex flex-col gap-1 text-sm" title={t("servers.viaProxyHelp")}>
+          <span className="text-zinc-400">{t("servers.viaProxy")}</span>
+          <select
+            value={form.viaProxy}
+            onChange={(e) => setForm({ ...form, viaProxy: e.target.value as typeof form.viaProxy })}
+            className="w-48 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 outline-none focus:border-indigo-500"
+          >
+            <option value="auto">{t("servers.viaProxyAuto")}</option>
+            <option value="always">{t("servers.viaProxyAlways")}</option>
+            <option value="off">{t("servers.viaProxyOff")}</option>
+          </select>
+        </label>
         <button
           type="button"
           onClick={() => void submit()}
@@ -127,6 +139,8 @@ export function Servers() {
           </button>
         )}
       </div>
+
+      <p className="-mt-3 max-w-3xl text-xs text-zinc-500">{t("servers.viaProxyHelp")}</p>
 
       {((form.host.trim() && !hostOk) || !portOk) && (
         <p role="alert" className="-mt-4 text-xs text-red-300">
@@ -159,13 +173,17 @@ export function Servers() {
                 <td className="mono px-4 py-2.5 text-zinc-400">
                   {s.host}:{s.port}
                 </td>
-                <td className="px-4 py-2.5 text-zinc-400">{s.version}</td>
+                <td className="px-4 py-2.5 text-zinc-400">
+                  {s.version}
+                  {s.viaProxy === "always" && <span className="ml-2 text-xs text-indigo-300">ViaProxy</span>}
+                  {s.viaProxy === "off" && <span className="ml-2 text-xs text-zinc-600">ViaProxy {t("servers.viaProxyOff")}</span>}
+                </td>
                 <td className="px-4 py-2.5 text-zinc-400">{botCount(s.id)}</td>
                 <td className="px-4 py-2.5 text-right">
                   <button
                     onClick={() => {
                       setEditingId(s.id);
-                      setForm({ name: s.name, host: s.host, port: String(s.port), version: s.version });
+                      setForm({ name: s.name, host: s.host, port: String(s.port), version: s.version, viaProxy: s.viaProxy ?? "auto" });
                     }}
                     className="mr-2 text-indigo-400 hover:underline"
                   >
