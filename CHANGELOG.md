@@ -8,6 +8,11 @@ The release after **1.0.4** is **3.0.5**. There was never a 2.x release and no 3
 
 The work that followed 1.0.4 (Microsoft accounts, 24/7 mode, Discord, automation templates, the bot view and the Windows installer) was first marked 1.0.5. That tag was withdrawn before it was published, and the batch was released as 3.0.5 instead, because it changed how the panel is used far more than a patch release would suggest (sign-in, stored secrets, a desktop installer). Nothing was skipped: every change between 1.0.4 and 3.0.5 is listed under 3.0.5 below. From 3.0.5 on, versions move one step at a time again.
 
+## Unreleased
+
+### Fixes
+- **Iron doors with a button, lever or pressure plate.** 3.0.8 made every closed iron door a wall for route finding, so the bot no longer walked up to one and never pressed the button or lever beside it (3.0.7 passed 16 of 16 such doors, 3.0.8 8 of 16). A closed iron door is now a wall only when no button, lever or pressure plate is within reach; otherwise the bot presses it and walks through (16 of 16).
+
 ## 3.0.8 — 2026-11-24
 
 Bug-fix and feature release for [#34](https://github.com/CaYatur/Minecraft-CaYa-Bot-Panel/issues/34).
